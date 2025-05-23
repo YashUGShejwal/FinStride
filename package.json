@@ -1,0 +1,39 @@
+{
+  "name": "finstride",
+  "version": "1.0.0",
+  "description": "A stock market portfolio tracker app for managing and visualizing investments",
+  "main": "index.js",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YashUGShejwal/FinStride.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/YashUGShejwal/FinStride/issues"
+  },
+  "homepage": "https://github.com/YashUGShejwal/FinStride#readme",
+  "dependencies": {
+    "@types/node": "^22.15.21",
+    "@types/react": "^19.1.5",
+    "@types/react-dom": "^19.1.5",
+    "eslint": "^9.27.0",
+    "eslint-config-next": "^15.1.8",
+    "next": "^15.1.8",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "typescript": "^5.8.3"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.14",
+    "postcss": "^8.4.23",
+    "tailwindcss": "^3.3.0"
+  }
+}
