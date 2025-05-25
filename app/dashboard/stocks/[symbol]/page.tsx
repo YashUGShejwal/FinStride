@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, use } from 'react';
 import StockChart from '@/app/components/StockChart';
 import { getStockDetails, StockData, HistoricalPricePoint } from '../../../lib/stock-api';
 
@@ -37,8 +37,9 @@ const calculateStockChange = (currentPrice?: number, dayLow?: number) => {
   };
 };
 
-export default function StockDetail({ params }: { params: { symbol: string } }) {
-  const { symbol } = params;
+export default function StockDetail({ params }: { params: Promise<{ symbol: string }> }) {
+  const resolvedParams = use(params);
+  const { symbol } = resolvedParams;
   const [stockDetails, setStockDetails] = useState<StockData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
