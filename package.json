@@ -21,15 +21,21 @@
   },
   "homepage": "https://github.com/YashUGShejwal/FinStride#readme",
   "dependencies": {
+    "@auth/prisma-adapter": "^2.9.1",
+    "@prisma/client": "^6.8.2",
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.15.21",
     "@types/react": "^19.1.5",
     "@types/react-dom": "^19.1.5",
+    "bcryptjs": "^3.0.2",
     "eslint": "^9.27.0",
     "eslint-config-next": "^15.1.8",
     "next": "^15.1.8",
+    "next-auth": "^4.24.11",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "zod": "^3.25.28"
   },
   "devDependencies": {
     "autoprefixer": "^10.4.14",
