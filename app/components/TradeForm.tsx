@@ -16,6 +16,7 @@ interface Trade {
   grossPnL: number;
   netPnL: number;
   strategy: string;
+  category: string;
   entryReason: string;
   exitReason: string;
   emotion: number;
@@ -28,6 +29,24 @@ interface TradeFormProps {
   onCancel: () => void;
 }
 
+// Strategy Categories
+const STRATEGY_CATEGORIES = {
+  'F&O': [
+    'Futures using ST',
+    'Iron Fly',
+    'Straddle VWAP',
+    'Price Action Futures Trades',
+    'ADX Option Buying',
+    'Price Action Option Buying'
+  ],
+  'Equity': [
+    'Swing Trading',
+    'Price Action Trades',
+    'Long Term Investment',
+    'Penny Stocks'
+  ]
+};
+
 export default function TradeForm({ trade, onSave, onCancel }: TradeFormProps) {
   const [formData, setFormData] = useState<Partial<Trade>>({
     date: new Date().toISOString().split('T')[0],
@@ -39,7 +58,8 @@ export default function TradeForm({ trade, onSave, onCancel }: TradeFormProps) {
     entryPrice: 0,
     exitPrice: 0,
     charges: 0,
-    strategy: '',
+    category: 'F&O',
+    strategy: 'Futures using ST',
     entryReason: '',
     exitReason: '',
     emotion: 3,
@@ -82,7 +102,9 @@ export default function TradeForm({ trade, onSave, onCancel }: TradeFormProps) {
       ...prev,
       [name]: name === 'quantity' || name === 'entryPrice' || name === 'exitPrice' || name === 'charges' || name === 'emotion'
         ? Number(value)
-        : value
+        : value,
+      // Reset strategy when category changes
+      ...(name === 'category' && { strategy: STRATEGY_CATEGORIES[value as keyof typeof STRATEGY_CATEGORIES][0] })
     }));
   };
 
@@ -155,6 +177,36 @@ export default function TradeForm({ trade, onSave, onCancel }: TradeFormProps) {
           </select>
         </div>
 
+        {/* Category and Strategy */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Category</label>
+          <select
+            name="category"
+            value={formData.category}
+            onChange={handleChange}
+            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+            required
+          >
+            {Object.keys(STRATEGY_CATEGORIES).map(category => (
+              <option key={category} value={category}>{category}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Strategy</label>
+          <select
+            name="strategy"
+            value={formData.strategy}
+            onChange={handleChange}
+            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+            required
+          >
+            {formData.category && STRATEGY_CATEGORIES[formData.category as keyof typeof STRATEGY_CATEGORIES].map(strategy => (
+              <option key={strategy} value={strategy}>{strategy}</option>
+            ))}
+          </select>
+        </div>
+
         {/* Quantity and Prices */}
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Quantity</label>
@@ -223,19 +275,7 @@ export default function TradeForm({ trade, onSave, onCancel }: TradeFormProps) {
           </div>
         </div>
 
-        {/* Strategy and Emotion */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Strategy</label>
-          <input
-            type="text"
-            name="strategy"
-            value={formData.strategy}
-            onChange={handleChange}
-            placeholder="Breakout, Support-Resistance, etc."
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-            required
-          />
-        </div>
+        {/* Emotional State */}
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Emotional State (1-5)</label>
           <input

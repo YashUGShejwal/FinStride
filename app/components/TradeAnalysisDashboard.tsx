@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
@@ -23,11 +23,30 @@ interface Trade {
   grossPnL: number;
   netPnL: number;
   strategy: string;
+  category: string;
   entryReason: string;
   exitReason: string;
   emotion: number;
   lesson: string;
 }
+
+// Strategy Categories
+const STRATEGY_CATEGORIES = {
+  'F&O': [
+    'Futures using ST',
+    'Iron Fly',
+    'Straddle VWAP',
+    'Price Action Futures Trades',
+    'ADX Option Buying',
+    'Price Action Option Buying'
+  ],
+  'Equity': [
+    'Swing Trading',
+    'Price Action Trades',
+    'Long Term Investment',
+    'Penny Stocks'
+  ]
+};
 
 // Sample data
 const sampleTrades: Trade[] = [
@@ -44,7 +63,8 @@ const sampleTrades: Trade[] = [
     charges: 100,
     grossPnL: 100,
     netPnL: 0,
-    strategy: 'Breakout',
+    strategy: 'Futures using ST',
+    category: 'F&O',
     entryReason: 'Price broke above resistance',
     exitReason: 'Target achieved',
     emotion: 4,
@@ -63,7 +83,8 @@ const sampleTrades: Trade[] = [
     charges: 100,
     grossPnL: 200,
     netPnL: 100,
-    strategy: 'Support-Resistance',
+    strategy: 'Price Action Option Buying',
+    category: 'F&O',
     entryReason: 'Price hit resistance',
     exitReason: 'Stop loss hit',
     emotion: 2,
