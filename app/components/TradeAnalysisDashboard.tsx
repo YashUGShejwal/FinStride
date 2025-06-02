@@ -123,8 +123,11 @@ const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8'];
 
 export default function TradeAnalysisDashboard() {
   const [trades, setTrades] = useState<Trade[]>(sampleTrades);
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [showModal, setShowModal] = useState(false);
   const [currentTrade, setCurrentTrade] = useState<Trade | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  const [selectedStrategy, setSelectedStrategy] = useState<string>('All');
+  const modalRef = useRef<HTMLDivElement>(null);
   const metrics = calculateMetrics(trades);
 
   // Load trades from localStorage on component mount
@@ -140,14 +143,31 @@ export default function TradeAnalysisDashboard() {
     localStorage.setItem('trades', JSON.stringify(trades));
   }, [trades]);
 
+  // Handle click outside modal
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (modalRef.current && !modalRef.current.contains(event.target as Node)) {
+        setShowModal(false);
+        setCurrentTrade(null);
+      }
+    }
+
+    if (showModal) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showModal]);
+
   const handleAddTrade = () => {
     setCurrentTrade(null);
-    setIsModalOpen(true);
+    setShowModal(true);
   };
 
   const handleEditTrade = (trade: Trade) => {
     setCurrentTrade(trade);
-    setIsModalOpen(true);
+    setShowModal(true);
   };
 
   const handleDeleteTrade = (id: string) => {
@@ -164,7 +184,7 @@ export default function TradeAnalysisDashboard() {
       // Add new trade
       setTrades([...trades, trade]);
     }
-    setIsModalOpen(false);
+    setShowModal(false);
   };
 
   const handleExportData = () => {
@@ -195,7 +215,7 @@ export default function TradeAnalysisDashboard() {
   };
 
   return (
-    <div className="space-y-8">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* Action Buttons */}
       <div className="flex justify-between items-center">
         <div className="flex space-x-4">
@@ -382,15 +402,26 @@ export default function TradeAnalysisDashboard() {
         </div>
       </div>
 
-      {/* Add/Edit Trade Modal */}
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-2xl w-full">
-            <TradeForm
-              trade={currentTrade}
-              onSave={handleSaveTrade}
-              onCancel={() => setIsModalOpen(false)}
-            />
+      {/* Modal */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <div 
+            ref={modalRef}
+            className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto"
+          >
+            <div className="p-6">
+              <h2 className="text-2xl font-bold mb-6 text-gray-900 dark:text-white">
+                {currentTrade ? 'Edit Trade' : 'Add New Trade'}
+              </h2>
+              <TradeForm
+                trade={currentTrade}
+                onSave={handleSaveTrade}
+                onCancel={() => {
+                  setShowModal(false);
+                  setCurrentTrade(null);
+                }}
+              />
+            </div>
           </div>
         </div>
       )}
