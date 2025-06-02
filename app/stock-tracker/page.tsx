@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import Navbar from '../components/Navbar';
 import { getNiftyBankNiftyData, getPopularStocksData, IndexData, StockData } from '../lib/stock-api';
 
 // Helper function to calculate change and percentage
@@ -115,6 +116,8 @@ export default function StockTrackerPage() {
 
   return (
     <div className="min-h-screen bg-secondary-900 text-white p-4 md:p-8">
+      <Navbar />
+      
       <header className="mb-8">
         <h1 className="text-3xl font-bold text-center text-blue-400">Stock Tracker Dashboard</h1>
       </header>
