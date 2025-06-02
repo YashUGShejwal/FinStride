@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import Navbar from '../components/Navbar';
 
 // Mock data for the portfolio
 const mockPortfolio = [
@@ -31,44 +32,7 @@ const totalGainLoss = mockPortfolio.reduce(
 export default function Dashboard() {
   return (
     <div className="min-h-screen bg-gray-100 dark:bg-secondary-900">
-      {/* Navigation */}
-      <nav className="bg-white dark:bg-secondary-800 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex">
-              <div className="flex-shrink-0 flex items-center">
-                <h1 className="text-xl font-bold text-primary-600">FinStride</h1>
-              </div>
-              <div className="hidden sm:ml-6 sm:flex sm:space-x-8">
-                <Link href="/dashboard" className="border-primary-500 text-gray-900 dark:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                  Dashboard
-                </Link>
-                <Link href="/dashboard/stocks" className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-300 dark:hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                  My Stocks
-                </Link>
-                <Link href="/dashboard/analytics" className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-300 dark:hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                  Analytics
-                </Link>
-                <Link href="/dashboard/settings" className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-300 dark:hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                  Settings
-                </Link>
-              </div>
-            </div>
-            <div className="hidden sm:ml-6 sm:flex sm:items-center">
-              <div className="ml-3 relative">
-                <div>
-                  <button type="button" className="bg-white dark:bg-secondary-800 flex text-sm rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
-                    <span className="sr-only">Open user menu</span>
-                    <div className="h-8 w-8 rounded-full bg-primary-100 flex items-center justify-center">
-                      <span className="text-primary-800 font-medium">JS</span>
-                    </div>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </nav>
+      <Navbar />
 
       <div className="py-10">
         <header>

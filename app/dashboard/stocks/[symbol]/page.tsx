@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useState, useEffect, use } from 'react';
 import StockChart from '@/app/components/StockChart';
 import { getStockDetails, StockData, HistoricalPricePoint } from '../../../lib/stock-api';
+import Navbar from '../../../../components/Navbar';
 
 // Helper to format large numbers (e.g., market cap, volume)
 const formatNumber = (num: number | undefined): string => {
@@ -113,37 +114,7 @@ export default function StockDetail({ params }: { params: Promise<{ symbol: stri
 
   return (
     <div className="min-h-screen bg-gray-100 dark:bg-secondary-900">
-      {/* Navigation (can be refactored into a layout component later) */}
-      <nav className="bg-white dark:bg-secondary-800 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex">
-              <div className="flex-shrink-0 flex items-center">
-                <Link href="/" className="text-xl font-bold text-primary-600">FinStride</Link>
-              </div>
-              <div className="hidden sm:ml-6 sm:flex sm:space-x-8">
-                <Link href="/stock-tracker" className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-300 dark:hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                  Dashboard
-                </Link>
-                {/* Add other relevant dashboard links if needed */}
-              </div>
-            </div>
-            <div className="hidden sm:ml-6 sm:flex sm:items-center">
-              {/* User profile icon - placeholder */}
-              <div className="ml-3 relative">
-                <div>
-                  <button type="button" className="bg-white dark:bg-secondary-800 flex text-sm rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
-                    <span className="sr-only">Open user menu</span>
-                    <div className="h-8 w-8 rounded-full bg-primary-100 flex items-center justify-center">
-                      <span className="text-primary-800 font-medium">{symbol.substring(0,2).toUpperCase()}</span>
-                    </div>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </nav>
+      <Navbar />
 
       <div className="py-10">
         <header className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-8">
