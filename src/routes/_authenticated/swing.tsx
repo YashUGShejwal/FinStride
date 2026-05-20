@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState, type FormEvent } from "react";
 import { Plus, Trash2, AlertTriangle, ShieldAlert, TrendingUp, Lock } from "lucide-react";
-import { useStore, BLUEPRINT } from "@/lib/store";
+import { useStore, BLUEPRINT, appsForScope, partitionLabel, type BrokerPartition } from "@/lib/store";
 import { inr, fmtDate } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,10 +13,12 @@ export const Route = createFileRoute("/_authenticated/swing")({ component: Swing
 
 // Blueprint Rule 2 — F&O ban regex
 const FNO_REGEX = /\b(CALL|PUT|CE|PE|NIFTY|SENSEX|BANKNIFTY|FINNIFTY)\b|\d{2}(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d{0,4}(CE|PE)?/i;
+const SWING_APPS = appsForScope("swing");
 
 function SwingPage() {
   const { trades, addTrade, deleteTrade } = useStore();
 
+  const [partition, setPartition] = useState<BrokerPartition>("Dhan_Swing");
   const [ticker, setTicker] = useState("");
   const [fnoBlocked, setFnoBlocked] = useState(false);
   const [entryDate, setEntryDate] = useState(new Date().toISOString().slice(0, 10));
@@ -56,6 +58,7 @@ function SwingPage() {
       targetPrice: Number(target),
       stopLoss: Number(stop),
       source,
+      partition,
     });
     toast.success(`${ticker} logged`);
     setTicker(""); setQty(""); setEntry(""); setTarget(""); setStop("");
@@ -104,6 +107,16 @@ function SwingPage() {
           <Field className="col-span-1 md:col-span-1" label="Quantity">
             <Input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)}
               className="bg-input/40 border-glass-border tabular-nums" placeholder="0" />
+          </Field>
+          <Field className="col-span-1 md:col-span-1" label="Partition">
+            <Select value={partition} onValueChange={(v: BrokerPartition) => setPartition(v)}>
+              <SelectTrigger className="bg-input/40 border-glass-border"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {SWING_APPS.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>{a.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </Field>
           <Field className="col-span-1 md:col-span-1" label="Source">
             <Select value={source} onValueChange={(v: "TheDoji" | "Self") => setSource(v)}>
@@ -174,7 +187,7 @@ function SwingPage() {
                       <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{t.source}</span>
                     </div>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      {fmtDate(t.entryDate)} • {t.quantity} × {inr(t.entryPrice)} • Tgt {inr(t.targetPrice)} • SL {inr(t.stopLoss)}
+                      {fmtDate(t.entryDate)} • {partitionLabel(t.partition)} • {t.quantity} × {inr(t.entryPrice)} • Tgt {inr(t.targetPrice)} • SL {inr(t.stopLoss)}
                     </p>
                   </div>
                   <div className="flex items-center gap-3">

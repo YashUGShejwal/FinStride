@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState, type FormEvent } from "react";
 import { Search, Plus, Trash2, ArrowUpRight, ArrowDownRight } from "lucide-react";
-import { useStore, type TxCategory, type TxType } from "@/lib/store";
+import { useStore, appsForScope, partitionLabel, type BrokerPartition, type TxCategory, type TxType } from "@/lib/store";
 import { inr, fmtDate } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,6 +13,7 @@ import { toast } from "sonner";
 export const Route = createFileRoute("/_authenticated/cashflow")({ component: CashflowPage });
 
 const CATEGORIES: TxCategory[] = ["Salary", "Fixed Runrate", "Scooter EMI", "Freelance", "Other"];
+const CASHFLOW_APPS = appsForScope("cashflow");
 
 function CashflowPage() {
   const { transactions, addTransaction, deleteTransaction } = useStore();
@@ -22,7 +23,7 @@ function CashflowPage() {
     date: new Date().toISOString().slice(0, 10),
     type: "expense" as TxType,
     category: "Other" as TxCategory,
-    account: "HDFC",
+    partition: "Liquid_Cash" as BrokerPartition,
     amount: "",
     tags: "",
     notes: "",
@@ -36,7 +37,7 @@ function CashflowPage() {
       date: new Date(form.date).toISOString(),
       type: form.type,
       category: form.category,
-      account: form.account,
+      partition: form.partition,
       amount: amt,
       tags: form.tags.split(",").map((s) => s.trim()).filter(Boolean),
       notes: form.notes || undefined,
@@ -50,7 +51,8 @@ function CashflowPage() {
     return transactions.filter((t) =>
       !s ||
       t.category.toLowerCase().includes(s) ||
-      t.account.toLowerCase().includes(s) ||
+      partitionLabel(t.partition).toLowerCase().includes(s) ||
+      t.partition.toLowerCase().includes(s) ||
       t.tags.some((x) => x.toLowerCase().includes(s)) ||
       (t.notes?.toLowerCase().includes(s) ?? false)
     );
@@ -99,9 +101,15 @@ function CashflowPage() {
               </SelectContent>
             </Select>
           </Field>
-          <Field className="col-span-1 md:col-span-1" label="Account">
-            <Input value={form.account} onChange={(e) => setForm({ ...form, account: e.target.value })}
-              className="bg-input/40 border-glass-border" placeholder="HDFC" />
+          <Field className="col-span-1 md:col-span-1" label="Partition">
+            <Select value={form.partition} onValueChange={(v: BrokerPartition) => setForm({ ...form, partition: v })}>
+              <SelectTrigger className="bg-input/40 border-glass-border"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {CASHFLOW_APPS.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>{a.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </Field>
           <Field className="col-span-1 md:col-span-1" label="Amount (₹)">
             <Input type="number" step="1" min="0" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })}
@@ -145,7 +153,7 @@ function CashflowPage() {
                 <th className="text-left py-2 font-medium">Date</th>
                 <th className="text-left py-2 font-medium">Type</th>
                 <th className="text-left py-2 font-medium">Category</th>
-                <th className="text-left py-2 font-medium">Account</th>
+                <th className="text-left py-2 font-medium">Partition</th>
                 <th className="text-left py-2 font-medium">Tags</th>
                 <th className="text-right py-2 font-medium">Amount</th>
                 <th></th>
@@ -162,7 +170,7 @@ function CashflowPage() {
                     </span>
                   </td>
                   <td>{t.category}</td>
-                  <td className="text-muted-foreground">{t.account}</td>
+                  <td className="text-muted-foreground">{partitionLabel(t.partition)}</td>
                   <td className="text-xs text-muted-foreground">{t.tags.join(", ") || "—"}</td>
                   <td className={`text-right font-semibold tabular-nums ${t.type === "income" ? "text-[oklch(0.78_0.16_155)]" : "text-[oklch(0.78_0.18_25)]"}`}>
                     {t.type === "income" ? "+" : "−"}{inr(t.amount)}
@@ -191,7 +199,7 @@ function CashflowPage() {
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-medium truncate">{t.category}</p>
-                  <p className="text-[11px] text-muted-foreground truncate">{fmtDate(t.date)} • {t.account}</p>
+                  <p className="text-[11px] text-muted-foreground truncate">{fmtDate(t.date)} • {partitionLabel(t.partition)}</p>
                 </div>
               </div>
               <div className="text-right">

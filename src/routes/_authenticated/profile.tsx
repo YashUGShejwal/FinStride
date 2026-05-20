@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { LogOut, Mail, Shield, Wallet, TrendingUp } from "lucide-react";
 import { useAuth } from "@/lib/auth";
-import { useStore, BLUEPRINT } from "@/lib/store";
+import { useStore, BLUEPRINT, INVESTMENT_APPS } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { inr } from "@/lib/format";
 
@@ -33,6 +33,18 @@ function ProfilePage() {
         <Stat icon={<Wallet className="size-4 text-primary" />} label="Transactions" value={String(transactions.length)} />
         <Stat icon={<TrendingUp className="size-4 text-accent" />} label="Swing trades" value={String(trades.length)} />
         <Stat icon={<Shield className="size-4 text-[oklch(0.78_0.16_155)]" />} label="Risk cap" value={inr(BLUEPRINT.accountBalance * BLUEPRINT.riskCapPct)} />
+      </section>
+
+      <section className="glass rounded-2xl p-5">
+        <h2 className="font-semibold">Broker partitions</h2>
+        <ul className="mt-3 space-y-2">
+          {INVESTMENT_APPS.map((a) => (
+            <li key={a.id} className="text-sm flex items-start justify-between gap-3">
+              <span className="font-medium">{a.label}</span>
+              <span className="text-xs text-muted-foreground text-right">{a.description}</span>
+            </li>
+          ))}
+        </ul>
       </section>
 
       <section className="glass rounded-2xl p-5">
