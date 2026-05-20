@@ -186,6 +186,113 @@ export type Trade = {
   closedAt?: string;     // ISO date of close
 };
 
+// ─── Grind Deck ───────────────────────────────────────────────────────────
+export type GrindMetricKey = "systemDesign" | "leetcode" | "linkedinOutreach";
+
+export const GRIND_METRIC_META: Record<
+  GrindMetricKey,
+  { label: string; inputLabel: string; metaLabel?: string; placeholder: string; metaPlaceholder?: string }
+> = {
+  systemDesign: {
+    label: "System Design",
+    inputLabel: "Topic",
+    metaLabel: "Domain",
+    placeholder: "e.g. URL Shortener, Rate Limiter, Kafka Design…",
+    metaPlaceholder: "e.g. Distributed Systems, Caching…",
+  },
+  leetcode: {
+    label: "LeetCode",
+    inputLabel: "Problem",
+    metaLabel: "Difficulty",
+    placeholder: "e.g. 146 LRU Cache, 23 Merge K Lists…",
+    metaPlaceholder: "Easy / Medium / Hard",
+  },
+  linkedinOutreach: {
+    label: "LinkedIn Outreaches",
+    inputLabel: "Name @ Company",
+    metaLabel: "Title",
+    placeholder: "e.g. Priya Sharma @ Google…",
+    metaPlaceholder: "e.g. Engineering Manager, VP Engineering…",
+  },
+};
+
+export type GrindLogEntry = {
+  id: string;
+  loggedAt: string; // ISO
+  label: string;
+  meta?: string;
+};
+
+export type GrindMetrics = Record<GrindMetricKey, GrindLogEntry[]>;
+
+export type HustleCategory = "Freelance" | "Consulting" | "Media Production";
+export const HUSTLE_CATEGORIES: readonly HustleCategory[] = [
+  "Freelance",
+  "Consulting",
+  "Media Production",
+];
+
+export type HustleEntry = {
+  id: string;
+  date: string; // ISO
+  category: HustleCategory;
+  description: string;
+  amount: number;
+};
+
+export type GrindState = {
+  metrics: GrindMetrics;
+  hustle: HustleEntry[];
+};
+
+const EMPTY_GRIND: GrindState = {
+  metrics: { systemDesign: [], leetcode: [], linkedinOutreach: [] },
+  hustle: [],
+};
+
+const GRIND_KEY = "finstride.grind.metrics";
+
+function normalizeGrindLogEntry(raw: Record<string, unknown>): GrindLogEntry {
+  return {
+    id: String(raw.id),
+    loggedAt: String(raw.loggedAt),
+    label: String(raw.label ?? ""),
+    meta: raw.meta ? String(raw.meta) : undefined,
+  };
+}
+
+function normalizeHustleEntry(raw: Record<string, unknown>): HustleEntry {
+  return {
+    id: String(raw.id),
+    date: String(raw.date),
+    category: HUSTLE_CATEGORIES.includes(raw.category as HustleCategory)
+      ? (raw.category as HustleCategory)
+      : "Freelance",
+    description: String(raw.description ?? ""),
+    amount: Number(raw.amount) || 0,
+  };
+}
+
+function normalizeGrindState(raw: unknown): GrindState {
+  if (!raw || typeof raw !== "object") return EMPTY_GRIND;
+  const r = raw as Record<string, unknown>;
+  const rawM = (r.metrics ?? {}) as Record<string, unknown>;
+  const metricKey = (k: string): GrindLogEntry[] =>
+    Array.isArray(rawM[k])
+      ? (rawM[k] as Record<string, unknown>[]).map(normalizeGrindLogEntry)
+      : [];
+  return {
+    metrics: {
+      systemDesign: metricKey("systemDesign"),
+      leetcode: metricKey("leetcode"),
+      linkedinOutreach: metricKey("linkedinOutreach"),
+    },
+    hustle: Array.isArray(r.hustle)
+      ? (r.hustle as Record<string, unknown>[]).map(normalizeHustleEntry)
+      : [],
+  };
+}
+
 // ─── Store context ─────────────────────────────────────────────────────────
 type StoreCtx = {
   transactions: Transaction[];
@@ -208,12 +315,19 @@ type StoreCtx = {
     notes?: string,
   ) => void;
   deletePortfolioSnapshot: (id: string) => void;
+  // Grind Deck
+  grind: GrindState;
+  addGrindLog: (metric: GrindMetricKey, label: string, meta?: string) => void;
+  deleteGrindLog: (metric: GrindMetricKey, id: string) => void;
+  addHustleEntry: (entry: Omit<HustleEntry, "id">) => void;
+  deleteHustleEntry: (id: string) => void;
 };
 
 const Ctx = createContext<StoreCtx | null>(null);
-const TX_KEY = "finstride.transactions";
-const TR_KEY = "finstride.trades";
+const TX_KEY   = "finstride.transactions";
+const TR_KEY   = "finstride.trades";
 const SNAP_KEY = "finstride.portfolio.snapshots";
+// GRIND_KEY defined above near GrindState types
 
 const seedTx: Transaction[] = [
   { id: crypto.randomUUID(), date: new Date(Date.now() - 86400000 * 2).toISOString(), type: "income",  category: "Salary",        paymentMode: "Bank Account", amount: 76000, tags: ["monthly"],    notes: "May salary" },
@@ -226,6 +340,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [pendingChecklist, setPendingChecklist] = useState<MonthlyPending>({});
   const [portfolioSnapshots, setPortfolioSnapshots] = useState<PortfolioSnapshot[]>([]);
+  const [grind, setGrind] = useState<GrindState>(EMPTY_GRIND);
 
   useEffect(() => {
     try {
@@ -239,6 +354,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setPortfolioSnapshots(
         sn ? (JSON.parse(sn) as Record<string, unknown>[]).map(normalizeSnapshot) : [],
       );
+      const gr = localStorage.getItem(GRIND_KEY);
+      setGrind(gr ? normalizeGrindState(JSON.parse(gr)) : EMPTY_GRIND);
     } catch {
       setTransactions(seedTx);
     }
@@ -263,6 +380,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     localStorage.setItem(SNAP_KEY, JSON.stringify(portfolioSnapshots));
   }, [portfolioSnapshots]);
+
+  useEffect(() => {
+    localStorage.setItem(GRIND_KEY, JSON.stringify(grind));
+  }, [grind]);
 
   const creditCardDues = transactions
     .filter((t) => t.type === "expense" && t.paymentMode === "Credit Card")
@@ -315,6 +436,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       ]),
     deletePortfolioSnapshot: (id) =>
       setPortfolioSnapshots((s) => s.filter((x) => x.id !== id)),
+    grind,
+    addGrindLog: (metric, label, meta) =>
+      setGrind((s) => ({
+        ...s,
+        metrics: {
+          ...s.metrics,
+          [metric]: [
+            { id: crypto.randomUUID(), loggedAt: new Date().toISOString(), label, meta },
+            ...s.metrics[metric],
+          ],
+        },
+      })),
+    deleteGrindLog: (metric, id) =>
+      setGrind((s) => ({
+        ...s,
+        metrics: {
+          ...s.metrics,
+          [metric]: s.metrics[metric].filter((e) => e.id !== id),
+        },
+      })),
+    addHustleEntry: (entry) =>
+      setGrind((s) => ({
+        ...s,
+        hustle: [{ ...entry, id: crypto.randomUUID() }, ...s.hustle],
+      })),
+    deleteHustleEntry: (id) =>
+      setGrind((s) => ({ ...s, hustle: s.hustle.filter((e) => e.id !== id) })),
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

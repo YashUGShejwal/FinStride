@@ -16,6 +16,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedSwingRouteImport } from './routes/_authenticated/swing'
 import { Route as AuthenticatedProfileRouteImport } from './routes/_authenticated/profile'
 import { Route as AuthenticatedPendingRouteImport } from './routes/_authenticated/pending'
+import { Route as AuthenticatedGrindRouteImport } from './routes/_authenticated/grind'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as AuthenticatedCashflowRouteImport } from './routes/_authenticated/cashflow'
 
@@ -53,6 +54,11 @@ const AuthenticatedPendingRoute = AuthenticatedPendingRouteImport.update({
   path: '/pending',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedGrindRoute = AuthenticatedGrindRouteImport.update({
+  id: '/grind',
+  path: '/grind',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
@@ -70,6 +76,7 @@ export interface FileRoutesByFullPath {
   '/signup': typeof SignupRoute
   '/cashflow': typeof AuthenticatedCashflowRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
+  '/grind': typeof AuthenticatedGrindRoute
   '/pending': typeof AuthenticatedPendingRoute
   '/profile': typeof AuthenticatedProfileRoute
   '/swing': typeof AuthenticatedSwingRoute
@@ -80,6 +87,7 @@ export interface FileRoutesByTo {
   '/signup': typeof SignupRoute
   '/cashflow': typeof AuthenticatedCashflowRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
+  '/grind': typeof AuthenticatedGrindRoute
   '/pending': typeof AuthenticatedPendingRoute
   '/profile': typeof AuthenticatedProfileRoute
   '/swing': typeof AuthenticatedSwingRoute
@@ -92,6 +100,7 @@ export interface FileRoutesById {
   '/signup': typeof SignupRoute
   '/_authenticated/cashflow': typeof AuthenticatedCashflowRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
+  '/_authenticated/grind': typeof AuthenticatedGrindRoute
   '/_authenticated/pending': typeof AuthenticatedPendingRoute
   '/_authenticated/profile': typeof AuthenticatedProfileRoute
   '/_authenticated/swing': typeof AuthenticatedSwingRoute
@@ -104,6 +113,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/cashflow'
     | '/dashboard'
+    | '/grind'
     | '/pending'
     | '/profile'
     | '/swing'
@@ -114,6 +124,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/cashflow'
     | '/dashboard'
+    | '/grind'
     | '/pending'
     | '/profile'
     | '/swing'
@@ -125,6 +136,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/_authenticated/cashflow'
     | '/_authenticated/dashboard'
+    | '/_authenticated/grind'
     | '/_authenticated/pending'
     | '/_authenticated/profile'
     | '/_authenticated/swing'
@@ -188,6 +200,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedPendingRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/grind': {
+      id: '/_authenticated/grind'
+      path: '/grind'
+      fullPath: '/grind'
+      preLoaderRoute: typeof AuthenticatedGrindRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/dashboard': {
       id: '/_authenticated/dashboard'
       path: '/dashboard'
@@ -208,6 +227,7 @@ declare module '@tanstack/react-router' {
 interface AuthenticatedRouteChildren {
   AuthenticatedCashflowRoute: typeof AuthenticatedCashflowRoute
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
+  AuthenticatedGrindRoute: typeof AuthenticatedGrindRoute
   AuthenticatedPendingRoute: typeof AuthenticatedPendingRoute
   AuthenticatedProfileRoute: typeof AuthenticatedProfileRoute
   AuthenticatedSwingRoute: typeof AuthenticatedSwingRoute
@@ -216,6 +236,7 @@ interface AuthenticatedRouteChildren {
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedCashflowRoute: AuthenticatedCashflowRoute,
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
+  AuthenticatedGrindRoute: AuthenticatedGrindRoute,
   AuthenticatedPendingRoute: AuthenticatedPendingRoute,
   AuthenticatedProfileRoute: AuthenticatedProfileRoute,
   AuthenticatedSwingRoute: AuthenticatedSwingRoute,
