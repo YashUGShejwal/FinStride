@@ -38,7 +38,7 @@ function LoginPage() {
             <Sparkles className="size-5 text-primary-foreground" />
           </div>
           <div>
-            <h1 className="text-2xl font-semibold">SwingDash</h1>
+            <h1 className="text-2xl font-semibold">FinStride</h1>
             <p className="text-xs text-muted-foreground">Discipline. Runway. Edge.</p>
           </div>
         </div>

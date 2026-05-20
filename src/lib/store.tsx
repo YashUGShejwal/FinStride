@@ -39,8 +39,8 @@ type StoreCtx = {
 };
 
 const Ctx = createContext<StoreCtx | null>(null);
-const TX_KEY = "swingdash.transactions";
-const TR_KEY = "swingdash.trades";
+const TX_KEY = "finstride.transactions";
+const TR_KEY = "finstride.trades";
 
 const seedTx: Transaction[] = [
   { id: crypto.randomUUID(), date: new Date(Date.now() - 86400000 * 2).toISOString(), type: "income", category: "Salary", account: "HDFC", amount: 76000, tags: ["monthly"], notes: "May salary" },

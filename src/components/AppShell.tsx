@@ -24,7 +24,7 @@ export function AppShell() {
             <Sparkles className="size-5 text-primary-foreground" />
           </div>
           <div>
-            <p className="font-semibold leading-none">SwingDash</p>
+            <p className="font-semibold leading-none">FinStride</p>
             <p className="text-[10px] uppercase tracking-widest text-muted-foreground mt-1">Blueprint v1</p>
           </div>
         </Link>
@@ -71,7 +71,7 @@ export function AppShell() {
             <div className="size-8 rounded-lg gradient-primary grid place-items-center">
               <Sparkles className="size-4 text-primary-foreground" />
             </div>
-            <p className="font-semibold">SwingDash</p>
+            <p className="font-semibold">FinStride</p>
           </div>
           <button onClick={() => signOut()} className="text-xs text-muted-foreground flex items-center gap-1">
             <LogOut className="size-3.5" /> Exit

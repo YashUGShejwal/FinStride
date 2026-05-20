@@ -15,7 +15,7 @@ type AuthCtx = {
 };
 
 const Ctx = createContext<AuthCtx | null>(null);
-const KEY = "swingdash.auth.user";
+const KEY = "finstride.auth.user";
 
 /** Sync read for route guards (beforeLoad). Matches AuthProvider localStorage key. */
 export function getStoredAuthUser(): AuthUser | null {

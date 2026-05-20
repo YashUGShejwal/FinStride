@@ -7,7 +7,7 @@ type BeforeInstallPromptEvent = Event & {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 };
 
-const SEEN_KEY = "swingdash.pwa.dismissed";
+const SEEN_KEY = "finstride.pwa.dismissed";
 
 export function PwaInstallBanner() {
   const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
@@ -67,7 +67,7 @@ export function PwaInstallBanner() {
             </div>
             <div>
               <p className="font-semibold">Installed successfully</p>
-              <p className="text-xs text-muted-foreground">SwingDash is on your home screen.</p>
+              <p className="text-xs text-muted-foreground">FinStride is on your home screen.</p>
             </div>
           </div>
         ) : (
@@ -77,7 +77,7 @@ export function PwaInstallBanner() {
                 <Smartphone className="size-5 text-primary-foreground" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="font-semibold leading-tight">Install SwingDash</p>
+                <p className="font-semibold leading-tight">Install FinStride</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   {isIOS
                     ? "Tap Share, then 'Add to Home Screen' for the app experience."
