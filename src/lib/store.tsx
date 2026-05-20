@@ -54,26 +54,53 @@ export const PORTFOLIO_PARTITIONS: readonly {
   { key: "Cash",          label: "Liquid Cash",   description: "Emergency bank balance" },
 ] as const;
 
+/**
+ * One per-partition row — mirrors portfolio_snapshots DB schema exactly.
+ * Local camelCase fields map 1-to-1: snapshotDate↔snapshot_date,
+ * brokerPartition↔broker_partition, currentValue↔current_value.
+ */
 export type PortfolioSnapshot = {
   id: string;
-  recordedAt: string; // ISO
-  values: Partial<Record<PortfolioPartitionKey, number>>;
-  notes?: string;
+  snapshotDate: string;                    // ISO — DB: snapshot_date
+  brokerPartition: PortfolioPartitionKey;  // DB: broker_partition
+  currentValue: number;                    // DB: current_value
+  notes?: string;                          // local-only; not in DB schema
 };
 
-function normalizeSnapshot(raw: Record<string, unknown>): PortfolioSnapshot {
-  const rawValues = (raw.values ?? {}) as Record<string, unknown>;
-  const values: Partial<Record<PortfolioPartitionKey, number>> = {};
-  for (const p of PORTFOLIO_PARTITIONS) {
-    const v = rawValues[p.key];
-    if (typeof v === "number" && !isNaN(v)) values[p.key] = v;
+const PORTFOLIO_PARTITION_KEYS = PORTFOLIO_PARTITIONS.map((p) => p.key) as PortfolioPartitionKey[];
+
+function normalizeSnapshot(raw: Record<string, unknown>): PortfolioSnapshot | PortfolioSnapshot[] {
+  if (raw.brokerPartition !== undefined) {
+    // New per-row shape
+    const partition = raw.brokerPartition as string;
+    return {
+      id: String(raw.id),
+      snapshotDate: String(raw.snapshotDate ?? raw.recordedAt ?? new Date().toISOString()),
+      brokerPartition: PORTFOLIO_PARTITION_KEYS.includes(partition as PortfolioPartitionKey)
+        ? (partition as PortfolioPartitionKey)
+        : "Cash",
+      currentValue: Number(raw.currentValue) || 0,
+      notes: raw.notes ? String(raw.notes) : undefined,
+    };
   }
-  return {
-    id: String(raw.id),
-    recordedAt: String(raw.recordedAt),
-    values,
-    notes: raw.notes ? String(raw.notes) : undefined,
-  };
+  // Legacy grouped shape: { id, recordedAt, values: { "Dhan Swing": 200000, … } }
+  // Expand into one row per partition so stored data migrates cleanly.
+  const legacyValues = (raw.values ?? {}) as Record<string, unknown>;
+  const date = String(raw.recordedAt ?? new Date().toISOString());
+  const rows: PortfolioSnapshot[] = [];
+  for (const key of PORTFOLIO_PARTITION_KEYS) {
+    const v = legacyValues[key];
+    if (typeof v === "number" && !isNaN(v)) {
+      rows.push({
+        id: crypto.randomUUID(),
+        snapshotDate: date,
+        brokerPartition: key,
+        currentValue: v,
+        notes: raw.notes ? String(raw.notes) : undefined,
+      });
+    }
+  }
+  return rows;
 }
 
 // ─── Monthly obligations checklist ────────────────────────────────────────
@@ -116,14 +143,14 @@ function normalizePaymentMode(raw: unknown): PaymentMode {
   return "Bank Account";
 }
 
-// Accepts both new schema (paymentMode) and legacy schemas (partition / account string)
+// Accepts new schema (account), previous interim (paymentMode), and legacy (partition)
 function normalizeTransaction(raw: Record<string, unknown>): Transaction {
   return {
     id: String(raw.id),
     date: String(raw.date),
     type: raw.type as TxType,
     category: raw.category as TxCategory,
-    paymentMode: normalizePaymentMode(raw.paymentMode ?? raw.partition ?? raw.account),
+    account: normalizePaymentMode(raw.account ?? raw.paymentMode ?? raw.partition),
     amount: Number(raw.amount),
     tags: Array.isArray(raw.tags) ? (raw.tags as string[]) : [],
     notes: raw.notes ? String(raw.notes) : undefined,
@@ -136,7 +163,7 @@ function normalizeTrade(raw: Record<string, unknown>): Trade {
     ticker: String(raw.ticker),
     entryDate: String(raw.entryDate),
     direction: "LONG",
-    quantity: Number(raw.quantity),
+    qty: Number(raw.qty ?? raw.quantity ?? 0),
     entryPrice: Number(raw.entryPrice),
     targetPrice: Number(raw.targetPrice),
     stopLoss: Number(raw.stopLoss),
@@ -146,7 +173,7 @@ function normalizeTrade(raw: Record<string, unknown>): Trade {
     status: raw.status === "closed" ? "closed" : "open",
     closeReason: (raw.closeReason as CloseReason | undefined) ?? undefined,
     closeNotes: raw.closeNotes ? String(raw.closeNotes) : undefined,
-    closedAt: raw.closedAt ? String(raw.closedAt) : undefined,
+    exitDate: raw.exitDate ? String(raw.exitDate) : (raw.closedAt ? String(raw.closedAt) : undefined),
   };
 }
 
@@ -154,36 +181,46 @@ function normalizeTrade(raw: Record<string, unknown>): Trade {
 export type TxType = "income" | "expense";
 export type TxCategory = "Salary" | "Fixed Runrate" | "Scooter EMI" | "Freelance" | "Other";
 
+/**
+ * Mirrors cashflow_ledger DB columns (camelCase).
+ * account↔cashflow_ledger.account, date↔date, type↔type, etc.
+ * tags is a local UI-only field with no DB column.
+ */
 export type Transaction = {
   id: string;
-  date: string; // ISO
-  type: TxType;
-  category: TxCategory;
-  paymentMode: PaymentMode;
-  amount: number;
-  tags: string[];
-  notes?: string;
+  date: string;           // DB: date
+  type: TxType;           // DB: type
+  category: TxCategory;   // DB: category
+  account: PaymentMode;   // DB: account ("Bank Account" | "Cash" | "Credit Card")
+  amount: number;         // DB: amount
+  tags: string[];         // local UI only — not in DB schema
+  notes?: string;         // DB: notes
 };
 
 export type TradeStatus = "open" | "closed";
 export type CloseReason = "target" | "stoploss" | "other";
 
+/**
+ * Mirrors swing_trades DB columns (camelCase).
+ * qty↔qty, entryDate↔entry_date, exitDate↔exit_date, etc.
+ * direction, partition, closeReason, closeNotes are local-only extensions.
+ */
 export type Trade = {
   id: string;
-  ticker: string;
-  entryDate: string;
-  direction: "LONG";
-  quantity: number;
-  entryPrice: number;
-  targetPrice: number;
-  stopLoss: number;
-  source: "TheDoji" | "Self";
-  partition: BrokerPartition;
-  notes?: string;        // optional rationale set at entry
-  status: TradeStatus;
-  closeReason?: CloseReason;
-  closeNotes?: string;   // optional notes set when closing
-  closedAt?: string;     // ISO date of close
+  ticker: string;          // DB: ticker
+  entryDate: string;       // DB: entry_date (ISO)
+  direction: "LONG";       // local only
+  qty: number;             // DB: qty
+  entryPrice: number;      // DB: entry_price
+  targetPrice: number;     // DB: target_price
+  stopLoss: number;        // DB: stop_loss
+  source: "TheDoji" | "Self"; // DB: source
+  partition: BrokerPartition; // local only — broker account used
+  notes?: string;          // local only — entry rationale
+  status: TradeStatus;     // DB: status
+  closeReason?: CloseReason;  // local only
+  closeNotes?: string;     // local only
+  exitDate?: string;       // DB: exit_date (ISO)
 };
 
 // ─── Grind Deck ───────────────────────────────────────────────────────────
@@ -299,9 +336,10 @@ type StoreCtx = {
   trades: Trade[];
   creditCardDues: number;
   pendingChecklist: MonthlyPending;
-  // Portfolio snapshot state
+  // Portfolio snapshot state — per-row, aligned with portfolio_snapshots schema
   portfolioSnapshots: PortfolioSnapshot[];
-  latestSnapshot: PortfolioSnapshot | null;
+  /** Latest current_value per broker_partition; built from the most-recent row per partition. */
+  latestSnapshotValues: Partial<Record<PortfolioPartitionKey, number>>;
   /** Latest recorded Dhan Swing capital; falls back to BLUEPRINT.accountBalance if no snapshot. */
   dhanSwingCapital: number;
   addTransaction: (t: Omit<Transaction, "id">) => void;
@@ -310,8 +348,12 @@ type StoreCtx = {
   closeTrade: (id: string, closeReason: CloseReason, closeNotes?: string) => void;
   deleteTrade: (id: string) => void;
   toggleObligation: (key: ObligationKey) => void;
-  addPortfolioSnapshot: (
-    values: Partial<Record<PortfolioPartitionKey, number>>,
+  /**
+   * Add one or more snapshot rows in a single "session" (all share the same timestamp).
+   * Each entry becomes a separate row — mirrors portfolio_snapshots.
+   */
+  addPortfolioSnapshots: (
+    entries: Array<{ brokerPartition: PortfolioPartitionKey; currentValue: number }>,
     notes?: string,
   ) => void;
   deletePortfolioSnapshot: (id: string) => void;
@@ -330,9 +372,9 @@ const SNAP_KEY = "finstride.portfolio.snapshots";
 // GRIND_KEY defined above near GrindState types
 
 const seedTx: Transaction[] = [
-  { id: crypto.randomUUID(), date: new Date(Date.now() - 86400000 * 2).toISOString(), type: "income",  category: "Salary",        paymentMode: "Bank Account", amount: 76000, tags: ["monthly"],    notes: "May salary" },
-  { id: crypto.randomUUID(), date: new Date(Date.now() - 86400000 * 5).toISOString(), type: "expense", category: "Fixed Runrate", paymentMode: "Bank Account", amount: 39000, tags: ["essentials"] },
-  { id: crypto.randomUUID(), date: new Date(Date.now() - 86400000 * 7).toISOString(), type: "expense", category: "Scooter EMI",   paymentMode: "Bank Account", amount: 9000,  tags: ["emi"] },
+  { id: crypto.randomUUID(), date: new Date(Date.now() - 86400000 * 2).toISOString(), type: "income",  category: "Salary",        account: "Bank Account", amount: 76000, tags: ["monthly"],    notes: "May salary" },
+  { id: crypto.randomUUID(), date: new Date(Date.now() - 86400000 * 5).toISOString(), type: "expense", category: "Fixed Runrate", account: "Bank Account", amount: 39000, tags: ["essentials"] },
+  { id: crypto.randomUUID(), date: new Date(Date.now() - 86400000 * 7).toISOString(), type: "expense", category: "Scooter EMI",   account: "Bank Account", amount: 9000,  tags: ["emi"] },
 ];
 
 export function StoreProvider({ children }: { children: ReactNode }) {
@@ -351,9 +393,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const tr = localStorage.getItem(TR_KEY);
       setTrades(tr ? (JSON.parse(tr) as Record<string, unknown>[]).map(normalizeTrade) : []);
       const sn = localStorage.getItem(SNAP_KEY);
-      setPortfolioSnapshots(
-        sn ? (JSON.parse(sn) as Record<string, unknown>[]).map(normalizeSnapshot) : [],
-      );
+      if (sn) {
+        const rawSnaps = JSON.parse(sn) as Record<string, unknown>[];
+        const rows: PortfolioSnapshot[] = [];
+        for (const raw of rawSnaps) {
+          const result = normalizeSnapshot(raw);
+          if (Array.isArray(result)) rows.push(...result);
+          else rows.push(result);
+        }
+        setPortfolioSnapshots(rows);
+      }
       const gr = localStorage.getItem(GRIND_KEY);
       setGrind(gr ? normalizeGrindState(JSON.parse(gr)) : EMPTY_GRIND);
     } catch {
@@ -386,17 +435,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [grind]);
 
   const creditCardDues = transactions
-    .filter((t) => t.type === "expense" && t.paymentMode === "Credit Card")
+    .filter((t) => t.type === "expense" && t.account === "Credit Card")
     .reduce((sum, t) => sum + t.amount, 0);
 
-  // Latest snapshot = most recent by recordedAt
-  const latestSnapshot = portfolioSnapshots.length
-    ? portfolioSnapshots.reduce((a, b) => (a.recordedAt >= b.recordedAt ? a : b))
-    : null;
+  // Latest value per partition: find the most-recent row for each key
+  const latestSnapshotValues = PORTFOLIO_PARTITION_KEYS.reduce(
+    (acc, key) => {
+      const rows = portfolioSnapshots.filter((s) => s.brokerPartition === key);
+      if (rows.length) {
+        acc[key] = rows.reduce((a, b) => (a.snapshotDate >= b.snapshotDate ? a : b)).currentValue;
+      }
+      return acc;
+    },
+    {} as Partial<Record<PortfolioPartitionKey, number>>,
+  );
 
   // Dhan Swing capital from latest snapshot; fall back to Blueprint default
-  const dhanSwingCapital =
-    latestSnapshot?.values["Dhan Swing"] ?? BLUEPRINT.accountBalance;
+  const dhanSwingCapital = latestSnapshotValues["Dhan Swing"] ?? BLUEPRINT.accountBalance;
 
   const toggleObligation = (key: ObligationKey) =>
     setPendingChecklist((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -407,7 +462,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     creditCardDues,
     pendingChecklist,
     portfolioSnapshots,
-    latestSnapshot,
+    latestSnapshotValues,
     dhanSwingCapital,
     addTransaction: (t) => setTransactions((s) => [{ ...t, id: crypto.randomUUID() }, ...s]),
     deleteTransaction: (id) => setTransactions((s) => s.filter((x) => x.id !== id)),
@@ -422,18 +477,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 status: "closed",
                 closeReason,
                 closeNotes: closeNotes || undefined,
-                closedAt: new Date().toISOString(),
+                exitDate: new Date().toISOString(),
               }
             : t,
         ),
       ),
     deleteTrade: (id) => setTrades((s) => s.filter((x) => x.id !== id)),
     toggleObligation,
-    addPortfolioSnapshot: (values, notes) =>
-      setPortfolioSnapshots((s) => [
-        { id: crypto.randomUUID(), recordedAt: new Date().toISOString(), values, notes },
-        ...s,
-      ]),
+    addPortfolioSnapshots: (entries, notes) => {
+      const snapshotDate = new Date().toISOString();
+      const rows: PortfolioSnapshot[] = entries.map((e) => ({
+        id: crypto.randomUUID(),
+        snapshotDate,
+        brokerPartition: e.brokerPartition,
+        currentValue: e.currentValue,
+        notes,
+      }));
+      setPortfolioSnapshots((s) => [...rows, ...s]);
+    },
     deletePortfolioSnapshot: (id) =>
       setPortfolioSnapshots((s) => s.filter((x) => x.id !== id)),
     grind,

@@ -22,7 +22,7 @@ function CashflowPage() {
     date: new Date().toISOString().slice(0, 10),
     type: "expense" as TxType,
     category: "Other" as TxCategory,
-    paymentMode: "Bank Account" as PaymentMode,
+    account: "Bank Account" as PaymentMode,
     amount: "",
     tags: "",
     notes: "",
@@ -36,7 +36,7 @@ function CashflowPage() {
       date: new Date(form.date).toISOString(),
       type: form.type,
       category: form.category,
-      paymentMode: form.paymentMode,
+      account: form.account,
       amount: amt,
       tags: form.tags.split(",").map((s) => s.trim()).filter(Boolean),
       notes: form.notes || undefined,
@@ -51,7 +51,7 @@ function CashflowPage() {
       (t) =>
         !s ||
         t.category.toLowerCase().includes(s) ||
-        t.paymentMode.toLowerCase().includes(s) ||
+        t.account.toLowerCase().includes(s) ||
         t.tags.some((x) => x.toLowerCase().includes(s)) ||
         (t.notes?.toLowerCase().includes(s) ?? false),
     );
@@ -117,8 +117,8 @@ function CashflowPage() {
           </Field>
           <Field className="col-span-1 md:col-span-1" label="Account / Mode">
             <Select
-              value={form.paymentMode}
-              onValueChange={(v: PaymentMode) => setForm({ ...form, paymentMode: v })}
+              value={form.account}
+              onValueChange={(v: PaymentMode) => setForm({ ...form, account: v })}
             >
               <SelectTrigger className="bg-input/40 border-glass-border">
                 <SelectValue />
@@ -230,7 +230,7 @@ function CashflowPage() {
                     </span>
                   </td>
                   <td>{t.category}</td>
-                  <td className="text-muted-foreground">{t.paymentMode}</td>
+                  <td className="text-muted-foreground">{t.account}</td>
                   <td className="text-xs text-muted-foreground">{t.tags.join(", ") || "—"}</td>
                   <td
                     className={`text-right font-semibold tabular-nums ${
@@ -285,7 +285,7 @@ function CashflowPage() {
                 <div className="min-w-0">
                   <p className="text-sm font-medium truncate">{t.category}</p>
                   <p className="text-[11px] text-muted-foreground truncate">
-                    {fmtDate(t.date)} • {t.paymentMode}
+                    {fmtDate(t.date)} • {t.account}
                   </p>
                 </div>
               </div>

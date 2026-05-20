@@ -10,6 +10,7 @@ import {
 import { Toaster } from "@/components/ui/sonner";
 import { AuthProvider } from "@/lib/auth";
 import { StoreProvider } from "@/lib/store";
+import { PwaInstallBanner } from "@/lib/pwa";
 
 import appCss from "../styles.css?url";
 
@@ -57,8 +58,17 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { property: "og:title", content: "FinStride" },
       { property: "og:description", content: "Cashflow runway + disciplined swing trading, in your pocket." },
       { property: "og:type", content: "website" },
+      // iOS PWA meta
+      { name: "apple-mobile-web-app-capable", content: "yes" },
+      { name: "apple-mobile-web-app-status-bar-style", content: "black-translucent" },
+      { name: "apple-mobile-web-app-title", content: "FinStride" },
+      { name: "mobile-web-app-capable", content: "yes" },
     ],
-    links: [{ rel: "stylesheet", href: appCss }],
+    links: [
+      { rel: "stylesheet", href: appCss },
+      { rel: "manifest", href: "/manifest.json" },
+      { rel: "apple-touch-icon", sizes: "192x192", href: "/icons/icon-192.png" },
+    ],
   }),
   shellComponent: RootShell,
   component: RootComponent,
@@ -88,6 +98,7 @@ function RootComponent() {
         <StoreProvider>
           <Outlet />
           <Toaster position="top-center" theme="dark" />
+          <PwaInstallBanner />
         </StoreProvider>
       </AuthProvider>
     </QueryClientProvider>

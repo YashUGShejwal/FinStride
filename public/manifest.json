@@ -1,0 +1,61 @@
+{
+  "name": "FinStride",
+  "short_name": "FinStride",
+  "description": "Mobile-first personal cashflow, runway and rule-enforced swing trade tracker.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0f1626",
+  "theme_color": "#0f1626",
+  "categories": ["finance", "productivity"],
+  "lang": "en",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-192-maskable.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Dashboard",
+      "short_name": "Dash",
+      "description": "Open the command deck",
+      "url": "/dashboard"
+    },
+    {
+      "name": "Swing Trades",
+      "short_name": "Swing",
+      "description": "Log or review swing trades",
+      "url": "/swing"
+    },
+    {
+      "name": "Cashflow",
+      "short_name": "Cash",
+      "description": "Log income or expenses",
+      "url": "/cashflow"
+    }
+  ],
+  "related_applications": [],
+  "prefer_related_applications": false
+}

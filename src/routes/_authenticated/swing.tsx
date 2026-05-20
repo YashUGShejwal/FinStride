@@ -53,26 +53,28 @@ const CLOSE_REASONS: {
 
 // ─── Capital Snapshot Panel ────────────────────────────────────────────────
 function CapitalSnapshotPanel() {
-  const { latestSnapshot, addPortfolioSnapshot, dhanSwingCapital } = useStore();
+  const { latestSnapshotValues, addPortfolioSnapshots, dhanSwingCapital } = useStore();
   const [open, setOpen] = useState(false);
   const [snapNotes, setSnapNotes] = useState("");
   const [values, setValues] = useState<Partial<Record<PortfolioPartitionKey, string>>>({});
 
+  const hasAnySnapshot = Object.keys(latestSnapshotValues).length > 0;
+
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    const parsed: Partial<Record<PortfolioPartitionKey, number>> = {};
+    const entries: Array<{ brokerPartition: PortfolioPartitionKey; currentValue: number }> = [];
     for (const p of PORTFOLIO_PARTITIONS) {
       const raw = values[p.key];
       if (raw && raw.trim() !== "") {
         const n = Number(raw);
-        if (!isNaN(n) && n >= 0) parsed[p.key] = n;
+        if (!isNaN(n) && n >= 0) entries.push({ brokerPartition: p.key, currentValue: n });
       }
     }
-    if (Object.keys(parsed).length === 0) {
+    if (entries.length === 0) {
       toast.error("Enter at least one partition value");
       return;
     }
-    addPortfolioSnapshot(parsed, snapNotes.trim() || undefined);
+    addPortfolioSnapshots(entries, snapNotes.trim() || undefined);
     toast.success("Portfolio snapshot saved");
     setValues({});
     setSnapNotes("");
@@ -96,7 +98,7 @@ function CapitalSnapshotPanel() {
             <p className="text-xs text-muted-foreground">
               Dhan Swing active capital:{" "}
               <span className="text-foreground font-medium tabular-nums">{inr(dhanSwingCapital)}</span>
-              {!latestSnapshot && (
+              {!hasAnySnapshot && (
                 <span className="ml-1 text-[oklch(0.78_0.18_80)]">(using default)</span>
               )}
             </p>
@@ -109,10 +111,10 @@ function CapitalSnapshotPanel() {
       </button>
 
       {/* Partition value tiles — always visible summary */}
-      {latestSnapshot && !open && (
+      {hasAnySnapshot && !open && (
         <div className="px-4 pb-4 grid grid-cols-2 md:grid-cols-4 gap-2">
           {PORTFOLIO_PARTITIONS.map((p) => {
-            const val = latestSnapshot.values[p.key];
+            const val = latestSnapshotValues[p.key];
             return (
               <div key={p.key} className="glass rounded-xl p-3">
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -124,11 +126,6 @@ function CapitalSnapshotPanel() {
               </div>
             );
           })}
-          {latestSnapshot.notes && (
-            <p className="col-span-2 md:col-span-4 text-xs text-muted-foreground/70 italic px-1">
-              {fmtDate(latestSnapshot.recordedAt)} — {latestSnapshot.notes}
-            </p>
-          )}
         </div>
       )}
 
@@ -159,8 +156,8 @@ function CapitalSnapshotPanel() {
                     onChange={(e) => setValues((v) => ({ ...v, [p.key]: e.target.value }))}
                     className="bg-input/40 border-glass-border tabular-nums pl-7"
                     placeholder={
-                      latestSnapshot?.values[p.key] !== undefined
-                        ? String(latestSnapshot.values[p.key])
+                      latestSnapshotValues[p.key] !== undefined
+                        ? String(latestSnapshotValues[p.key])
                         : "0"
                     }
                   />
@@ -254,7 +251,7 @@ function SwingPage() {
       ticker,
       entryDate: new Date(entryDate).toISOString(),
       direction: "LONG",
-      quantity: Number(qty),
+      qty: Number(qty),
       entryPrice: Number(entry),
       targetPrice: Number(target),
       stopLoss: Number(stop),
@@ -511,7 +508,7 @@ function SwingPage() {
                         </span>
                       </div>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {fmtDate(t.entryDate)} • {t.quantity} × {inr(t.entryPrice)} • Tgt{" "}
+                        {fmtDate(t.entryDate)} • {t.qty} × {inr(t.entryPrice)} • Tgt{" "}
                         {inr(t.targetPrice)} • SL {inr(t.stopLoss)}
                       </p>
                       {t.notes && (
@@ -640,7 +637,7 @@ function SwingPage() {
                     </div>
                     <p className="text-xs text-muted-foreground mt-0.5">
                       Entry {fmtDate(t.entryDate)}
-                      {t.closedAt ? ` → Closed ${fmtDate(t.closedAt)}` : ""} • {t.quantity} ×{" "}
+                      {t.exitDate ? ` → Closed ${fmtDate(t.exitDate)}` : ""} • {t.qty} ×{" "}
                       {inr(t.entryPrice)} • Tgt {inr(t.targetPrice)} • SL {inr(t.stopLoss)}
                     </p>
                     {t.notes && (
