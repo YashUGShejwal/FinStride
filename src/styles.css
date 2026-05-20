@@ -1,0 +1,137 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-glass: var(--glass);
+  --color-glass-border: var(--glass-border);
+}
+
+:root {
+  --radius: 1rem;
+
+  /* Dark glass palette - default and only theme */
+  --background: oklch(0.16 0.02 265);
+  --foreground: oklch(0.97 0.01 250);
+
+  --card: oklch(0.22 0.025 265 / 0.55);
+  --card-foreground: oklch(0.97 0.01 250);
+
+  --popover: oklch(0.2 0.03 265);
+  --popover-foreground: oklch(0.97 0.01 250);
+
+  --primary: oklch(0.72 0.18 195);
+  --primary-foreground: oklch(0.13 0.02 265);
+
+  --secondary: oklch(0.28 0.04 270 / 0.6);
+  --secondary-foreground: oklch(0.97 0.01 250);
+
+  --muted: oklch(0.26 0.03 265 / 0.6);
+  --muted-foreground: oklch(0.7 0.02 255);
+
+  --accent: oklch(0.68 0.22 305);
+  --accent-foreground: oklch(0.13 0.02 265);
+
+  --destructive: oklch(0.65 0.24 25);
+  --destructive-foreground: oklch(0.98 0.01 0);
+
+  --success: oklch(0.72 0.18 155);
+  --success-foreground: oklch(0.12 0.02 265);
+
+  --warning: oklch(0.78 0.17 75);
+  --warning-foreground: oklch(0.12 0.02 265);
+
+  --border: oklch(1 0 0 / 0.08);
+  --input: oklch(1 0 0 / 0.06);
+  --ring: oklch(0.72 0.18 195);
+
+  --glass: oklch(0.22 0.03 270 / 0.5);
+  --glass-border: oklch(1 0 0 / 0.1);
+
+  --gradient-app: radial-gradient(1200px 800px at 10% -10%, oklch(0.32 0.12 280 / 0.55), transparent 60%),
+                  radial-gradient(900px 700px at 110% 10%, oklch(0.3 0.14 200 / 0.45), transparent 60%),
+                  linear-gradient(180deg, oklch(0.14 0.02 265), oklch(0.11 0.015 265));
+  --gradient-primary: linear-gradient(135deg, oklch(0.72 0.18 195), oklch(0.68 0.22 270));
+  --gradient-accent: linear-gradient(135deg, oklch(0.68 0.22 305), oklch(0.72 0.18 220));
+  --gradient-success: linear-gradient(135deg, oklch(0.72 0.18 155), oklch(0.7 0.17 190));
+  --gradient-danger: linear-gradient(135deg, oklch(0.7 0.22 20), oklch(0.6 0.24 350));
+
+  --shadow-glow: 0 10px 40px -10px oklch(0.72 0.18 195 / 0.45);
+  --shadow-card: 0 8px 32px -8px oklch(0 0 0 / 0.5);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html, body {
+    min-height: 100vh;
+  }
+
+  body {
+    color: var(--color-foreground);
+    background: var(--gradient-app);
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Inter, "Helvetica Neue", sans-serif;
+  }
+}
+
+@layer utilities {
+  .glass {
+    background: var(--glass);
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--shadow-card);
+  }
+  .glass-strong {
+    background: oklch(0.2 0.025 265 / 0.78);
+    backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    border: 1px solid var(--glass-border);
+  }
+  .gradient-primary { background: var(--gradient-primary); }
+  .gradient-accent { background: var(--gradient-accent); }
+  .gradient-success { background: var(--gradient-success); }
+  .gradient-danger { background: var(--gradient-danger); }
+  .text-gradient {
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .glow { box-shadow: var(--shadow-glow); }
+  .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+}
