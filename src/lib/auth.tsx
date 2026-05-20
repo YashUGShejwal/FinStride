@@ -17,6 +17,15 @@ type AuthCtx = {
 const Ctx = createContext<AuthCtx | null>(null);
 const KEY = "swingdash.auth.user";
 
+/** Sync read for route guards (beforeLoad). Matches AuthProvider localStorage key. */
+export function getStoredAuthUser(): AuthUser | null {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (raw) return JSON.parse(raw) as AuthUser;
+  } catch {}
+  return null;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
