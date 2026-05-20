@@ -1,24 +1,52 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState, type FormEvent } from "react";
-import { Plus, Trash2, AlertTriangle, ShieldAlert, TrendingUp, Lock } from "lucide-react";
-import { useStore, BLUEPRINT, appsForScope, type BrokerPartition } from "@/lib/store";
+import {
+  Plus, Trash2, AlertTriangle, ShieldAlert, TrendingUp, Lock,
+  CheckCircle2, XCircle, MinusCircle, ChevronDown, ChevronUp,
+} from "lucide-react";
+import {
+  useStore, BLUEPRINT, INVESTMENT_APPS,
+  type BrokerPartition, type CloseReason,
+} from "@/lib/store";
 import { inr, fmtDate } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/swing")({ component: SwingPage });
 
 // Blueprint Rule 2 — F&O ban regex
-const FNO_REGEX = /\b(CALL|PUT|CE|PE|NIFTY|SENSEX|BANKNIFTY|FINNIFTY)\b|\d{2}(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d{0,4}(CE|PE)?/i;
-const SWING_APPS = appsForScope("swing");
+const FNO_REGEX =
+  /\b(CALL|PUT|CE|PE|NIFTY|SENSEX|BANKNIFTY|FINNIFTY)\b|\d{2}(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d{0,4}(CE|PE)?/i;
 
+const CLOSE_REASONS: { value: CloseReason; label: string; icon: React.ReactNode; color: string }[] = [
+  {
+    value: "target",
+    label: "Target Hit",
+    icon: <CheckCircle2 className="size-4" />,
+    color: "border-[oklch(0.72_0.18_155/0.5)] bg-[oklch(0.72_0.18_155/0.1)] text-[oklch(0.82_0.16_155)]",
+  },
+  {
+    value: "stoploss",
+    label: "Stop Loss",
+    icon: <XCircle className="size-4" />,
+    color: "border-[oklch(0.7_0.22_20/0.5)] bg-[oklch(0.7_0.22_20/0.1)] text-[oklch(0.82_0.18_25)]",
+  },
+  {
+    value: "other",
+    label: "Other",
+    icon: <MinusCircle className="size-4" />,
+    color: "border-glass-border bg-white/5 text-muted-foreground",
+  },
+];
 
 function SwingPage() {
-  const { trades, addTrade, deleteTrade } = useStore();
+  const { trades, addTrade, closeTrade, deleteTrade } = useStore();
 
+  // ── entry form state ───────────────────────────────────────────────────────
   const [partition, setPartition] = useState<BrokerPartition>("Dhan Swing");
   const [ticker, setTicker] = useState("");
   const [fnoBlocked, setFnoBlocked] = useState(false);
@@ -28,10 +56,19 @@ function SwingPage() {
   const [target, setTarget] = useState("");
   const [stop, setStop] = useState("");
   const [source, setSource] = useState<"TheDoji" | "Self">("TheDoji");
+  const [entryNotes, setEntryNotes] = useState("");
+
+  // ── close-out inline panel state ──────────────────────────────────────────
+  const [closingId, setClosingId] = useState<string | null>(null);
+  const [closeReason, setCloseReason] = useState<CloseReason | null>(null);
+  const [closeNotes, setCloseNotes] = useState("");
 
   const exposure = useMemo(() => Number(qty) * Number(entry) || 0, [qty, entry]);
   const cap = BLUEPRINT.accountBalance * BLUEPRINT.riskCapPct;
   const exceedsCap = exposure > cap;
+
+  const openTrades = trades.filter((t) => t.status === "open");
+  const closedTrades = trades.filter((t) => t.status === "closed");
 
   const handleTickerChange = (raw: string) => {
     const upper = raw.toUpperCase();
@@ -45,7 +82,14 @@ function SwingPage() {
     setTicker(upper);
   };
 
-  const canSubmit = !fnoBlocked && !exceedsCap && ticker && Number(qty) > 0 && Number(entry) > 0 && Number(target) > 0 && Number(stop) > 0;
+  const canSubmit =
+    !fnoBlocked &&
+    !exceedsCap &&
+    ticker &&
+    Number(qty) > 0 &&
+    Number(entry) > 0 &&
+    Number(target) > 0 &&
+    Number(stop) > 0;
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -60,9 +104,25 @@ function SwingPage() {
       stopLoss: Number(stop),
       source,
       partition,
+      notes: entryNotes.trim() || undefined,
     });
     toast.success(`${ticker} logged`);
-    setTicker(""); setQty(""); setEntry(""); setTarget(""); setStop("");
+    setTicker(""); setQty(""); setEntry(""); setTarget(""); setStop(""); setEntryNotes("");
+  };
+
+  const handleClose = (id: string) => {
+    if (!closeReason) return toast.error("Select an outcome first");
+    closeTrade(id, closeReason, closeNotes.trim() || undefined);
+    toast.success("Trade closed");
+    setClosingId(null);
+    setCloseReason(null);
+    setCloseNotes("");
+  };
+
+  const openClosePanel = (id: string) => {
+    setClosingId((prev) => (prev === id ? null : id));
+    setCloseReason(null);
+    setCloseNotes("");
   };
 
   return (
@@ -72,32 +132,49 @@ function SwingPage() {
         <h1 className="text-3xl md:text-4xl font-semibold mt-1">
           <span className="text-gradient">Swing</span> trade logger
         </h1>
-        <p className="text-sm text-muted-foreground mt-2">Rule-enforced. Equity only. Risk-capped at 3% of {inr(BLUEPRINT.accountBalance)}.</p>
+        <p className="text-sm text-muted-foreground mt-2">
+          Rule-enforced. Equity only. Risk-capped at 3% of {inr(BLUEPRINT.accountBalance)}.
+        </p>
       </header>
 
       {fnoBlocked && (
         <div className="rounded-2xl border border-destructive/40 bg-destructive/10 p-4 flex items-start gap-3 animate-in fade-in slide-in-from-top-2">
           <ShieldAlert className="size-5 text-destructive shrink-0 mt-0.5" />
           <div>
-            <p className="font-semibold text-destructive">Blueprint Violation: Equity Swing Trading only.</p>
-            <p className="text-xs text-destructive/80 mt-1">F&O instruments (CE/PE, weekly expiries, NIFTY/SENSEX/BANKNIFTY) are blocked. Use cash equity tickers only.</p>
+            <p className="font-semibold text-destructive">
+              Blueprint Violation: Equity Swing Trading only.
+            </p>
+            <p className="text-xs text-destructive/80 mt-1">
+              F&O instruments (CE/PE, weekly expiries, NIFTY/SENSEX/BANKNIFTY) are blocked. Use cash
+              equity tickers only.
+            </p>
           </div>
         </div>
       )}
 
-      {/* Entry form */}
+      {/* ── Entry form ───────────────────────────────────────────────────────── */}
       <section className="glass-strong rounded-2xl p-5 md:p-6">
         <h2 className="font-semibold mb-4 flex items-center gap-2">
           <TrendingUp className="size-4 text-primary" /> New swing entry
         </h2>
         <form onSubmit={submit} className="grid grid-cols-2 md:grid-cols-6 gap-3">
+          {/* Row 1 */}
           <Field className="col-span-2 md:col-span-2" label="Ticker">
-            <Input value={ticker} onChange={(e) => handleTickerChange(e.target.value)}
+            <Input
+              value={ticker}
+              onChange={(e) => handleTickerChange(e.target.value)}
               className={`bg-input/40 border-glass-border uppercase tracking-wider ${fnoBlocked ? "border-destructive ring-1 ring-destructive" : ""}`}
-              placeholder="e.g. RELIANCE, INFY" required />
+              placeholder="e.g. RELIANCE, INFY"
+              required
+            />
           </Field>
           <Field className="col-span-1 md:col-span-1" label="Entry Date">
-            <Input type="date" value={entryDate} onChange={(e) => setEntryDate(e.target.value)} className="bg-input/40 border-glass-border" />
+            <Input
+              type="date"
+              value={entryDate}
+              onChange={(e) => setEntryDate(e.target.value)}
+              className="bg-input/40 border-glass-border"
+            />
           </Field>
           <Field className="col-span-1 md:col-span-1" label="Direction">
             <div className="h-9 px-3 rounded-md bg-input/40 border border-glass-border flex items-center justify-between text-sm">
@@ -106,47 +183,98 @@ function SwingPage() {
             </div>
           </Field>
           <Field className="col-span-1 md:col-span-1" label="Quantity">
-            <Input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)}
-              className="bg-input/40 border-glass-border tabular-nums" placeholder="0" />
+            <Input
+              type="number"
+              min="1"
+              value={qty}
+              onChange={(e) => setQty(e.target.value)}
+              className="bg-input/40 border-glass-border tabular-nums"
+              placeholder="0"
+            />
           </Field>
           <Field className="col-span-1 md:col-span-1" label="Partition">
-            <Select value={partition} onValueChange={(v: BrokerPartition) => setPartition(v)}>
-              <SelectTrigger className="bg-input/40 border-glass-border"><SelectValue /></SelectTrigger>
+            <Select
+              value={partition}
+              onValueChange={(v: BrokerPartition) => setPartition(v)}
+            >
+              <SelectTrigger className="bg-input/40 border-glass-border">
+                <SelectValue />
+              </SelectTrigger>
               <SelectContent>
-                {SWING_APPS.map((a) => (
-                  <SelectItem key={a.id} value={a.id}>{a.label}</SelectItem>
+                {INVESTMENT_APPS.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.label}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </Field>
+
+          {/* Row 2 */}
           <Field className="col-span-1 md:col-span-1" label="Source">
-            <Select value={source} onValueChange={(v: "TheDoji" | "Self") => setSource(v)}>
-              <SelectTrigger className="bg-input/40 border-glass-border"><SelectValue /></SelectTrigger>
+            <Select
+              value={source}
+              onValueChange={(v: "TheDoji" | "Self") => setSource(v)}
+            >
+              <SelectTrigger className="bg-input/40 border-glass-border">
+                <SelectValue />
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="TheDoji">TheDoji</SelectItem>
                 <SelectItem value="Self">Self</SelectItem>
               </SelectContent>
             </Select>
           </Field>
-
-          <Field className="col-span-2 md:col-span-2" label="Entry Price (₹)">
-            <Input type="number" step="0.05" value={entry} onChange={(e) => setEntry(e.target.value)}
-              className="bg-input/40 border-glass-border tabular-nums" placeholder="0.00" />
+          <Field className="col-span-1 md:col-span-2" label="Entry Price (₹)">
+            <Input
+              type="number"
+              step="0.05"
+              value={entry}
+              onChange={(e) => setEntry(e.target.value)}
+              className="bg-input/40 border-glass-border tabular-nums"
+              placeholder="0.00"
+            />
           </Field>
           <Field className="col-span-1 md:col-span-2" label="Target Price (₹)">
-            <Input type="number" step="0.05" value={target} onChange={(e) => setTarget(e.target.value)}
-              className="bg-input/40 border-glass-border tabular-nums" placeholder="0.00" />
+            <Input
+              type="number"
+              step="0.05"
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              className="bg-input/40 border-glass-border tabular-nums"
+              placeholder="0.00"
+            />
           </Field>
-          <Field className="col-span-1 md:col-span-2" label="Stop Loss (₹)">
-            <Input type="number" step="0.05" value={stop} onChange={(e) => setStop(e.target.value)}
-              className="bg-input/40 border-glass-border tabular-nums" placeholder="0.00" />
+          <Field className="col-span-2 md:col-span-2" label="Stop Loss (₹)">
+            <Input
+              type="number"
+              step="0.05"
+              value={stop}
+              onChange={(e) => setStop(e.target.value)}
+              className="bg-input/40 border-glass-border tabular-nums"
+              placeholder="0.00"
+            />
+          </Field>
+
+          {/* Notes */}
+          <Field className="col-span-2 md:col-span-6" label="Notes (optional)">
+            <Input
+              value={entryNotes}
+              onChange={(e) => setEntryNotes(e.target.value)}
+              className="bg-input/40 border-glass-border"
+              placeholder="Trade rationale, setup type, catalyst…"
+            />
           </Field>
 
           {/* Risk meter */}
           <div className="col-span-2 md:col-span-6 glass rounded-xl p-4">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-muted-foreground uppercase tracking-wider">Position exposure</span>
-              <span className="tabular-nums font-medium">{inr(exposure)} / {inr(cap)} cap</span>
+              <span className="text-muted-foreground uppercase tracking-wider">
+                Position exposure
+              </span>
+              <span className="tabular-nums font-medium">
+                {inr(exposure)} / {inr(cap)} cap
+              </span>
             </div>
             <div className="mt-2 h-2 rounded-full bg-white/5 overflow-hidden">
               <div
@@ -156,61 +284,228 @@ function SwingPage() {
             </div>
             {exceedsCap && (
               <p className="mt-2 text-xs text-destructive flex items-center gap-1.5 font-medium">
-                <AlertTriangle className="size-3.5" /> 3% Limit Wall exceeded. Reduce quantity or price to proceed.
+                <AlertTriangle className="size-3.5" /> 3% Limit Wall exceeded. Reduce quantity or
+                price to proceed.
               </p>
             )}
           </div>
 
           <div className="col-span-2 md:col-span-6 flex justify-end">
-            <Button type="submit" disabled={!canSubmit}
-              className="gradient-primary text-primary-foreground border-0 gap-2 glow h-10 disabled:opacity-40 disabled:cursor-not-allowed disabled:glow-none">
+            <Button
+              type="submit"
+              disabled={!canSubmit}
+              className="gradient-primary text-primary-foreground border-0 gap-2 glow h-10 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
               <Plus className="size-4" /> Log trade
             </Button>
           </div>
         </form>
       </section>
 
-      {/* Trades list */}
+      {/* ── Open positions ───────────────────────────────────────────────────── */}
       <section className="glass rounded-2xl p-5">
-        <h2 className="font-semibold mb-4">Open log</h2>
-        {trades.length === 0 ? (
-          <p className="text-sm text-muted-foreground py-8 text-center">No trades logged yet.</p>
+        <h2 className="font-semibold mb-4">
+          Open positions
+          {openTrades.length > 0 && (
+            <span className="ml-2 text-xs text-muted-foreground font-normal">
+              ({openTrades.length})
+            </span>
+          )}
+        </h2>
+        {openTrades.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-6 text-center">No open trades.</p>
         ) : (
           <ul className="space-y-2">
-            {trades.map((t) => {
+            {openTrades.map((t) => {
               const r = (t.targetPrice - t.entryPrice) / (t.entryPrice - t.stopLoss);
+              const isClosing = closingId === t.id;
               return (
-                <li key={t.id} className="glass rounded-xl p-4 flex items-center gap-3 justify-between">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="font-semibold tracking-wider">{t.ticker}</p>
-                      <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[oklch(0.72_0.18_155/0.18)] text-[oklch(0.82_0.16_155)]">LONG</span>
-                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{t.source}</span>
+                <li key={t.id} className="glass rounded-xl overflow-hidden">
+                  {/* Trade row */}
+                  <div className="p-4 flex items-center gap-3 justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-semibold tracking-wider">{t.ticker}</p>
+                        <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[oklch(0.72_0.18_155/0.18)] text-[oklch(0.82_0.16_155)]">
+                          LONG
+                        </span>
+                        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                          {t.source}
+                        </span>
+                        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                          {t.partition}
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {fmtDate(t.entryDate)} • {t.quantity} × {inr(t.entryPrice)} • Tgt{" "}
+                        {inr(t.targetPrice)} • SL {inr(t.stopLoss)}
+                      </p>
+                      {t.notes && (
+                        <p className="text-xs text-muted-foreground/70 mt-1 italic">{t.notes}</p>
+                      )}
                     </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {fmtDate(t.entryDate)} • {t.partition} • {t.quantity} × {inr(t.entryPrice)} • Tgt {inr(t.targetPrice)} • SL {inr(t.stopLoss)}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="text-right">
-                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">R:R</p>
-                      <p className="font-semibold tabular-nums text-sm">{isFinite(r) ? r.toFixed(2) : "—"}</p>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div className="text-right">
+                        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                          R:R
+                        </p>
+                        <p className="font-semibold tabular-nums text-sm">
+                          {isFinite(r) ? r.toFixed(2) : "—"}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => openClosePanel(t.id)}
+                        className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all ${
+                          isClosing
+                            ? "border-primary/40 bg-primary/10 text-primary"
+                            : "border-glass-border text-muted-foreground hover:text-foreground hover:bg-white/5"
+                        }`}
+                      >
+                        {isClosing ? (
+                          <>
+                            <ChevronUp className="size-3.5" /> Cancel
+                          </>
+                        ) : (
+                          <>
+                            <ChevronDown className="size-3.5" /> Close
+                          </>
+                        )}
+                      </button>
+                      <button
+                        onClick={() => {
+                          deleteTrade(t.id);
+                          toast.success("Trade removed");
+                        }}
+                        className="text-muted-foreground hover:text-destructive p-2"
+                      >
+                        <Trash2 className="size-4" />
+                      </button>
                     </div>
-                    <button onClick={() => { deleteTrade(t.id); toast.success("Trade removed"); }} className="text-muted-foreground hover:text-destructive p-2">
-                      <Trash2 className="size-4" />
-                    </button>
                   </div>
+
+                  {/* Inline close panel */}
+                  {isClosing && (
+                    <div className="border-t border-glass-border px-4 py-4 space-y-3 bg-white/3">
+                      <p className="text-xs uppercase tracking-wider text-muted-foreground">
+                        How did this trade close?
+                      </p>
+                      <div className="flex gap-2 flex-wrap">
+                        {CLOSE_REASONS.map((cr) => (
+                          <button
+                            key={cr.value}
+                            type="button"
+                            onClick={() => setCloseReason(cr.value)}
+                            className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-sm font-medium transition-all ${
+                              closeReason === cr.value
+                                ? cr.color + " ring-1 ring-current"
+                                : "border-glass-border text-muted-foreground hover:bg-white/5"
+                            }`}
+                          >
+                            {cr.icon} {cr.label}
+                          </button>
+                        ))}
+                      </div>
+                      <Textarea
+                        value={closeNotes}
+                        onChange={(e) => setCloseNotes(e.target.value)}
+                        rows={2}
+                        className="bg-input/40 border-glass-border text-sm min-h-[60px]"
+                        placeholder="Close notes — price exited, reason, observations… (optional)"
+                      />
+                      <div className="flex justify-end">
+                        <Button
+                          type="button"
+                          onClick={() => handleClose(t.id)}
+                          disabled={!closeReason}
+                          className="gradient-primary text-primary-foreground border-0 gap-2 h-9 text-sm disabled:opacity-40"
+                        >
+                          Confirm close
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </li>
               );
             })}
           </ul>
         )}
       </section>
+
+      {/* ── Closed positions ─────────────────────────────────────────────────── */}
+      {closedTrades.length > 0 && (
+        <section className="glass rounded-2xl p-5">
+          <h2 className="font-semibold mb-4">
+            Closed positions
+            <span className="ml-2 text-xs text-muted-foreground font-normal">
+              ({closedTrades.length})
+            </span>
+          </h2>
+          <ul className="space-y-2">
+            {closedTrades.map((t) => {
+              const outcomeInfo = CLOSE_REASONS.find((cr) => cr.value === t.closeReason);
+              return (
+                <li
+                  key={t.id}
+                  className="glass rounded-xl p-4 flex items-start gap-3 justify-between opacity-70 hover:opacity-90 transition-opacity"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="font-semibold tracking-wider line-through text-muted-foreground">
+                        {t.ticker}
+                      </p>
+                      {outcomeInfo && (
+                        <span
+                          className={`inline-flex items-center gap-1 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border ${outcomeInfo.color}`}
+                        >
+                          {outcomeInfo.icon} {outcomeInfo.label}
+                        </span>
+                      )}
+                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {t.partition}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Entry {fmtDate(t.entryDate)}
+                      {t.closedAt ? ` → Closed ${fmtDate(t.closedAt)}` : ""} • {t.quantity} ×{" "}
+                      {inr(t.entryPrice)} • Tgt {inr(t.targetPrice)} • SL {inr(t.stopLoss)}
+                    </p>
+                    {t.notes && (
+                      <p className="text-xs text-muted-foreground/60 mt-0.5 italic">{t.notes}</p>
+                    )}
+                    {t.closeNotes && (
+                      <p className="text-xs text-muted-foreground/80 mt-0.5">
+                        ↳ {t.closeNotes}
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => {
+                      deleteTrade(t.id);
+                      toast.success("Trade removed");
+                    }}
+                    className="text-muted-foreground hover:text-destructive p-2 shrink-0"
+                  >
+                    <Trash2 className="size-4" />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }
 
-function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
+function Field({
+  label,
+  children,
+  className,
+}: {
+  label: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
     <div className={className}>
       <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</Label>

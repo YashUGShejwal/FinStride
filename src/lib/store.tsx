@@ -21,12 +21,12 @@ export type InvestmentApp = {
 };
 
 export const INVESTMENT_APPS: readonly InvestmentApp[] = [
-  { id: "Zerodha Vault", label: "Zerodha Vault", description: "Long-hold equity vault (delivery)", scopes: ["cashflow", "swing"] },
-  { id: "Dhan Swing",    label: "Dhan Swing",    description: "Active swing book — equity only",  scopes: ["swing", "cashflow"] },
-  { id: "INDmoney US",  label: "INDmoney US",   description: "US equities partition",              scopes: ["cashflow"] },
-  { id: "CoinDCX Crypto", label: "CoinDCX Crypto", description: "Crypto holdings",                scopes: ["cashflow"] },
-  { id: "Groww MF",     label: "Groww MF",      description: "Mutual Fund SIPs via Groww",         scopes: ["cashflow"] },
-  { id: "Cash",         label: "Cash",           description: "Physical cash & liquid reserves",    scopes: ["cashflow", "swing"] },
+  { id: "Zerodha Vault",  label: "Zerodha Vault",  description: "Long-hold equity vault (delivery)",  scopes: ["cashflow", "swing"] },
+  { id: "Dhan Swing",     label: "Dhan Swing",     description: "Active swing book — equity only",    scopes: ["cashflow", "swing"] },
+  { id: "INDmoney US",    label: "INDmoney US",    description: "US equities partition",               scopes: ["cashflow", "swing"] },
+  { id: "CoinDCX Crypto", label: "CoinDCX Crypto", description: "Crypto holdings",                    scopes: ["cashflow", "swing"] },
+  { id: "Groww MF",       label: "Groww MF",       description: "Mutual Fund SIPs via Groww",          scopes: ["cashflow", "swing"] },
+  { id: "Cash",           label: "Cash",           description: "Physical cash & liquid reserves",     scopes: ["cashflow", "swing"] },
 ] as const;
 
 export const BROKER_PARTITION_IDS = INVESTMENT_APPS.map((a) => a.id);
@@ -105,6 +105,11 @@ function normalizeTrade(raw: Record<string, unknown>): Trade {
     stopLoss: Number(raw.stopLoss),
     source: raw.source === "Self" ? "Self" : "TheDoji",
     partition: normalizePartition(raw.partition ?? "Dhan Swing"),
+    notes: raw.notes ? String(raw.notes) : undefined,
+    status: raw.status === "closed" ? "closed" : "open",
+    closeReason: (raw.closeReason as CloseReason | undefined) ?? undefined,
+    closeNotes: raw.closeNotes ? String(raw.closeNotes) : undefined,
+    closedAt: raw.closedAt ? String(raw.closedAt) : undefined,
   };
 }
 
@@ -123,6 +128,9 @@ export type Transaction = {
   notes?: string;
 };
 
+export type TradeStatus = "open" | "closed";
+export type CloseReason = "target" | "stoploss" | "other";
+
 export type Trade = {
   id: string;
   ticker: string;
@@ -134,6 +142,11 @@ export type Trade = {
   stopLoss: number;
   source: "TheDoji" | "Self";
   partition: BrokerPartition;
+  notes?: string;        // optional rationale set at entry
+  status: TradeStatus;
+  closeReason?: CloseReason;
+  closeNotes?: string;   // optional notes set when closing
+  closedAt?: string;     // ISO date of close
 };
 
 // ─── Store context ─────────────────────────────────────────────────────────
@@ -144,7 +157,8 @@ type StoreCtx = {
   pendingChecklist: MonthlyPending;
   addTransaction: (t: Omit<Transaction, "id">) => void;
   deleteTransaction: (id: string) => void;
-  addTrade: (t: Omit<Trade, "id">) => void;
+  addTrade: (t: Omit<Trade, "id" | "status">) => void;
+  closeTrade: (id: string, closeReason: CloseReason, closeNotes?: string) => void;
   deleteTrade: (id: string) => void;
   toggleObligation: (key: ObligationKey) => void;
 };
@@ -207,7 +221,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     pendingChecklist,
     addTransaction: (t) => setTransactions((s) => [{ ...t, id: crypto.randomUUID() }, ...s]),
     deleteTransaction: (id) => setTransactions((s) => s.filter((x) => x.id !== id)),
-    addTrade: (t) => setTrades((s) => [{ ...t, id: crypto.randomUUID() }, ...s]),
+    addTrade: (t) =>
+      setTrades((s) => [{ ...t, id: crypto.randomUUID(), status: "open" }, ...s]),
+    closeTrade: (id, closeReason, closeNotes) =>
+      setTrades((s) =>
+        s.map((t) =>
+          t.id === id
+            ? { ...t, status: "closed", closeReason, closeNotes: closeNotes || undefined, closedAt: new Date().toISOString() }
+            : t,
+        ),
+      ),
     deleteTrade: (id) => setTrades((s) => s.filter((x) => x.id !== id)),
     toggleObligation,
   };
