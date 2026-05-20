@@ -39,6 +39,43 @@ export function appsForScope(scope: "cashflow" | "swing"): InvestmentApp[] {
   return INVESTMENT_APPS.filter((a) => a.scopes.includes(scope));
 }
 
+// ─── Portfolio snapshots ───────────────────────────────────────────────────
+// The four partitions we track with manual point-in-time capital snapshots.
+export type PortfolioPartitionKey = "Zerodha Vault" | "Dhan Swing" | "INDmoney US" | "Cash";
+
+export const PORTFOLIO_PARTITIONS: readonly {
+  key: PortfolioPartitionKey;
+  label: string;
+  description: string;
+}[] = [
+  { key: "Zerodha Vault", label: "Zerodha Vault", description: "Long-term ETFs & SGBs" },
+  { key: "Dhan Swing",    label: "Dhan Swing",    description: "Active equity swings" },
+  { key: "INDmoney US",  label: "INDmoney US",   description: "US fractional stocks" },
+  { key: "Cash",          label: "Liquid Cash",   description: "Emergency bank balance" },
+] as const;
+
+export type PortfolioSnapshot = {
+  id: string;
+  recordedAt: string; // ISO
+  values: Partial<Record<PortfolioPartitionKey, number>>;
+  notes?: string;
+};
+
+function normalizeSnapshot(raw: Record<string, unknown>): PortfolioSnapshot {
+  const rawValues = (raw.values ?? {}) as Record<string, unknown>;
+  const values: Partial<Record<PortfolioPartitionKey, number>> = {};
+  for (const p of PORTFOLIO_PARTITIONS) {
+    const v = rawValues[p.key];
+    if (typeof v === "number" && !isNaN(v)) values[p.key] = v;
+  }
+  return {
+    id: String(raw.id),
+    recordedAt: String(raw.recordedAt),
+    values,
+    notes: raw.notes ? String(raw.notes) : undefined,
+  };
+}
+
 // ─── Monthly obligations checklist ────────────────────────────────────────
 export type ObligationKey = "fixedRunrate" | "scooterEmi" | "growwMfSip" | "ccSettled";
 export type MonthlyPending = Partial<Record<ObligationKey, boolean>>;
@@ -155,17 +192,28 @@ type StoreCtx = {
   trades: Trade[];
   creditCardDues: number;
   pendingChecklist: MonthlyPending;
+  // Portfolio snapshot state
+  portfolioSnapshots: PortfolioSnapshot[];
+  latestSnapshot: PortfolioSnapshot | null;
+  /** Latest recorded Dhan Swing capital; falls back to BLUEPRINT.accountBalance if no snapshot. */
+  dhanSwingCapital: number;
   addTransaction: (t: Omit<Transaction, "id">) => void;
   deleteTransaction: (id: string) => void;
   addTrade: (t: Omit<Trade, "id" | "status">) => void;
   closeTrade: (id: string, closeReason: CloseReason, closeNotes?: string) => void;
   deleteTrade: (id: string) => void;
   toggleObligation: (key: ObligationKey) => void;
+  addPortfolioSnapshot: (
+    values: Partial<Record<PortfolioPartitionKey, number>>,
+    notes?: string,
+  ) => void;
+  deletePortfolioSnapshot: (id: string) => void;
 };
 
 const Ctx = createContext<StoreCtx | null>(null);
 const TX_KEY = "finstride.transactions";
 const TR_KEY = "finstride.trades";
+const SNAP_KEY = "finstride.portfolio.snapshots";
 
 const seedTx: Transaction[] = [
   { id: crypto.randomUUID(), date: new Date(Date.now() - 86400000 * 2).toISOString(), type: "income",  category: "Salary",        paymentMode: "Bank Account", amount: 76000, tags: ["monthly"],    notes: "May salary" },
@@ -177,6 +225,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [pendingChecklist, setPendingChecklist] = useState<MonthlyPending>({});
+  const [portfolioSnapshots, setPortfolioSnapshots] = useState<PortfolioSnapshot[]>([]);
 
   useEffect(() => {
     try {
@@ -186,6 +235,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       );
       const tr = localStorage.getItem(TR_KEY);
       setTrades(tr ? (JSON.parse(tr) as Record<string, unknown>[]).map(normalizeTrade) : []);
+      const sn = localStorage.getItem(SNAP_KEY);
+      setPortfolioSnapshots(
+        sn ? (JSON.parse(sn) as Record<string, unknown>[]).map(normalizeSnapshot) : [],
+      );
     } catch {
       setTransactions(seedTx);
     }
@@ -207,9 +260,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(PENDING_KEY, JSON.stringify(allPending));
   }, [pendingChecklist]);
 
+  useEffect(() => {
+    localStorage.setItem(SNAP_KEY, JSON.stringify(portfolioSnapshots));
+  }, [portfolioSnapshots]);
+
   const creditCardDues = transactions
     .filter((t) => t.type === "expense" && t.paymentMode === "Credit Card")
     .reduce((sum, t) => sum + t.amount, 0);
+
+  // Latest snapshot = most recent by recordedAt
+  const latestSnapshot = portfolioSnapshots.length
+    ? portfolioSnapshots.reduce((a, b) => (a.recordedAt >= b.recordedAt ? a : b))
+    : null;
+
+  // Dhan Swing capital from latest snapshot; fall back to Blueprint default
+  const dhanSwingCapital =
+    latestSnapshot?.values["Dhan Swing"] ?? BLUEPRINT.accountBalance;
 
   const toggleObligation = (key: ObligationKey) =>
     setPendingChecklist((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -219,6 +285,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     trades,
     creditCardDues,
     pendingChecklist,
+    portfolioSnapshots,
+    latestSnapshot,
+    dhanSwingCapital,
     addTransaction: (t) => setTransactions((s) => [{ ...t, id: crypto.randomUUID() }, ...s]),
     deleteTransaction: (id) => setTransactions((s) => s.filter((x) => x.id !== id)),
     addTrade: (t) =>
@@ -227,12 +296,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setTrades((s) =>
         s.map((t) =>
           t.id === id
-            ? { ...t, status: "closed", closeReason, closeNotes: closeNotes || undefined, closedAt: new Date().toISOString() }
+            ? {
+                ...t,
+                status: "closed",
+                closeReason,
+                closeNotes: closeNotes || undefined,
+                closedAt: new Date().toISOString(),
+              }
             : t,
         ),
       ),
     deleteTrade: (id) => setTrades((s) => s.filter((x) => x.id !== id)),
     toggleObligation,
+    addPortfolioSnapshot: (values, notes) =>
+      setPortfolioSnapshots((s) => [
+        { id: crypto.randomUUID(), recordedAt: new Date().toISOString(), values, notes },
+        ...s,
+      ]),
+    deletePortfolioSnapshot: (id) =>
+      setPortfolioSnapshots((s) => s.filter((x) => x.id !== id)),
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
