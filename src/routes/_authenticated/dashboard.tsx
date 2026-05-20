@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo } from "react";
 import { ArrowDownRight, ArrowUpRight, Wallet, TrendingUp, Shield, Activity } from "lucide-react";
-import { useStore, BLUEPRINT, partitionLabel } from "@/lib/store";
+import { useStore, BLUEPRINT } from "@/lib/store";
 import { inr, fmtDate } from "@/lib/format";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({ component: Dashboard });
@@ -83,7 +83,7 @@ function Dashboard() {
                   </div>
                   <div className="min-w-0">
                     <p className="text-sm font-medium truncate">{t.category}</p>
-                    <p className="text-xs text-muted-foreground">{fmtDate(t.date)} • {partitionLabel(t.partition)}</p>
+                    <p className="text-xs text-muted-foreground">{fmtDate(t.date)} • {t.paymentMode}</p>
                   </div>
                 </div>
                 <p className={`font-semibold tabular-nums ${t.type === "income" ? "text-[oklch(0.78_0.16_155)]" : "text-[oklch(0.75_0.18_25)]"}`}>

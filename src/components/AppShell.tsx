@@ -1,14 +1,15 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
-import { LayoutDashboard, Wallet, TrendingUp, User, LogOut, Sparkles } from "lucide-react";
+import { LayoutDashboard, Wallet, TrendingUp, User, LogOut, Sparkles, ListChecks } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { PwaInstallBanner } from "@/lib/pwa";
 import { cn } from "@/lib/utils";
 
 const nav = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/cashflow", label: "Cashflow", icon: Wallet },
-  { to: "/swing", label: "Swing", icon: TrendingUp },
-  { to: "/profile", label: "Profile", icon: User },
+  { to: "/cashflow",  label: "Cashflow",  icon: Wallet },
+  { to: "/swing",     label: "Swing",     icon: TrendingUp },
+  { to: "/pending",   label: "Pending",   icon: ListChecks },
+  { to: "/profile",   label: "Profile",   icon: User },
 ] as const;
 
 export function AppShell() {

@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { LogOut, Mail, Shield, Wallet, TrendingUp } from "lucide-react";
 import { useAuth } from "@/lib/auth";
-import { useStore, BLUEPRINT, INVESTMENT_APPS } from "@/lib/store";
+import { useStore, BLUEPRINT, INVESTMENT_APPS, type InvestmentApp } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { inr } from "@/lib/format";
 
@@ -36,12 +36,22 @@ function ProfilePage() {
       </section>
 
       <section className="glass rounded-2xl p-5">
-        <h2 className="font-semibold">Broker partitions</h2>
-        <ul className="mt-3 space-y-2">
-          {INVESTMENT_APPS.map((a) => (
-            <li key={a.id} className="text-sm flex items-start justify-between gap-3">
-              <span className="font-medium">{a.label}</span>
-              <span className="text-xs text-muted-foreground text-right">{a.description}</span>
+        <h2 className="font-semibold">Investment partitions</h2>
+        <p className="text-xs text-muted-foreground mt-0.5 mb-4">Active broker accounts tracked in FinStride</p>
+        <ul className="space-y-2">
+          {INVESTMENT_APPS.map((a: InvestmentApp) => (
+            <li key={a.id} className="flex items-center justify-between gap-3 py-2 border-b border-glass-border/50 last:border-0">
+              <div>
+                <p className="text-sm font-medium">{a.label}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{a.description}</p>
+              </div>
+              <div className="flex gap-1 flex-wrap justify-end">
+                {a.scopes.map((s) => (
+                  <span key={s} className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/8 text-muted-foreground">
+                    {s}
+                  </span>
+                ))}
+              </div>
             </li>
           ))}
         </ul>
