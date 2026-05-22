@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { ArrowDownRight, ArrowUpRight, Wallet, TrendingUp, Shield, Activity } from "lucide-react";
 import { useStore, BLUEPRINT } from "@/lib/store";
 import { inr, fmtDate } from "@/lib/format";
+import { DailyQuoteFooter } from "@/components/DailyQuoteFooter";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({ component: Dashboard });
 
@@ -107,6 +108,8 @@ function Dashboard() {
           <p className="text-sm text-muted-foreground mt-1">Equity only. 3% risk cap. F&O blocked.</p>
         </Link>
       </section>
+
+      <DailyQuoteFooter />
     </div>
   );
 }
