@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { CheckSquare, Square, CreditCard, CalendarCheck } from "lucide-react";
-import { useStore, BLUEPRINT, type ObligationKey } from "@/lib/store";
+import { useStore, type ObligationKey } from "@/lib/store";
 import { inr } from "@/lib/format";
 
 export const Route = createFileRoute("/_authenticated/pending")({ component: PendingPage });
@@ -12,29 +12,29 @@ type Obligation = {
   description: string;
 };
 
-const OBLIGATIONS: Obligation[] = [
-  {
-    key: "fixedRunrate",
-    label: "Rent / Fixed Runrate",
-    amount: BLUEPRINT.fixedRunrate,
-    description: `Monthly operational expenses — blueprint threshold ${inr(BLUEPRINT.fixedRunrate)}`,
-  },
-  {
-    key: "scooterEmi",
-    label: "Scooter EMI",
-    amount: BLUEPRINT.scooterEmi,
-    description: `Fixed at ${inr(BLUEPRINT.scooterEmi)} / month`,
-  },
-  {
-    key: "growwMfSip",
-    label: "Groww MF SIP",
-    amount: BLUEPRINT.growwMfSip,
-    description: `Monthly mutual fund SIP commitment — ${inr(BLUEPRINT.growwMfSip)}`,
-  },
-];
-
 function PendingPage() {
-  const { creditCardDues, pendingChecklist, toggleObligation } = useStore();
+  const { creditCardDues, pendingChecklist, toggleObligation, blueprintSettings } = useStore();
+
+  const OBLIGATIONS: Obligation[] = [
+    {
+      key: "fixedRunrate",
+      label: "Rent / Fixed Runrate",
+      amount: blueprintSettings.fixedRunrate,
+      description: `Monthly operational expenses — blueprint threshold ${inr(blueprintSettings.fixedRunrate)}`,
+    },
+    {
+      key: "scooterEmi",
+      label: "Scooter EMI",
+      amount: blueprintSettings.scooterEmi,
+      description: `Fixed at ${inr(blueprintSettings.scooterEmi)} / month`,
+    },
+    {
+      key: "growwMfSip",
+      label: "Groww MF SIP",
+      amount: blueprintSettings.growwMfSip,
+      description: `Monthly mutual fund SIP commitment — ${inr(blueprintSettings.growwMfSip)}`,
+    },
+  ];
 
   const month = new Date().toLocaleString("en-IN", { month: "long", year: "numeric" });
 

@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState, type FormEvent } from "react";
 import { Search, Plus, Trash2, ArrowUpRight, ArrowDownRight } from "lucide-react";
-import { useStore, PAYMENT_MODES, type PaymentMode, type TxCategory, type TxType } from "@/lib/store";
+import { useStore, PAYMENT_MODES, type PaymentMode, type TxType } from "@/lib/store";
 import { inr, fmtDate } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,21 +12,27 @@ import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/cashflow")({ component: CashflowPage });
 
-const CATEGORIES: TxCategory[] = ["Salary", "Fixed Runrate", "Scooter EMI", "Freelance", "Other"];
-
 function CashflowPage() {
-  const { transactions, addTransaction, deleteTransaction } = useStore();
+  const { transactions, addTransaction, deleteTransaction, incomeCategories, expenseCategories } = useStore();
   const [q, setQ] = useState("");
 
   const [form, setForm] = useState({
     date: new Date().toISOString().slice(0, 10),
     type: "expense" as TxType,
-    category: "Other" as TxCategory,
+    category: expenseCategories[0] ?? "Other",
     account: "Bank Account" as PaymentMode,
     amount: "",
     tags: "",
     notes: "",
   });
+
+  // Switch the active category list and reset category when type changes
+  const activeCategories = form.type === "income" ? incomeCategories : expenseCategories;
+
+  const handleTypeChange = (v: TxType) => {
+    const newCategories = v === "income" ? incomeCategories : expenseCategories;
+    setForm((s) => ({ ...s, type: v, category: newCategories[0] ?? "Other" }));
+  };
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -88,7 +94,7 @@ function CashflowPage() {
             />
           </Field>
           <Field className="col-span-1 md:col-span-1" label="Type">
-            <Select value={form.type} onValueChange={(v: TxType) => setForm({ ...form, type: v })}>
+            <Select value={form.type} onValueChange={(v: TxType) => handleTypeChange(v)}>
               <SelectTrigger className="bg-input/40 border-glass-border">
                 <SelectValue />
               </SelectTrigger>
@@ -101,13 +107,13 @@ function CashflowPage() {
           <Field className="col-span-1 md:col-span-1" label="Category">
             <Select
               value={form.category}
-              onValueChange={(v: TxCategory) => setForm({ ...form, category: v })}
+              onValueChange={(v) => setForm({ ...form, category: v })}
             >
               <SelectTrigger className="bg-input/40 border-glass-border">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {CATEGORIES.map((c) => (
+                {activeCategories.map((c) => (
                   <SelectItem key={c} value={c}>
                     {c}
                   </SelectItem>

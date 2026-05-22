@@ -1,22 +1,26 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo } from "react";
 import { ArrowDownRight, ArrowUpRight, Wallet, TrendingUp, Shield, Activity } from "lucide-react";
-import { useStore, BLUEPRINT } from "@/lib/store";
+import { useStore } from "@/lib/store";
 import { inr, fmtDate } from "@/lib/format";
 import { DailyQuoteFooter } from "@/components/DailyQuoteFooter";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({ component: Dashboard });
 
+const TRANSFER_CATS = new Set(["Capital Transfer (In)", "Capital Transfer (Out)"]);
+
 function Dashboard() {
-  const { transactions, trades } = useStore();
+  const { transactions, trades, blueprintSettings } = useStore();
 
   const stats = useMemo(() => {
-    const income = transactions.filter((t) => t.type === "income").reduce((a, b) => a + b.amount, 0);
-    const expense = transactions.filter((t) => t.type === "expense").reduce((a, b) => a + b.amount, 0);
-    const commitments = BLUEPRINT.fixedRunrate + BLUEPRINT.scooterEmi;
-    const runway = (BLUEPRINT.salaryBaseline - commitments);
+    // Capital transfers are excluded from operational income/expense — they only move money
+    const operational = transactions.filter((t) => !TRANSFER_CATS.has(t.category));
+    const income  = operational.filter((t) => t.type === "income" ).reduce((a, b) => a + b.amount, 0);
+    const expense = operational.filter((t) => t.type === "expense").reduce((a, b) => a + b.amount, 0);
+    const commitments = blueprintSettings.fixedRunrate + blueprintSettings.scooterEmi;
+    const runway = blueprintSettings.defaultSalary - commitments;
     return { income, expense, commitments, runway, net: income - expense };
-  }, [transactions]);
+  }, [transactions, blueprintSettings]);
 
   const recent = transactions.slice(0, 5);
 
@@ -36,7 +40,7 @@ function Dashboard() {
           tone="primary"
           icon={<Wallet className="size-5" />}
           label="Monthly Salary Baseline"
-          value={inr(BLUEPRINT.salaryBaseline)}
+          value={inr(blueprintSettings.defaultSalary)}
           hint="Fixed monthly income"
         />
         <KpiCard
@@ -51,7 +55,7 @@ function Dashboard() {
           icon={<Activity className="size-5" />}
           label="Active Commitments"
           value={inr(stats.commitments)}
-          hint={`${inr(BLUEPRINT.fixedRunrate)} runrate + ${inr(BLUEPRINT.scooterEmi)} EMI`}
+          hint={`${inr(blueprintSettings.fixedRunrate)} runrate + ${inr(blueprintSettings.scooterEmi)} EMI`}
         />
       </section>
 
