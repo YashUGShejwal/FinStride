@@ -2,31 +2,27 @@ import { useEffect, useState } from "react";
 import { FINSTRIDE_QUOTES, type MotivationQuote } from "@/lib/quotes";
 import { todayLocalISO } from "@/lib/format";
 
-const OWNER_EMAIL = "test78@gmail.com"; // swap for your real email
-
 const DATE_KEY = "finstride.quote.date";
 const ID_KEY   = "finstride.quote.id";  // stores quote.id, not array index
 
 /**
- * Returns today's quote for the given user, stable for the full calendar day.
- * - Owner sees ALL quotes (PERSONAL + GENERAL).
- * - Any other user sees only GENERAL quotes.
+ * Returns today's quote, stable for the full calendar day.
+ * - showPersonal=true sees ALL quotes (PERSONAL + GENERAL) — driven by the
+ *   "Show personal quotes" setting, not a hardcoded owner identity.
+ * - showPersonal=false sees only GENERAL quotes.
  * - The selected quote id is persisted to localStorage so:
  *   (a) the same quote shows all day, and
  *   (b) re-ordering the array never causes the wrong quote to appear.
  *
  * Returns null on first render (SSR-safe hydration — no localStorage on server).
  */
-export function useDailyQuote(userEmail: string): MotivationQuote | null {
+export function useDailyQuote(showPersonal: boolean): MotivationQuote | null {
   const [quote, setQuote] = useState<MotivationQuote | null>(null);
 
   useEffect(() => {
-    if (!userEmail) return; // wait until auth has resolved
-
-    const pool =
-      userEmail === OWNER_EMAIL
-        ? FINSTRIDE_QUOTES
-        : FINSTRIDE_QUOTES.filter((q) => q.audience === "GENERAL");
+    const pool = showPersonal
+      ? FINSTRIDE_QUOTES
+      : FINSTRIDE_QUOTES.filter((q) => q.audience === "GENERAL");
 
     if (pool.length === 0) return;
 
@@ -43,7 +39,7 @@ export function useDailyQuote(userEmail: string): MotivationQuote | null {
           setQuote(cached);
           return;
         }
-        // Saved quote not in this user's pool (shouldn't normally happen) — fall through to re-pick
+        // Saved quote not in this pool (e.g. setting just changed) — fall through to re-pick
       }
 
       // New day or no valid cached quote — pick randomly from the pool
@@ -55,7 +51,7 @@ export function useDailyQuote(userEmail: string): MotivationQuote | null {
       // localStorage unavailable (private mode, etc.) — use first eligible quote
       setQuote(pool[0]);
     }
-  }, [userEmail]);
+  }, [showPersonal]);
 
   return quote;
 }

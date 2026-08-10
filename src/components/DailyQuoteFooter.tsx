@@ -1,9 +1,11 @@
 import { useAuth } from "@/lib/auth";
+import { useStore } from "@/lib/store";
 import { useDailyQuote } from "@/hooks/useDailyQuote";
 
 export function DailyQuoteFooter() {
   const { user } = useAuth();
-  const quote = useDailyQuote(user?.email ?? "");
+  const { showPersonalQuotes } = useStore();
+  const quote = useDailyQuote(showPersonalQuotes);
 
   // Don't render until auth has resolved and a quote has been selected
   if (!user || !quote) return null;

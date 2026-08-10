@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState, type FormEvent } from "react";
 import { Search, Plus, Trash2, ArrowUpRight, ArrowDownRight } from "lucide-react";
-import { useStore, PAYMENT_MODES, type PaymentMode, type TxType } from "@/lib/store";
+import { useStore, type PaymentMode, type TxType } from "@/lib/store";
 import { inr, fmtDate, todayLocalISO } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +13,7 @@ import { toast } from "sonner";
 export const Route = createFileRoute("/_authenticated/cashflow")({ component: CashflowPage });
 
 function CashflowPage() {
-  const { transactions, addTransaction, deleteTransaction, incomeCategories, expenseCategories } = useStore();
+  const { transactions, addTransaction, deleteTransaction, incomeCategories, expenseCategories, paymentModes } = useStore();
   const [q, setQ] = useState("");
 
   const [form, setForm] = useState({
@@ -130,7 +130,7 @@ function CashflowPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {PAYMENT_MODES.map((m) => (
+                {paymentModes.map((m) => (
                   <SelectItem key={m} value={m}>
                     {m}
                   </SelectItem>

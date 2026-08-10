@@ -11,8 +11,6 @@ import {
 import { toast } from "sonner";
 import {
   useStore,
-  PORTFOLIO_PARTITIONS,
-  partitionLabel,
   type PortfolioPartitionKey,
   type PortfolioSnapshot,
 } from "@/lib/store";
@@ -28,20 +26,30 @@ import {
 export const Route = createFileRoute("/_authenticated/analytics")({ component: AnalyticsPage });
 
 // ─── Dark theme colours per partition ─────────────────────────────────────
-const PARTITION_COLORS: Record<PortfolioPartitionKey, string> = {
+// Hand-picked for the 4 built-in defaults; any custom partition a user adds
+// via Settings falls back to a hue cycled by its position in the list.
+const PARTITION_COLORS: Partial<Record<string, string>> = {
   "Zerodha Vault": "oklch(0.72 0.18 250)",   // blue
   "Dhan Swing":    "oklch(0.72 0.18 155)",   // green
   "INDmoney US":   "oklch(0.72 0.15 290)",   // purple
   "Cash":          "oklch(0.78 0.14 80)",    // amber
 };
+const FALLBACK_HUES = [20, 340, 200, 60, 130, 280] as const;
+function colorForPartition(key: string, index: number): string {
+  return PARTITION_COLORS[key] ?? `oklch(0.72 0.16 ${FALLBACK_HUES[index % FALLBACK_HUES.length]})`;
+}
 
-// Recharts needs hex/rgb for the legend dot; provide a parallel hex map
-const PARTITION_HEX: Record<PortfolioPartitionKey, string> = {
+// Recharts needs hex/rgb for the legend dot; provide a parallel hex map + fallback
+const PARTITION_HEX: Partial<Record<string, string>> = {
   "Zerodha Vault": "#4f8ef7",
   "Dhan Swing":    "#3ecf75",
   "INDmoney US":   "#a78bfa",
   "Cash":          "#f59e0b",
 };
+const FALLBACK_HEX = ["#fb7185", "#f472b6", "#38bdf8", "#facc15", "#34d399", "#c084fc"] as const;
+function hexForPartition(key: string, index: number): string {
+  return PARTITION_HEX[key] ?? FALLBACK_HEX[index % FALLBACK_HEX.length];
+}
 
 // ─── Filter state ──────────────────────────────────────────────────────────
 type AnalyticsFilter = {
@@ -49,8 +57,6 @@ type AnalyticsFilter = {
   dateFrom?: string;
   dateTo?: string;
 };
-
-const ALL_PARTITIONS = PORTFOLIO_PARTITIONS.map((p) => p.key) as PortfolioPartitionKey[];
 
 // ─── Recharts custom tooltips ──────────────────────────────────────────────
 function DarkTooltip({
@@ -92,9 +98,13 @@ function PieTooltip({
 
 // ─── Main page ─────────────────────────────────────────────────────────────
 function AnalyticsPage() {
-  const { transactions, portfolioSnapshots, latestSnapshotValues } = useStore();
+  const { transactions, portfolioSnapshots, latestSnapshotValues, portfolioPartitions } = useStore();
+  const ALL_PARTITIONS = useMemo(
+    () => portfolioPartitions.map((p) => p.key),
+    [portfolioPartitions],
+  );
   const [mounted, setMounted] = useState(false);
-  const [filters, setFilters] = useState<AnalyticsFilter>({ partitions: [...ALL_PARTITIONS] });
+  const [filters, setFilters] = useState<AnalyticsFilter>(() => ({ partitions: [...ALL_PARTITIONS] }));
   const [addSnapshotOpen, setAddSnapshotOpen] = useState(false);
 
   useEffect(() => { setMounted(true); }, []);
@@ -108,7 +118,7 @@ function AnalyticsPage() {
       .filter((t) => t.category === "Capital Transfer (In)")
       .reduce((s, t) => s + t.amount, 0);
     const netInvestment = totalDeposits - totalWithdrawals;
-    const currentValue = Object.values(latestSnapshotValues).reduce(
+    const currentValue = Object.values(latestSnapshotValues).reduce<number>(
       (s, v) => s + (v ?? 0), 0,
     );
     const absoluteReturn = currentValue - netInvestment;
@@ -121,13 +131,13 @@ function AnalyticsPage() {
     const active = filters.partitions.length > 0 ? filters.partitions : ALL_PARTITIONS;
     const items = active
       .map((key) => {
-        const p = PORTFOLIO_PARTITIONS.find((x) => x.key === key)!;
-        return { name: p.label, key, value: latestSnapshotValues[key] ?? 0 };
+        const p = portfolioPartitions.find((x) => x.key === key);
+        return { name: p?.label ?? key, key, value: latestSnapshotValues[key] ?? 0 };
       })
       .filter((d) => d.value > 0);
     const total = items.reduce((s, d) => s + d.value, 0);
     return items.map((d) => ({ ...d, pct: total > 0 ? (d.value / total) * 100 : 0 }));
-  }, [latestSnapshotValues, filters.partitions]);
+  }, [latestSnapshotValues, filters.partitions, portfolioPartitions, ALL_PARTITIONS]);
 
   // ── Line chart data (filtered by partitions + date range, carry-forward) ──
   const lineData = useMemo(() => {
@@ -169,7 +179,7 @@ function AnalyticsPage() {
         return point;
       })
       .filter((pt) => activePartitions.some((p) => pt[p] !== undefined));
-  }, [portfolioSnapshots, filters]);
+  }, [portfolioSnapshots, filters, ALL_PARTITIONS]);
 
   // ── Partition chip helpers ─────────────────────────────────────────────────
   const togglePartition = (key: PortfolioPartitionKey) => {
@@ -265,11 +275,10 @@ function AnalyticsPage() {
                 <SelectItem value="__all__" className={allSelected ? "font-semibold" : ""}>
                   All partitions
                 </SelectItem>
-                {ALL_PARTITIONS.map((key) => {
-                  const p = PORTFOLIO_PARTITIONS.find((x) => x.key === key)!;
-                  const sel = filters.partitions.includes(key);
+                {portfolioPartitions.map((p) => {
+                  const sel = filters.partitions.includes(p.key);
                   return (
-                    <SelectItem key={key} value={key} className={sel ? "font-semibold" : "text-muted-foreground"}>
+                    <SelectItem key={p.key} value={p.key} className={sel ? "font-semibold" : "text-muted-foreground"}>
                       {p.label}
                     </SelectItem>
                   );
@@ -337,10 +346,10 @@ function AnalyticsPage() {
                       `${name}: ${pct.toFixed(0)}%`
                     }
                   >
-                    {pieData.map((d) => (
+                    {pieData.map((d, i) => (
                       <Cell
                         key={d.key}
-                        fill={PARTITION_COLORS[d.key]}
+                        fill={colorForPartition(d.key, i)}
                         stroke="transparent"
                       />
                     ))}
@@ -362,7 +371,7 @@ function AnalyticsPage() {
           </div>
           {pieData.length > 0 ? (
             <ul className="space-y-2">
-              {pieData.map((d) => (
+              {pieData.map((d, i) => (
                 <li
                   key={d.key}
                   className="flex items-center justify-between gap-3 p-3 rounded-xl border border-glass-border bg-white/3"
@@ -370,7 +379,7 @@ function AnalyticsPage() {
                   <div className="flex items-center gap-2.5 min-w-0">
                     <span
                       className="size-3 rounded-full shrink-0"
-                      style={{ backgroundColor: PARTITION_HEX[d.key] }}
+                      style={{ backgroundColor: hexForPartition(d.key, i) }}
                     />
                     <div className="min-w-0">
                       <p className="text-sm font-medium truncate">{d.name}</p>
@@ -417,14 +426,14 @@ function AnalyticsPage() {
                 <Legend
                   wrapperStyle={{ fontSize: 11, paddingTop: 12 }}
                 />
-                {(filters.partitions.length > 0 ? filters.partitions : ALL_PARTITIONS).map((key) => (
+                {(filters.partitions.length > 0 ? filters.partitions : ALL_PARTITIONS).map((key, i) => (
                   <Line
                     key={key}
                     type="monotone"
                     dataKey={key}
-                    stroke={PARTITION_HEX[key]}
+                    stroke={hexForPartition(key, i)}
                     strokeWidth={2.5}
-                    dot={{ r: 4, fill: PARTITION_HEX[key], strokeWidth: 0 }}
+                    dot={{ r: 4, fill: hexForPartition(key, i), strokeWidth: 0 }}
                     activeDot={{ r: 6 }}
                     connectNulls={false}
                   />
@@ -458,15 +467,17 @@ function AddSnapshotDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const { addPortfolioSnapshots } = useStore();
+  const { addPortfolioSnapshots, portfolioPartitions, partitionLabel } = useStore();
   const [date, setDate] = useState(todayLocalISO);
-  const [partition, setPartition] = useState<PortfolioPartitionKey>("Zerodha Vault");
+  const [partition, setPartition] = useState<PortfolioPartitionKey>(
+    () => portfolioPartitions[0]?.key ?? "Cash",
+  );
   const [value, setValue] = useState("");
   const [notes, setNotes] = useState("");
 
   const resetForm = () => {
     setDate(todayLocalISO());
-    setPartition("Zerodha Vault");
+    setPartition(portfolioPartitions[0]?.key ?? "Cash");
     setValue("");
     setNotes("");
   };
@@ -530,7 +541,7 @@ function AddSnapshotDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {PORTFOLIO_PARTITIONS.map((p) => (
+                  {portfolioPartitions.map((p) => (
                     <SelectItem key={p.key} value={p.key}>
                       {p.label}
                     </SelectItem>
@@ -590,7 +601,7 @@ const UNDO_WINDOW_MS = 5000;
 
 // ─── Snapshot history (grouped by partition, delete-with-undo) ────────────
 function SnapshotHistorySection() {
-  const { portfolioSnapshots, deletePortfolioSnapshot } = useStore();
+  const { portfolioSnapshots, deletePortfolioSnapshot, portfolioPartitions, partitionLabel } = useStore();
   const [expanded, setExpanded] = useState<Set<PortfolioPartitionKey>>(new Set());
   const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set());
   const deleteTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -662,7 +673,7 @@ function SnapshotHistorySection() {
         <EmptyChart icon={<History className="size-10 opacity-30" />} text="No snapshots recorded yet" />
       ) : (
         <div className="space-y-3">
-          {PORTFOLIO_PARTITIONS.map((p) => {
+          {portfolioPartitions.map((p, i) => {
             const rows = visibleSnapshots
               .filter((s) => s.brokerPartition === p.key)
               .sort((a, b) => b.snapshotDate.localeCompare(a.snapshotDate));
@@ -681,7 +692,7 @@ function SnapshotHistorySection() {
                   <div className="flex items-center gap-2.5 min-w-0">
                     <span
                       className="size-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: PARTITION_HEX[p.key] }}
+                      style={{ backgroundColor: hexForPartition(p.key, i) }}
                     />
                     <div className="text-left min-w-0">
                       <p className="text-sm font-medium">{p.label}</p>

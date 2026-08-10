@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { LogOut, Mail, Shield, Wallet, TrendingUp } from "lucide-react";
 import { useAuth } from "@/lib/auth";
-import { useStore, INVESTMENT_APPS, type InvestmentApp } from "@/lib/store";
+import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { inr } from "@/lib/format";
 
@@ -9,7 +9,7 @@ export const Route = createFileRoute("/_authenticated/profile")({ component: Pro
 
 function ProfilePage() {
   const { user, signOut } = useAuth();
-  const { transactions, trades, blueprintSettings, dhanSwingCapital } = useStore();
+  const { transactions, trades, blueprintSettings, riskCapCapital, investmentApps, partitionLabel } = useStore();
   const nav = useNavigate();
 
   return (
@@ -32,14 +32,14 @@ function ProfilePage() {
       <section className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <Stat icon={<Wallet className="size-4 text-primary" />} label="Transactions" value={String(transactions.length)} />
         <Stat icon={<TrendingUp className="size-4 text-accent" />} label="Swing trades" value={String(trades.length)} />
-        <Stat icon={<Shield className="size-4 text-[oklch(0.78_0.16_155)]" />} label="Risk cap" value={dhanSwingCapital > 0 ? inr(dhanSwingCapital * blueprintSettings.defaultRiskCapPct) : `${(blueprintSettings.defaultRiskCapPct * 100).toFixed(1)}%`} />
+        <Stat icon={<Shield className="size-4 text-[oklch(0.78_0.16_155)]" />} label="Risk cap" value={riskCapCapital > 0 ? inr(riskCapCapital * blueprintSettings.defaultRiskCapPct) : `${(blueprintSettings.defaultRiskCapPct * 100).toFixed(1)}%`} />
       </section>
 
       <section className="glass rounded-2xl p-5">
         <h2 className="font-semibold">Investment partitions</h2>
         <p className="text-xs text-muted-foreground mt-0.5 mb-4">Active broker accounts tracked in FinStride</p>
         <ul className="space-y-2">
-          {INVESTMENT_APPS.map((a: InvestmentApp) => (
+          {investmentApps.map((a) => (
             <li key={a.id} className="flex items-center justify-between gap-3 py-2 border-b border-glass-border/50 last:border-0">
               <div>
                 <p className="text-sm font-medium">{a.label}</p>
@@ -62,7 +62,7 @@ function ProfilePage() {
         <ul className="mt-3 text-sm space-y-2 text-muted-foreground">
           <li>• Salary baseline <span className="text-foreground font-medium">{inr(blueprintSettings.defaultSalary)}</span></li>
           <li>• Fixed runrate <span className="text-foreground font-medium">{inr(blueprintSettings.fixedRunrate)}</span> + scooter EMI <span className="text-foreground font-medium">{inr(blueprintSettings.scooterEmi)}</span></li>
-          <li>• <span className="text-foreground font-medium">{(blueprintSettings.defaultRiskCapPct * 100).toFixed(1)}%</span> per-trade risk cap on latest Dhan Swing snapshot</li>
+          <li>• <span className="text-foreground font-medium">{(blueprintSettings.defaultRiskCapPct * 100).toFixed(1)}%</span> per-trade risk cap on latest {partitionLabel(blueprintSettings.riskCapPartition)} snapshot</li>
           <li>• F&O instruments blocked at the input layer</li>
         </ul>
       </section>

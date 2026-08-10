@@ -1,22 +1,46 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
-import { Settings, Lock, Trash2, Plus, RotateCcw, Save } from "lucide-react";
+import { Settings, Lock, Trash2, Plus, RotateCcw, Save, Wallet, Sparkles } from "lucide-react";
 import {
   useStore,
   DEFAULT_BLUEPRINT,
   DEFAULT_INCOME_CATEGORIES,
   DEFAULT_EXPENSE_CATEGORIES,
+  DEFAULT_PAYMENT_MODES,
+  DEFAULT_INVESTMENT_APPS,
 } from "@/lib/store";
 import { inr } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/settings")({ component: SettingsPage });
 
 function SettingsPage() {
-  const { blueprintSettings, updateBlueprintSettings, incomeCategories, expenseCategories, addCategory, deleteCustomCategory } = useStore();
+  const {
+    blueprintSettings,
+    updateBlueprintSettings,
+    incomeCategories,
+    expenseCategories,
+    addCategory,
+    deleteCustomCategory,
+    paymentModes,
+    addPaymentMode,
+    deleteCustomPaymentMode,
+    investmentApps,
+    addBrokerPartition,
+    deleteCustomBrokerPartition,
+    portfolioPartitions,
+    showPersonalQuotes,
+    setShowPersonalQuotes,
+  } = useStore();
+
+  const riskCapPartitionLabel =
+    portfolioPartitions.find((p) => p.key === blueprintSettings.riskCapPartition)?.label ??
+    blueprintSettings.riskCapPartition;
 
   // ── Blueprint form local state (controlled, saved on submit) ──────────────
   const [bp, setBp] = useState({
@@ -124,6 +148,34 @@ function SettingsPage() {
               max="100"
               step="0.1"
             />
+            <div className="md:col-span-2">
+              <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                Risk Cap Partition
+              </Label>
+              <div className="mt-1.5">
+                <Select
+                  value={blueprintSettings.riskCapPartition}
+                  onValueChange={(v) => {
+                    updateBlueprintSettings({ riskCapPartition: v });
+                    toast.success(`Risk cap partition set to "${v}"`);
+                  }}
+                >
+                  <SelectTrigger className="bg-input/40 border-glass-border">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {portfolioPartitions.map((p) => (
+                      <SelectItem key={p.key} value={p.key}>
+                        {p.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Which broker partition's latest snapshot backs the 3% swing-trade risk cap (currently: {riskCapPartitionLabel})
+              </p>
+            </div>
           </div>
 
           <div className="flex items-center gap-3 pt-1">
@@ -169,6 +221,66 @@ function SettingsPage() {
             defaults={DEFAULT_EXPENSE_CATEGORIES}
             onAdd={(name) => addCategory("expense", name)}
             onDelete={(name) => deleteCustomCategory("expense", name)}
+          />
+        </div>
+      </section>
+
+      {/* Payment Modes & Broker Partitions */}
+      <section className="glass rounded-2xl p-5 md:p-6">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="size-9 rounded-xl gradient-success grid place-items-center shrink-0">
+            <Wallet className="size-4 text-background" />
+          </div>
+          <div>
+            <h2 className="font-semibold">Payment Modes & Broker Partitions</h2>
+            <p className="text-xs text-muted-foreground">
+              Add custom payment modes or broker/investment partitions. Default entries cannot be removed.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-6">
+          <CategoryColumn
+            title="Payment Modes"
+            allCategories={paymentModes}
+            defaults={DEFAULT_PAYMENT_MODES}
+            onAdd={(name) => addPaymentMode(name)}
+            onDelete={(name) => deleteCustomPaymentMode(name)}
+          />
+          <CategoryColumn
+            title="Broker Partitions"
+            allCategories={investmentApps.map((a) => a.id)}
+            defaults={DEFAULT_INVESTMENT_APPS.map((a) => a.id)}
+            onAdd={(name) => addBrokerPartition(name)}
+            onDelete={(name) => deleteCustomBrokerPartition(name)}
+          />
+        </div>
+      </section>
+
+      {/* Personalization */}
+      <section className="glass rounded-2xl p-5 md:p-6">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="size-9 rounded-xl gradient-primary grid place-items-center shrink-0">
+            <Sparkles className="size-4 text-primary-foreground" />
+          </div>
+          <div>
+            <h2 className="font-semibold">Personalization</h2>
+            <p className="text-xs text-muted-foreground">
+              Tune what shows up on your dashboard.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-4 px-3 py-2.5 rounded-xl border border-glass-border bg-white/3">
+          <div>
+            <Label className="text-sm">Show personal reflection quotes</Label>
+            <p className="text-[11px] text-muted-foreground mt-1">
+              When off (default), only general motivational quotes are shown on the dashboard. Turn on to also see the app owner's personal reflections.
+            </p>
+          </div>
+          <Switch
+            checked={showPersonalQuotes}
+            onCheckedChange={(checked) => setShowPersonalQuotes(checked)}
           />
         </div>
       </section>

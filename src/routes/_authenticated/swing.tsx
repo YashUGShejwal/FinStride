@@ -6,7 +6,7 @@ import {
   Wallet, Pencil,
 } from "lucide-react";
 import {
-  useStore, INVESTMENT_APPS, PORTFOLIO_PARTITIONS,
+  useStore,
   type BrokerPartition, type CloseReason, type PortfolioPartitionKey,
 } from "@/lib/store";
 import { inr, fmtDate, todayLocalISO } from "@/lib/format";
@@ -53,7 +53,10 @@ const CLOSE_REASONS: {
 
 // ─── Capital Snapshot Panel ────────────────────────────────────────────────
 function CapitalSnapshotPanel() {
-  const { latestSnapshotValues, addPortfolioSnapshots, dhanSwingCapital } = useStore();
+  const {
+    latestSnapshotValues, addPortfolioSnapshots, riskCapCapital,
+    portfolioPartitions, blueprintSettings, partitionLabel,
+  } = useStore();
   const [open, setOpen] = useState(false);
   const [snapNotes, setSnapNotes] = useState("");
   const [values, setValues] = useState<Partial<Record<PortfolioPartitionKey, string>>>({});
@@ -63,7 +66,7 @@ function CapitalSnapshotPanel() {
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     const entries: Array<{ brokerPartition: PortfolioPartitionKey; currentValue: number }> = [];
-    for (const p of PORTFOLIO_PARTITIONS) {
+    for (const p of portfolioPartitions) {
       const raw = values[p.key];
       if (raw && raw.trim() !== "") {
         const n = Number(raw);
@@ -96,8 +99,8 @@ function CapitalSnapshotPanel() {
           <div className="text-left">
             <p className="text-sm font-semibold">Capital Snapshot</p>
             <p className="text-xs text-muted-foreground">
-              Dhan Swing active capital:{" "}
-              <span className="text-foreground font-medium tabular-nums">{inr(dhanSwingCapital)}</span>
+              {partitionLabel(blueprintSettings.riskCapPartition)} active capital:{" "}
+              <span className="text-foreground font-medium tabular-nums">{inr(riskCapCapital)}</span>
               {!hasAnySnapshot && (
                 <span className="ml-1 text-[oklch(0.78_0.18_80)]">(using default)</span>
               )}
@@ -113,7 +116,7 @@ function CapitalSnapshotPanel() {
       {/* Partition value tiles — always visible summary */}
       {hasAnySnapshot && !open && (
         <div className="px-4 pb-4 grid grid-cols-2 md:grid-cols-4 gap-2">
-          {PORTFOLIO_PARTITIONS.map((p) => {
+          {portfolioPartitions.map((p) => {
             const val = latestSnapshotValues[p.key];
             return (
               <div key={p.key} className="glass rounded-xl p-3">
@@ -139,7 +142,7 @@ function CapitalSnapshotPanel() {
             Enter current portfolio values (leave blank to skip a partition)
           </p>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {PORTFOLIO_PARTITIONS.map((p) => (
+            {portfolioPartitions.map((p) => (
               <div key={p.key}>
                 <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
                   {p.label}
@@ -193,7 +196,11 @@ function CapitalSnapshotPanel() {
 
 // ─── Main page ─────────────────────────────────────────────────────────────
 function SwingPage() {
-  const { trades, addTrade, closeTrade, deleteTrade, dhanSwingCapital, blueprintSettings } = useStore();
+  const {
+    trades, addTrade, closeTrade, deleteTrade, riskCapCapital, blueprintSettings,
+    investmentApps, partitionLabel,
+  } = useStore();
+  const riskCapPartitionLabel = partitionLabel(blueprintSettings.riskCapPartition);
 
   // ── entry form state ──────────────────────────────────────────────────────
   const [partition, setPartition] = useState<BrokerPartition>("Dhan Swing");
@@ -214,8 +221,8 @@ function SwingPage() {
 
   // ── dynamic risk cap from latest Dhan Swing snapshot ─────────────────────
   const cap = useMemo(
-    () => dhanSwingCapital * blueprintSettings.defaultRiskCapPct,
-    [dhanSwingCapital, blueprintSettings.defaultRiskCapPct],
+    () => riskCapCapital * blueprintSettings.defaultRiskCapPct,
+    [riskCapCapital, blueprintSettings.defaultRiskCapPct],
   );
   const exposure = useMemo(() => Number(qty) * Number(entry) || 0, [qty, entry]);
   const exceedsCap = exposure > cap;
@@ -292,7 +299,7 @@ function SwingPage() {
         </h1>
         <p className="text-sm text-muted-foreground mt-2">
           Rule-enforced. Equity only. 3% risk cap on{" "}
-          <span className="text-foreground font-medium">{inr(dhanSwingCapital)}</span> Dhan Swing
+          <span className="text-foreground font-medium">{inr(riskCapCapital)}</span> {riskCapPartitionLabel}
           capital → max {inr(cap)} per position.
         </p>
       </header>
@@ -364,7 +371,7 @@ function SwingPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {INVESTMENT_APPS.map((a) => (
+                {investmentApps.map((a) => (
                   <SelectItem key={a.id} value={a.id}>
                     {a.label}
                   </SelectItem>
@@ -437,7 +444,7 @@ function SwingPage() {
                   Position exposure
                 </span>
                 <span className="ml-2 text-muted-foreground/60">
-                  (3% of {inr(dhanSwingCapital)} Dhan Swing)
+                  (3% of {inr(riskCapCapital)} {riskCapPartitionLabel})
                 </span>
               </div>
               <span className="tabular-nums font-medium">
@@ -455,8 +462,8 @@ function SwingPage() {
             {exceedsCap && (
               <p className="mt-2 text-xs text-destructive flex items-center gap-1.5 font-medium">
                 <AlertTriangle className="size-3.5" />
-                Risk Limit Exceeded: Position size is greater than 3% of active Dhan Swing
-                allocation.
+                Risk Limit Exceeded: Position size is greater than 3% of active{" "}
+                {riskCapPartitionLabel} allocation.
               </p>
             )}
           </div>

@@ -1,17 +1,18 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 
-// ─── Payment mode (used in Cashflow ledger only) ───────────────────────────
-export type PaymentMode = "Bank Account" | "Cash" | "Credit Card";
-export const PAYMENT_MODES: readonly PaymentMode[] = ["Bank Account", "Cash", "Credit Card"];
+// ─── Payment modes (Cashflow ledger) ───────────────────────────────────────
+// Extensible: DEFAULT_PAYMENT_MODES are always available; users can add more
+// via Settings. Existing transactions keep working regardless of what's
+// configured later — the type is a plain string, not a closed union.
+export type PaymentMode = string;
+export const DEFAULT_PAYMENT_MODES: readonly string[] = ["Bank Account", "Cash", "Credit Card"];
 
-// ─── Investment broker partitions (used in Swing logger & Profile) ─────────
-export type BrokerPartition =
-  | "Zerodha Vault"
-  | "Dhan Swing"
-  | "INDmoney US"
-  | "CoinDCX Crypto"
-  | "Groww MF"
-  | "Cash";
+// ─── Investment broker partitions (Swing logger, Cashflow, Profile) ────────
+// Extensible: DEFAULT_INVESTMENT_APPS are always available; users can add more
+// via Settings. Both BrokerPartition and PortfolioPartitionKey are plain
+// strings — arbitrary values are safe to store on existing trade/snapshot rows.
+export type BrokerPartition = string;
+export type PortfolioPartitionKey = string;
 
 export type InvestmentApp = {
   id: BrokerPartition;
@@ -20,7 +21,7 @@ export type InvestmentApp = {
   scopes: ("cashflow" | "swing")[];
 };
 
-export const INVESTMENT_APPS: readonly InvestmentApp[] = [
+export const DEFAULT_INVESTMENT_APPS: readonly InvestmentApp[] = [
   { id: "Zerodha Vault",  label: "Zerodha Vault",  description: "Long-hold equity vault (delivery)",  scopes: ["cashflow", "swing"] },
   { id: "Dhan Swing",     label: "Dhan Swing",     description: "Active swing book — equity only",    scopes: ["cashflow", "swing"] },
   { id: "INDmoney US",    label: "INDmoney US",    description: "US equities partition",               scopes: ["cashflow", "swing"] },
@@ -29,20 +30,12 @@ export const INVESTMENT_APPS: readonly InvestmentApp[] = [
   { id: "Cash",           label: "Cash",           description: "Physical cash & liquid reserves",     scopes: ["cashflow", "swing"] },
 ] as const;
 
-export const BROKER_PARTITION_IDS = INVESTMENT_APPS.map((a) => a.id);
-
-export function partitionLabel(id: BrokerPartition): string {
-  return INVESTMENT_APPS.find((a) => a.id === id)?.label ?? id;
-}
-
-export function appsForScope(scope: "cashflow" | "swing"): InvestmentApp[] {
-  return INVESTMENT_APPS.filter((a) => a.scopes.includes(scope));
+export function appsForScope(apps: InvestmentApp[], scope: "cashflow" | "swing"): InvestmentApp[] {
+  return apps.filter((a) => a.scopes.includes(scope));
 }
 
 // ─── Portfolio snapshots ───────────────────────────────────────────────────
-export type PortfolioPartitionKey = "Zerodha Vault" | "Dhan Swing" | "INDmoney US" | "Cash";
-
-export const PORTFOLIO_PARTITIONS: readonly {
+export const DEFAULT_PORTFOLIO_PARTITIONS: readonly {
   key: PortfolioPartitionKey;
   label: string;
   description: string;
@@ -52,6 +45,9 @@ export const PORTFOLIO_PARTITIONS: readonly {
   { key: "INDmoney US",  label: "INDmoney US",   description: "US fractional stocks" },
   { key: "Cash",          label: "Liquid Cash",   description: "Emergency bank balance" },
 ] as const;
+
+/** A user-added broker/investment partition beyond the built-in defaults. */
+export type CustomPartition = { id: string; label: string; description: string };
 
 /**
  * One per-partition row — mirrors portfolio_snapshots DB schema exactly.
@@ -64,32 +60,28 @@ export type PortfolioSnapshot = {
   notes?: string;
 };
 
-const PORTFOLIO_PARTITION_KEYS = PORTFOLIO_PARTITIONS.map((p) => p.key) as PortfolioPartitionKey[];
-
 function normalizeSnapshot(raw: Record<string, unknown>): PortfolioSnapshot | PortfolioSnapshot[] {
   if (raw.brokerPartition !== undefined) {
-    const partition = raw.brokerPartition as string;
+    const partition = raw.brokerPartition;
     return {
       id: String(raw.id),
       snapshotDate: String(raw.snapshotDate ?? raw.recordedAt ?? new Date().toISOString()),
-      brokerPartition: PORTFOLIO_PARTITION_KEYS.includes(partition as PortfolioPartitionKey)
-        ? (partition as PortfolioPartitionKey)
-        : "Cash",
+      brokerPartition: typeof partition === "string" && partition.trim() ? partition : "Cash",
       currentValue: Number(raw.currentValue) || 0,
       notes: raw.notes ? String(raw.notes) : undefined,
     };
   }
-  // Legacy grouped shape migration
+  // Legacy grouped shape migration — only the 4 original partitions ever used this shape.
   const legacyValues = (raw.values ?? {}) as Record<string, unknown>;
   const date = String(raw.recordedAt ?? new Date().toISOString());
   const rows: PortfolioSnapshot[] = [];
-  for (const key of PORTFOLIO_PARTITION_KEYS) {
-    const v = legacyValues[key];
+  for (const p of DEFAULT_PORTFOLIO_PARTITIONS) {
+    const v = legacyValues[p.key];
     if (typeof v === "number" && !isNaN(v)) {
       rows.push({
         id: crypto.randomUUID(),
         snapshotDate: date,
-        brokerPartition: key,
+        brokerPartition: p.key,
         currentValue: v,
         notes: raw.notes ? String(raw.notes) : undefined,
       });
@@ -105,6 +97,8 @@ export type BlueprintSettings = {
   scooterEmi: number;
   defaultRiskCapPct: number; // 0–1, e.g. 0.03
   growwMfSip: number;
+  /** Which partition's latest snapshot backs the swing-trade risk cap. */
+  riskCapPartition: PortfolioPartitionKey;
 };
 
 export const DEFAULT_BLUEPRINT: BlueprintSettings = {
@@ -113,6 +107,7 @@ export const DEFAULT_BLUEPRINT: BlueprintSettings = {
   scooterEmi: 9000,
   defaultRiskCapPct: 0.03,
   growwMfSip: 5000,
+  riskCapPartition: "Dhan Swing",
 };
 
 const BLUEPRINT_KEY = "finstride.blueprint.settings";
@@ -126,6 +121,9 @@ function normalizeBlueprint(raw: unknown): BlueprintSettings {
     scooterEmi:       Number(r.scooterEmi)        || DEFAULT_BLUEPRINT.scooterEmi,
     defaultRiskCapPct: typeof r.defaultRiskCapPct === "number" ? r.defaultRiskCapPct : DEFAULT_BLUEPRINT.defaultRiskCapPct,
     growwMfSip:       Number(r.growwMfSip)        || DEFAULT_BLUEPRINT.growwMfSip,
+    riskCapPartition: typeof r.riskCapPartition === "string" && r.riskCapPartition.trim()
+      ? r.riskCapPartition
+      : DEFAULT_BLUEPRINT.riskCapPartition,
   };
 }
 
@@ -150,6 +148,35 @@ function normalizeCustomCategories(raw: unknown): CustomCategories {
   };
 }
 
+// ─── Dynamic payment modes ─────────────────────────────────────────────────
+const CUSTOM_PAYMENT_MODES_KEY = "finstride.paymentmodes.custom";
+
+function normalizeCustomPaymentModes(raw: unknown): string[] {
+  return Array.isArray(raw) ? raw.filter((s): s is string => typeof s === "string") : [];
+}
+
+// ─── Dynamic broker/investment partitions ──────────────────────────────────
+const CUSTOM_PARTITIONS_KEY = "finstride.partitions.custom";
+
+function normalizeCustomPartitions(raw: unknown): CustomPartition[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
+    .map((r) => ({
+      id: String(r.id ?? ""),
+      label: r.label ? String(r.label) : String(r.id ?? ""),
+      description: r.description ? String(r.description) : "",
+    }))
+    .filter((p) => p.id.trim() !== "");
+}
+
+// ─── Quote preferences ──────────────────────────────────────────────────────
+// Whether the app-owner's personal reflection quotes are shown alongside the
+// general pool — driven by an explicit user setting rather than a hardcoded
+// owner-email check, and defaults off so a fresh install never shows someone
+// else's personal notes without opting in.
+const SHOW_PERSONAL_QUOTES_KEY = "finstride.quotes.showPersonal";
+
 // ─── Monthly obligations checklist ────────────────────────────────────────
 export type ObligationKey = "fixedRunrate" | "scooterEmi" | "growwMfSip" | "ccSettled";
 export type MonthlyPending = Partial<Record<ObligationKey, boolean>>;
@@ -170,24 +197,27 @@ export function currentMonthKey(): string {
 }
 
 // ─── Legacy data normalizers ───────────────────────────────────────────────
-const LEGACY_PARTITION_MAP: Record<string, BrokerPartition> = {
+const LEGACY_PARTITION_MAP: Record<string, string> = {
   Zerodha_Vault: "Zerodha Vault",
   Dhan_Swing:    "Dhan Swing",
   INDmoney_US:   "INDmoney US",
   Liquid_Cash:   "Cash",
 };
 
-function normalizePartition(raw: unknown): BrokerPartition {
-  if (typeof raw === "string") {
-    if (BROKER_PARTITION_IDS.includes(raw as BrokerPartition)) return raw as BrokerPartition;
-    if (LEGACY_PARTITION_MAP[raw]) return LEGACY_PARTITION_MAP[raw];
+// Any non-empty string is a valid partition (built-in default or user custom) —
+// only a missing/empty value falls back to a default. This must stay permissive
+// (not restricted to an enumerated list) so custom partitions round-trip through
+// localStorage correctly instead of being silently reset on reload.
+function normalizePartition(raw: unknown): string {
+  if (typeof raw === "string" && raw.trim()) {
+    return LEGACY_PARTITION_MAP[raw] ?? raw;
   }
   return "Dhan Swing";
 }
 
-function normalizePaymentMode(raw: unknown): PaymentMode {
-  if (raw === "Bank Account" || raw === "Cash" || raw === "Credit Card") return raw;
-  return "Bank Account";
+// Same reasoning as normalizePartition — any non-empty string is valid.
+function normalizePaymentMode(raw: unknown): string {
+  return typeof raw === "string" && raw.trim() ? raw : "Bank Account";
 }
 
 // ─── Data types ────────────────────────────────────────────────────────────
@@ -387,8 +417,8 @@ type StoreCtx = {
   pendingChecklist: MonthlyPending;
   portfolioSnapshots: PortfolioSnapshot[];
   latestSnapshotValues: Partial<Record<PortfolioPartitionKey, number>>;
-  /** Latest recorded Dhan Swing capital; 0 if no snapshot recorded yet. */
-  dhanSwingCapital: number;
+  /** Latest snapshot value for blueprintSettings.riskCapPartition; 0 if none recorded yet. */
+  riskCapCapital: number;
   // Blueprint — user-editable
   blueprintSettings: BlueprintSettings;
   updateBlueprintSettings: (patch: Partial<BlueprintSettings>) => void;
@@ -397,6 +427,19 @@ type StoreCtx = {
   expenseCategories: string[];
   addCategory: (type: "income" | "expense", name: string) => void;
   deleteCustomCategory: (type: "income" | "expense", name: string) => void;
+  // Dynamic payment modes
+  paymentModes: string[];
+  addPaymentMode: (name: string) => void;
+  deleteCustomPaymentMode: (name: string) => void;
+  // Dynamic broker/investment partitions
+  investmentApps: InvestmentApp[];
+  portfolioPartitions: { key: PortfolioPartitionKey; label: string; description: string }[];
+  addBrokerPartition: (id: string, description?: string) => void;
+  deleteCustomBrokerPartition: (id: string) => void;
+  partitionLabel: (id: string) => string;
+  // Quote preferences
+  showPersonalQuotes: boolean;
+  setShowPersonalQuotes: (v: boolean) => void;
   // Transactions
   addTransaction: (t: Omit<Transaction, "id">) => void;
   deleteTransaction: (id: string) => void;
@@ -426,12 +469,6 @@ const TX_KEY   = "finstride.transactions";
 const TR_KEY   = "finstride.trades";
 const SNAP_KEY = "finstride.portfolio.snapshots";
 
-const seedTx: Transaction[] = [
-  { id: crypto.randomUUID(), date: new Date(Date.now() - 86400000 * 2).toISOString(), type: "income",  category: "Salary",        account: "Bank Account", amount: 76000, tags: ["monthly"],    notes: "May salary" },
-  { id: crypto.randomUUID(), date: new Date(Date.now() - 86400000 * 5).toISOString(), type: "expense", category: "Fixed Runrate", account: "Bank Account", amount: 39000, tags: ["essentials"] },
-  { id: crypto.randomUUID(), date: new Date(Date.now() - 86400000 * 7).toISOString(), type: "expense", category: "Scooter EMI",   account: "Bank Account", amount: 9000,  tags: ["emi"] },
-];
-
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [transactions, setTransactions]       = useState<Transaction[]>([]);
   const [trades, setTrades]                   = useState<Trade[]>([]);
@@ -440,14 +477,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [grind, setGrind]                     = useState<GrindState>(EMPTY_GRIND);
   const [blueprintSettings, setBlueprintSettings] = useState<BlueprintSettings>(DEFAULT_BLUEPRINT);
   const [customCategories, setCustomCategories] = useState<CustomCategories>(DEFAULT_CUSTOM_CATEGORIES);
+  const [customPaymentModes, setCustomPaymentModes] = useState<string[]>([]);
+  const [customPartitions, setCustomPartitions] = useState<CustomPartition[]>([]);
+  const [showPersonalQuotes, setShowPersonalQuotesState] = useState(false);
 
   // ── Initial load ────────────────────────────────────────────────────────
   useEffect(() => {
     try {
       const tx = localStorage.getItem(TX_KEY);
-      setTransactions(
-        tx ? (JSON.parse(tx) as Record<string, unknown>[]).map(normalizeTransaction) : seedTx,
-      );
+      setTransactions(tx ? (JSON.parse(tx) as Record<string, unknown>[]).map(normalizeTransaction) : []);
       const tr = localStorage.getItem(TR_KEY);
       setTrades(tr ? (JSON.parse(tr) as Record<string, unknown>[]).map(normalizeTrade) : []);
       const sn = localStorage.getItem(SNAP_KEY);
@@ -467,8 +505,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (bp) setBlueprintSettings(normalizeBlueprint(JSON.parse(bp)));
       const cc = localStorage.getItem(CATEGORIES_KEY);
       if (cc) setCustomCategories(normalizeCustomCategories(JSON.parse(cc)));
+      const cpm = localStorage.getItem(CUSTOM_PAYMENT_MODES_KEY);
+      if (cpm) setCustomPaymentModes(normalizeCustomPaymentModes(JSON.parse(cpm)));
+      const cp = localStorage.getItem(CUSTOM_PARTITIONS_KEY);
+      if (cp) setCustomPartitions(normalizeCustomPartitions(JSON.parse(cp)));
+      const spq = localStorage.getItem(SHOW_PERSONAL_QUOTES_KEY);
+      if (spq !== null) setShowPersonalQuotesState(spq === "true");
     } catch {
-      setTransactions(seedTx);
+      setTransactions([]);
     }
     const allPending = loadAllPending();
     setPendingChecklist(allPending[currentMonthKey()] ?? {});
@@ -505,26 +549,62 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(CATEGORIES_KEY, JSON.stringify(customCategories));
   }, [customCategories]);
 
+  useEffect(() => {
+    localStorage.setItem(CUSTOM_PAYMENT_MODES_KEY, JSON.stringify(customPaymentModes));
+  }, [customPaymentModes]);
+
+  useEffect(() => {
+    localStorage.setItem(CUSTOM_PARTITIONS_KEY, JSON.stringify(customPartitions));
+  }, [customPartitions]);
+
+  useEffect(() => {
+    localStorage.setItem(SHOW_PERSONAL_QUOTES_KEY, String(showPersonalQuotes));
+  }, [showPersonalQuotes]);
+
   // ── Derived values ───────────────────────────────────────────────────────
   const creditCardDues = transactions
     .filter((t) => t.type === "expense" && t.account === "Credit Card")
     .reduce((sum, t) => sum + t.amount, 0);
 
-  const latestSnapshotValues = PORTFOLIO_PARTITION_KEYS.reduce(
-    (acc, key) => {
-      const rows = portfolioSnapshots.filter((s) => s.brokerPartition === key);
-      if (rows.length) {
-        acc[key] = rows.reduce((a, b) => (a.snapshotDate >= b.snapshotDate ? a : b)).currentValue;
+  // Latest value per partition, derived straight from recorded snapshots — works
+  // for any partition (default or custom), not just an enumerated list.
+  const latestSnapshotValues = (() => {
+    const latest = new Map<string, PortfolioSnapshot>();
+    for (const s of portfolioSnapshots) {
+      const existing = latest.get(s.brokerPartition);
+      if (!existing || s.snapshotDate >= existing.snapshotDate) {
+        latest.set(s.brokerPartition, s);
       }
-      return acc;
-    },
-    {} as Partial<Record<PortfolioPartitionKey, number>>,
-  );
+    }
+    const result: Partial<Record<PortfolioPartitionKey, number>> = {};
+    for (const [key, snap] of latest) result[key] = snap.currentValue;
+    return result;
+  })();
 
-  const dhanSwingCapital = latestSnapshotValues["Dhan Swing"] ?? 0;
+  const riskCapCapital = latestSnapshotValues[blueprintSettings.riskCapPartition] ?? 0;
 
   const incomeCategories  = [...DEFAULT_INCOME_CATEGORIES,  ...customCategories.income];
   const expenseCategories = [...DEFAULT_EXPENSE_CATEGORIES, ...customCategories.expense];
+
+  const paymentModes = [...DEFAULT_PAYMENT_MODES, ...customPaymentModes];
+
+  const investmentApps: InvestmentApp[] = [
+    ...DEFAULT_INVESTMENT_APPS,
+    ...customPartitions.map((p) => ({
+      id: p.id,
+      label: p.label,
+      description: p.description,
+      scopes: ["cashflow", "swing"] as ("cashflow" | "swing")[],
+    })),
+  ];
+
+  const portfolioPartitions = [
+    ...DEFAULT_PORTFOLIO_PARTITIONS,
+    ...customPartitions.map((p) => ({ key: p.id, label: p.label, description: p.description })),
+  ];
+
+  const partitionLabel = (id: string): string =>
+    investmentApps.find((a) => a.id === id)?.label ?? id;
 
   const toggleObligation = (key: ObligationKey) =>
     setPendingChecklist((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -537,7 +617,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     pendingChecklist,
     portfolioSnapshots,
     latestSnapshotValues,
-    dhanSwingCapital,
+    riskCapCapital,
     blueprintSettings,
     updateBlueprintSettings: (patch) =>
       setBlueprintSettings((prev) => ({ ...prev, ...patch })),
@@ -561,6 +641,36 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         [type]: prev[type].filter((c) => c !== name),
       }));
     },
+    paymentModes,
+    addPaymentMode: (name) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      if (DEFAULT_PAYMENT_MODES.includes(trimmed)) return; // already a default
+      setCustomPaymentModes((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
+    },
+    deleteCustomPaymentMode: (name) => {
+      if (DEFAULT_PAYMENT_MODES.includes(name)) return; // cannot delete defaults
+      setCustomPaymentModes((prev) => prev.filter((m) => m !== name));
+    },
+    investmentApps,
+    portfolioPartitions,
+    addBrokerPartition: (id, description) => {
+      const trimmed = id.trim();
+      if (!trimmed) return;
+      if (DEFAULT_INVESTMENT_APPS.some((a) => a.id === trimmed)) return; // already a default
+      setCustomPartitions((prev) =>
+        prev.some((p) => p.id === trimmed)
+          ? prev
+          : [...prev, { id: trimmed, label: trimmed, description: description?.trim() ?? "" }],
+      );
+    },
+    deleteCustomBrokerPartition: (id) => {
+      if (DEFAULT_INVESTMENT_APPS.some((a) => a.id === id)) return; // cannot delete defaults
+      setCustomPartitions((prev) => prev.filter((p) => p.id !== id));
+    },
+    partitionLabel,
+    showPersonalQuotes,
+    setShowPersonalQuotes: (v) => setShowPersonalQuotesState(v),
     addTransaction: (t) => setTransactions((s) => [{ ...t, id: crypto.randomUUID() }, ...s]),
     deleteTransaction: (id) => setTransactions((s) => s.filter((x) => x.id !== id)),
     addTrade: (t) =>
