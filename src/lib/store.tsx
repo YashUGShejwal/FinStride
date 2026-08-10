@@ -1,4 +1,27 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { useAuth } from "@/lib/auth";
+import {
+  deleteGrindLogRow,
+  deleteHustleEntryRow,
+  deleteSnapshotRow,
+  deleteTradeRow,
+  deleteTransactionRow,
+  fetchAllUserData,
+  getSupabaseBrowserClient,
+  hasMigrated,
+  isBundleEmpty,
+  isSupabaseConfigured,
+  markMigrated,
+  migrateLocalDataToSupabase,
+  upsertGrindLog as dbUpsertGrindLog,
+  upsertHustleEntry as dbUpsertHustleEntry,
+  upsertPendingObligations,
+  upsertSettings as dbUpsertSettings,
+  upsertSnapshots as dbUpsertSnapshots,
+  upsertTrade as dbUpsertTrade,
+  upsertTransaction as dbUpsertTransaction,
+  type FinStrideClient,
+} from "@/lib/db";
 
 // ─── Payment modes (Cashflow ledger) ───────────────────────────────────────
 // Extensible: DEFAULT_PAYMENT_MODES are always available; users can add more
@@ -22,12 +45,42 @@ export type InvestmentApp = {
 };
 
 export const DEFAULT_INVESTMENT_APPS: readonly InvestmentApp[] = [
-  { id: "Zerodha Vault",  label: "Zerodha Vault",  description: "Long-hold equity vault (delivery)",  scopes: ["cashflow", "swing"] },
-  { id: "Dhan Swing",     label: "Dhan Swing",     description: "Active swing book — equity only",    scopes: ["cashflow", "swing"] },
-  { id: "INDmoney US",    label: "INDmoney US",    description: "US equities partition",               scopes: ["cashflow", "swing"] },
-  { id: "CoinDCX Crypto", label: "CoinDCX Crypto", description: "Crypto holdings",                    scopes: ["cashflow", "swing"] },
-  { id: "Groww MF",       label: "Groww MF",       description: "Mutual Fund SIPs via Groww",          scopes: ["cashflow", "swing"] },
-  { id: "Cash",           label: "Cash",           description: "Physical cash & liquid reserves",     scopes: ["cashflow", "swing"] },
+  {
+    id: "Zerodha Vault",
+    label: "Zerodha Vault",
+    description: "Long-hold equity vault (delivery)",
+    scopes: ["cashflow", "swing"],
+  },
+  {
+    id: "Dhan Swing",
+    label: "Dhan Swing",
+    description: "Active swing book — equity only",
+    scopes: ["cashflow", "swing"],
+  },
+  {
+    id: "INDmoney US",
+    label: "INDmoney US",
+    description: "US equities partition",
+    scopes: ["cashflow", "swing"],
+  },
+  {
+    id: "CoinDCX Crypto",
+    label: "CoinDCX Crypto",
+    description: "Crypto holdings",
+    scopes: ["cashflow", "swing"],
+  },
+  {
+    id: "Groww MF",
+    label: "Groww MF",
+    description: "Mutual Fund SIPs via Groww",
+    scopes: ["cashflow", "swing"],
+  },
+  {
+    id: "Cash",
+    label: "Cash",
+    description: "Physical cash & liquid reserves",
+    scopes: ["cashflow", "swing"],
+  },
 ] as const;
 
 export function appsForScope(apps: InvestmentApp[], scope: "cashflow" | "swing"): InvestmentApp[] {
@@ -41,9 +94,9 @@ export const DEFAULT_PORTFOLIO_PARTITIONS: readonly {
   description: string;
 }[] = [
   { key: "Zerodha Vault", label: "Zerodha Vault", description: "Long-term ETFs & SGBs" },
-  { key: "Dhan Swing",    label: "Dhan Swing",    description: "Active equity swings" },
-  { key: "INDmoney US",  label: "INDmoney US",   description: "US fractional stocks" },
-  { key: "Cash",          label: "Liquid Cash",   description: "Emergency bank balance" },
+  { key: "Dhan Swing", label: "Dhan Swing", description: "Active equity swings" },
+  { key: "INDmoney US", label: "INDmoney US", description: "US fractional stocks" },
+  { key: "Cash", label: "Liquid Cash", description: "Emergency bank balance" },
 ] as const;
 
 /** A user-added broker/investment partition beyond the built-in defaults. */
@@ -119,23 +172,35 @@ function normalizeBlueprint(raw: unknown): BlueprintSettings {
   // 0 (e.g. "EMI paid off") isn't silently reverted to the hardcoded default —
   // 0 is falsy in JS, so `||` would otherwise always prefer the fallback.
   return {
-    defaultSalary:    typeof r.defaultSalary    === "number" ? r.defaultSalary    : DEFAULT_BLUEPRINT.defaultSalary,
-    fixedRunrate:     typeof r.fixedRunrate      === "number" ? r.fixedRunrate      : DEFAULT_BLUEPRINT.fixedRunrate,
-    scooterEmi:       typeof r.scooterEmi        === "number" ? r.scooterEmi        : DEFAULT_BLUEPRINT.scooterEmi,
-    defaultRiskCapPct: typeof r.defaultRiskCapPct === "number" ? r.defaultRiskCapPct : DEFAULT_BLUEPRINT.defaultRiskCapPct,
-    growwMfSip:       typeof r.growwMfSip        === "number" ? r.growwMfSip        : DEFAULT_BLUEPRINT.growwMfSip,
-    riskCapPartition: typeof r.riskCapPartition === "string" && r.riskCapPartition.trim()
-      ? r.riskCapPartition
-      : DEFAULT_BLUEPRINT.riskCapPartition,
+    defaultSalary:
+      typeof r.defaultSalary === "number" ? r.defaultSalary : DEFAULT_BLUEPRINT.defaultSalary,
+    fixedRunrate:
+      typeof r.fixedRunrate === "number" ? r.fixedRunrate : DEFAULT_BLUEPRINT.fixedRunrate,
+    scooterEmi: typeof r.scooterEmi === "number" ? r.scooterEmi : DEFAULT_BLUEPRINT.scooterEmi,
+    defaultRiskCapPct:
+      typeof r.defaultRiskCapPct === "number"
+        ? r.defaultRiskCapPct
+        : DEFAULT_BLUEPRINT.defaultRiskCapPct,
+    growwMfSip: typeof r.growwMfSip === "number" ? r.growwMfSip : DEFAULT_BLUEPRINT.growwMfSip,
+    riskCapPartition:
+      typeof r.riskCapPartition === "string" && r.riskCapPartition.trim()
+        ? r.riskCapPartition
+        : DEFAULT_BLUEPRINT.riskCapPartition,
   };
 }
 
 // ─── Dynamic Categories ────────────────────────────────────────────────────
 export const DEFAULT_INCOME_CATEGORIES: readonly string[] = [
-  "Salary", "Freelance", "Capital Transfer (In)", "Other",
+  "Salary",
+  "Freelance",
+  "Capital Transfer (In)",
+  "Other",
 ];
 export const DEFAULT_EXPENSE_CATEGORIES: readonly string[] = [
-  "Fixed Runrate", "Scooter EMI", "Capital Transfer (Out)", "Other",
+  "Fixed Runrate",
+  "Scooter EMI",
+  "Capital Transfer (Out)",
+  "Other",
 ];
 
 type CustomCategories = { income: string[]; expense: string[] };
@@ -146,8 +211,12 @@ function normalizeCustomCategories(raw: unknown): CustomCategories {
   if (!raw || typeof raw !== "object") return DEFAULT_CUSTOM_CATEGORIES;
   const r = raw as Record<string, unknown>;
   return {
-    income:  Array.isArray(r.income)  ? (r.income  as string[]).filter((s) => typeof s === "string") : [],
-    expense: Array.isArray(r.expense) ? (r.expense as string[]).filter((s) => typeof s === "string") : [],
+    income: Array.isArray(r.income)
+      ? (r.income as string[]).filter((s) => typeof s === "string")
+      : [],
+    expense: Array.isArray(r.expense)
+      ? (r.expense as string[]).filter((s) => typeof s === "string")
+      : [],
   };
 }
 
@@ -202,9 +271,9 @@ export function currentMonthKey(): string {
 // ─── Legacy data normalizers ───────────────────────────────────────────────
 const LEGACY_PARTITION_MAP: Record<string, string> = {
   Zerodha_Vault: "Zerodha Vault",
-  Dhan_Swing:    "Dhan Swing",
-  INDmoney_US:   "INDmoney US",
-  Liquid_Cash:   "Cash",
+  Dhan_Swing: "Dhan Swing",
+  INDmoney_US: "INDmoney US",
+  Liquid_Cash: "Cash",
 };
 
 // Any non-empty string is a valid partition (built-in default or user custom) —
@@ -301,7 +370,7 @@ function normalizeTrade(raw: Record<string, unknown>): Trade {
     status: raw.status === "closed" ? "closed" : "open",
     closeReason: (raw.closeReason as CloseReason | undefined) ?? undefined,
     closeNotes: raw.closeNotes ? String(raw.closeNotes) : undefined,
-    exitDate: raw.exitDate ? String(raw.exitDate) : (raw.closedAt ? String(raw.closedAt) : undefined),
+    exitDate: raw.exitDate ? String(raw.exitDate) : raw.closedAt ? String(raw.closedAt) : undefined,
   };
 }
 
@@ -310,7 +379,13 @@ export type GrindMetricKey = "systemDesign" | "leetcode" | "linkedinOutreach";
 
 export const GRIND_METRIC_META: Record<
   GrindMetricKey,
-  { label: string; inputLabel: string; metaLabel?: string; placeholder: string; metaPlaceholder?: string }
+  {
+    label: string;
+    inputLabel: string;
+    metaLabel?: string;
+    placeholder: string;
+    metaPlaceholder?: string;
+  }
 > = {
   systemDesign: {
     label: "System Design",
@@ -469,101 +544,347 @@ type StoreCtx = {
 };
 
 const Ctx = createContext<StoreCtx | null>(null);
-const TX_KEY   = "finstride.transactions";
-const TR_KEY   = "finstride.trades";
+const TX_KEY = "finstride.transactions";
+const TR_KEY = "finstride.trades";
 const SNAP_KEY = "finstride.portfolio.snapshots";
 
+/**
+ * Which identity the localStorage cache belongs to: a Supabase user id, or
+ * "local" for data created before/without authentication.
+ *
+ * This only matters when Supabase is configured. In pure-localStorage mode the
+ * mock auth mints a brand-new random id on every sign-in, so owner-scoping
+ * there would wipe the user's data on every login — hence the isSupabaseConfigured()
+ * guard everywhere this is used.
+ */
+const CACHE_OWNER_KEY = "finstride.cache.owner";
+const LOCAL_OWNER = "local";
+
+const ALL_LOCAL_KEYS = [
+  TX_KEY,
+  TR_KEY,
+  SNAP_KEY,
+  GRIND_KEY,
+  BLUEPRINT_KEY,
+  CATEGORIES_KEY,
+  CUSTOM_PAYMENT_MODES_KEY,
+  CUSTOM_PARTITIONS_KEY,
+  SHOW_PERSONAL_QUOTES_KEY,
+  PENDING_KEY,
+];
+
+/** Full local snapshot — also the payload shape the first-login migration pushes up. */
+type LocalState = {
+  transactions: Transaction[];
+  trades: Trade[];
+  portfolioSnapshots: PortfolioSnapshot[];
+  grind: GrindState;
+  blueprint: BlueprintSettings;
+  showPersonalQuotes: boolean;
+  customPaymentModes: string[];
+  customPartitions: CustomPartition[];
+  customIncomeCategories: string[];
+  customExpenseCategories: string[];
+  pending: MonthlyPending;
+};
+
+const EMPTY_LOCAL_STATE: LocalState = {
+  transactions: [],
+  trades: [],
+  portfolioSnapshots: [],
+  grind: EMPTY_GRIND,
+  blueprint: DEFAULT_BLUEPRINT,
+  showPersonalQuotes: false,
+  customPaymentModes: [],
+  customPartitions: [],
+  customIncomeCategories: [],
+  customExpenseCategories: [],
+  pending: {},
+};
+
+function readJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw === null ? fallback : (JSON.parse(raw) as T);
+  } catch {
+    return fallback;
+  }
+}
+
+/** Read and normalize everything the app persists locally. Never throws. */
+function readLocalState(): LocalState {
+  try {
+    const rawSnaps = readJson<Record<string, unknown>[]>(SNAP_KEY, []);
+    const snapshots: PortfolioSnapshot[] = [];
+    for (const raw of rawSnaps) {
+      const result = normalizeSnapshot(raw);
+      if (Array.isArray(result)) snapshots.push(...result);
+      else snapshots.push(result);
+    }
+    const cats = normalizeCustomCategories(readJson<unknown>(CATEGORIES_KEY, null));
+    let showPersonal = false;
+    try {
+      showPersonal = localStorage.getItem(SHOW_PERSONAL_QUOTES_KEY) === "true";
+    } catch {
+      showPersonal = false;
+    }
+    return {
+      transactions: readJson<Record<string, unknown>[]>(TX_KEY, []).map(normalizeTransaction),
+      trades: readJson<Record<string, unknown>[]>(TR_KEY, []).map(normalizeTrade),
+      portfolioSnapshots: snapshots,
+      grind: normalizeGrindState(readJson<unknown>(GRIND_KEY, null)),
+      blueprint: normalizeBlueprint(readJson<unknown>(BLUEPRINT_KEY, null)),
+      showPersonalQuotes: showPersonal,
+      customPaymentModes: normalizeCustomPaymentModes(
+        readJson<unknown>(CUSTOM_PAYMENT_MODES_KEY, null),
+      ),
+      customPartitions: normalizeCustomPartitions(readJson<unknown>(CUSTOM_PARTITIONS_KEY, null)),
+      customIncomeCategories: cats.income,
+      customExpenseCategories: cats.expense,
+      pending: loadAllPending()[currentMonthKey()] ?? {},
+    };
+  } catch {
+    return EMPTY_LOCAL_STATE;
+  }
+}
+
+function localStateHasData(s: LocalState): boolean {
+  return (
+    s.transactions.length > 0 ||
+    s.trades.length > 0 ||
+    s.portfolioSnapshots.length > 0 ||
+    s.grind.hustle.length > 0 ||
+    s.grind.metrics.systemDesign.length > 0 ||
+    s.grind.metrics.leetcode.length > 0 ||
+    s.grind.metrics.linkedinOutreach.length > 0
+  );
+}
+
+function clearLocalCache(): void {
+  try {
+    for (const k of ALL_LOCAL_KEYS) localStorage.removeItem(k);
+  } catch {
+    // Nothing actionable — the in-memory state is authoritative for this session.
+  }
+}
+
+function readCacheOwner(): string {
+  try {
+    return localStorage.getItem(CACHE_OWNER_KEY) ?? LOCAL_OWNER;
+  } catch {
+    return LOCAL_OWNER;
+  }
+}
+
+function writeCacheOwner(owner: string): void {
+  try {
+    localStorage.setItem(CACHE_OWNER_KEY, owner);
+  } catch {
+    // Ignore — owner scoping degrades to "treat as local", which is safe.
+  }
+}
+
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [transactions, setTransactions]       = useState<Transaction[]>([]);
-  const [trades, setTrades]                   = useState<Trade[]>([]);
+  const { user } = useAuth();
+  const userId = user?.id ?? null;
+  const cloudEnabled = isSupabaseConfigured();
+
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [trades, setTrades] = useState<Trade[]>([]);
   const [pendingChecklist, setPendingChecklist] = useState<MonthlyPending>({});
   const [portfolioSnapshots, setPortfolioSnapshots] = useState<PortfolioSnapshot[]>([]);
-  const [grind, setGrind]                     = useState<GrindState>(EMPTY_GRIND);
+  const [grind, setGrind] = useState<GrindState>(EMPTY_GRIND);
   const [blueprintSettings, setBlueprintSettings] = useState<BlueprintSettings>(DEFAULT_BLUEPRINT);
-  const [customCategories, setCustomCategories] = useState<CustomCategories>(DEFAULT_CUSTOM_CATEGORIES);
+  const [customCategories, setCustomCategories] =
+    useState<CustomCategories>(DEFAULT_CUSTOM_CATEGORIES);
   const [customPaymentModes, setCustomPaymentModes] = useState<string[]>([]);
   const [customPartitions, setCustomPartitions] = useState<CustomPartition[]>([]);
   const [showPersonalQuotes, setShowPersonalQuotesState] = useState(false);
 
-  // ── Initial load ────────────────────────────────────────────────────────
+  /**
+   * Gates the persist effects until the initial load finishes.
+   *
+   * Without it those effects run on the very first commit — while state is
+   * still empty — and overwrite good stored data with empty arrays. That was
+   * already a latent race with synchronous localStorage; it becomes a real
+   * data-loss window now that the load can await a network round-trip.
+   */
+  const [hydrated, setHydrated] = useState(false);
+  /** Latest state, readable from mutation closures without re-subscribing effects. */
+  const stateRef = useRef({ trades, grind });
+  stateRef.current = { trades, grind };
+
+  /** Live sync target, or null when running local-only (offline/unauthenticated/unconfigured). */
+  const getSync = (): { client: FinStrideClient; userId: string } | null => {
+    if (!cloudEnabled || !userId) return null;
+    const client = getSupabaseBrowserClient();
+    return client ? { client, userId } : null;
+  };
+
+  // ── Load / sync ──────────────────────────────────────────────────────────
   useEffect(() => {
-    try {
-      const tx = localStorage.getItem(TX_KEY);
-      setTransactions(tx ? (JSON.parse(tx) as Record<string, unknown>[]).map(normalizeTransaction) : []);
-      const tr = localStorage.getItem(TR_KEY);
-      setTrades(tr ? (JSON.parse(tr) as Record<string, unknown>[]).map(normalizeTrade) : []);
-      const sn = localStorage.getItem(SNAP_KEY);
-      if (sn) {
-        const rawSnaps = JSON.parse(sn) as Record<string, unknown>[];
-        const rows: PortfolioSnapshot[] = [];
-        for (const raw of rawSnaps) {
-          const result = normalizeSnapshot(raw);
-          if (Array.isArray(result)) rows.push(...result);
-          else rows.push(result);
-        }
-        setPortfolioSnapshots(rows);
+    let cancelled = false;
+
+    void (async () => {
+      const identity = userId ?? LOCAL_OWNER;
+      const priorOwner = cloudEnabled ? readCacheOwner() : LOCAL_OWNER;
+
+      // Cross-tenant guard: if this browser's cache belongs to a different
+      // Supabase user, drop it rather than rendering — or worse, uploading —
+      // one person's finances under another's account.
+      if (cloudEnabled && priorOwner !== LOCAL_OWNER && priorOwner !== identity) {
+        clearLocalCache();
       }
-      const gr = localStorage.getItem(GRIND_KEY);
-      setGrind(gr ? normalizeGrindState(JSON.parse(gr)) : EMPTY_GRIND);
-      const bp = localStorage.getItem(BLUEPRINT_KEY);
-      if (bp) setBlueprintSettings(normalizeBlueprint(JSON.parse(bp)));
-      const cc = localStorage.getItem(CATEGORIES_KEY);
-      if (cc) setCustomCategories(normalizeCustomCategories(JSON.parse(cc)));
-      const cpm = localStorage.getItem(CUSTOM_PAYMENT_MODES_KEY);
-      if (cpm) setCustomPaymentModes(normalizeCustomPaymentModes(JSON.parse(cpm)));
-      const cp = localStorage.getItem(CUSTOM_PARTITIONS_KEY);
-      if (cp) setCustomPartitions(normalizeCustomPartitions(JSON.parse(cp)));
-      const spq = localStorage.getItem(SHOW_PERSONAL_QUOTES_KEY);
-      if (spq !== null) setShowPersonalQuotesState(spq === "true");
-    } catch {
-      setTransactions([]);
-    }
-    const allPending = loadAllPending();
-    setPendingChecklist(allPending[currentMonthKey()] ?? {});
-  }, []);
 
-  // ── Persist effects ──────────────────────────────────────────────────────
+      // Local first: instant paint, and the only source when offline.
+      const local = readLocalState();
+      if (cancelled) return;
+      setTransactions(local.transactions);
+      setTrades(local.trades);
+      setPortfolioSnapshots(local.portfolioSnapshots);
+      setGrind(local.grind);
+      setBlueprintSettings(local.blueprint);
+      setShowPersonalQuotesState(local.showPersonalQuotes);
+      setCustomPaymentModes(local.customPaymentModes);
+      setCustomPartitions(local.customPartitions);
+      setCustomCategories({
+        income: local.customIncomeCategories,
+        expense: local.customExpenseCategories,
+      });
+      setPendingChecklist(local.pending);
+
+      const client = cloudEnabled && userId ? getSupabaseBrowserClient() : null;
+      if (!client || !userId) {
+        if (cloudEnabled) writeCacheOwner(identity);
+        if (!cancelled) setHydrated(true);
+        return;
+      }
+
+      const remote = await fetchAllUserData(client, userId, currentMonthKey());
+      if (cancelled) return;
+
+      if (remote) {
+        const firstLoginWithLocalData =
+          isBundleEmpty(remote) &&
+          localStateHasData(local) &&
+          priorOwner === LOCAL_OWNER &&
+          !hasMigrated(userId);
+
+        if (firstLoginWithLocalData) {
+          // Pre-auth data on this device, empty cloud account: push it up and
+          // keep the state we already applied (it is exactly what was sent).
+          await migrateLocalDataToSupabase(client, userId, local, currentMonthKey());
+        } else {
+          // Cloud is the source of truth for an authenticated user.
+          setTransactions(remote.transactions);
+          setTrades(remote.trades);
+          setPortfolioSnapshots(remote.portfolioSnapshots);
+          setGrind(remote.grind);
+          if (remote.settings) {
+            setBlueprintSettings(remote.settings.blueprint);
+            setShowPersonalQuotesState(remote.settings.showPersonalQuotes);
+            setCustomPaymentModes(remote.settings.customPaymentModes);
+            setCustomPartitions(remote.settings.customPartitions);
+            setCustomCategories({
+              income: remote.settings.customIncomeCategories,
+              expense: remote.settings.customExpenseCategories,
+            });
+          }
+          setPendingChecklist(remote.pending ?? {});
+        }
+        markMigrated(userId);
+      }
+
+      writeCacheOwner(identity);
+      if (!cancelled) setHydrated(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, cloudEnabled]);
+
+  // ── Persist effects (localStorage = offline cache + local-only store) ────
+  // All gated on `hydrated` so they never write pre-load empty state over real data.
   useEffect(() => {
-    if (transactions.length) localStorage.setItem(TX_KEY, JSON.stringify(transactions));
-  }, [transactions]);
+    if (hydrated) localStorage.setItem(TX_KEY, JSON.stringify(transactions));
+  }, [hydrated, transactions]);
 
   useEffect(() => {
-    localStorage.setItem(TR_KEY, JSON.stringify(trades));
-  }, [trades]);
+    if (hydrated) localStorage.setItem(TR_KEY, JSON.stringify(trades));
+  }, [hydrated, trades]);
 
   useEffect(() => {
+    if (!hydrated) return;
     const allPending = loadAllPending();
     allPending[currentMonthKey()] = pendingChecklist;
     localStorage.setItem(PENDING_KEY, JSON.stringify(allPending));
-  }, [pendingChecklist]);
+  }, [hydrated, pendingChecklist]);
 
   useEffect(() => {
-    localStorage.setItem(SNAP_KEY, JSON.stringify(portfolioSnapshots));
-  }, [portfolioSnapshots]);
+    if (hydrated) localStorage.setItem(SNAP_KEY, JSON.stringify(portfolioSnapshots));
+  }, [hydrated, portfolioSnapshots]);
 
   useEffect(() => {
-    localStorage.setItem(GRIND_KEY, JSON.stringify(grind));
-  }, [grind]);
+    if (hydrated) localStorage.setItem(GRIND_KEY, JSON.stringify(grind));
+  }, [hydrated, grind]);
 
   useEffect(() => {
-    localStorage.setItem(BLUEPRINT_KEY, JSON.stringify(blueprintSettings));
-  }, [blueprintSettings]);
+    if (hydrated) localStorage.setItem(BLUEPRINT_KEY, JSON.stringify(blueprintSettings));
+  }, [hydrated, blueprintSettings]);
 
   useEffect(() => {
-    localStorage.setItem(CATEGORIES_KEY, JSON.stringify(customCategories));
-  }, [customCategories]);
+    if (hydrated) localStorage.setItem(CATEGORIES_KEY, JSON.stringify(customCategories));
+  }, [hydrated, customCategories]);
 
   useEffect(() => {
-    localStorage.setItem(CUSTOM_PAYMENT_MODES_KEY, JSON.stringify(customPaymentModes));
-  }, [customPaymentModes]);
+    if (hydrated)
+      localStorage.setItem(CUSTOM_PAYMENT_MODES_KEY, JSON.stringify(customPaymentModes));
+  }, [hydrated, customPaymentModes]);
 
   useEffect(() => {
-    localStorage.setItem(CUSTOM_PARTITIONS_KEY, JSON.stringify(customPartitions));
-  }, [customPartitions]);
+    if (hydrated) localStorage.setItem(CUSTOM_PARTITIONS_KEY, JSON.stringify(customPartitions));
+  }, [hydrated, customPartitions]);
 
   useEffect(() => {
-    localStorage.setItem(SHOW_PERSONAL_QUOTES_KEY, String(showPersonalQuotes));
-  }, [showPersonalQuotes]);
+    if (hydrated) localStorage.setItem(SHOW_PERSONAL_QUOTES_KEY, String(showPersonalQuotes));
+  }, [hydrated, showPersonalQuotes]);
+
+  // ── Remote sync for the single-row tables ────────────────────────────────
+  // Settings live in one row, so the whole bundle is upserted whenever any
+  // part changes — simpler and cheaper than threading a write through each
+  // individual settings mutation.
+  useEffect(() => {
+    if (!hydrated) return;
+    const sync = getSync();
+    if (!sync) return;
+    void dbUpsertSettings(sync.client, sync.userId, {
+      blueprint: blueprintSettings,
+      showPersonalQuotes,
+      customPaymentModes,
+      customPartitions,
+      customIncomeCategories: customCategories.income,
+      customExpenseCategories: customCategories.expense,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    hydrated,
+    userId,
+    cloudEnabled,
+    blueprintSettings,
+    showPersonalQuotes,
+    customPaymentModes,
+    customPartitions,
+    customCategories,
+  ]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const sync = getSync();
+    if (!sync) return;
+    void upsertPendingObligations(sync.client, sync.userId, currentMonthKey(), pendingChecklist);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, userId, cloudEnabled, pendingChecklist]);
 
   // ── Derived values ───────────────────────────────────────────────────────
   const creditCardDues = transactions
@@ -591,7 +912,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const riskCapCapital = latestSnapshotValues[blueprintSettings.riskCapPartition] ?? 0;
 
-  const incomeCategories  = [...DEFAULT_INCOME_CATEGORIES,  ...customCategories.income];
+  const incomeCategories = [...DEFAULT_INCOME_CATEGORIES, ...customCategories.income];
   const expenseCategories = [...DEFAULT_EXPENSE_CATEGORIES, ...customCategories.expense];
 
   const paymentModes = [...DEFAULT_PAYMENT_MODES, ...customPaymentModes];
@@ -627,8 +948,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     latestSnapshotValues,
     riskCapCapital,
     blueprintSettings,
-    updateBlueprintSettings: (patch) =>
-      setBlueprintSettings((prev) => ({ ...prev, ...patch })),
+    updateBlueprintSettings: (patch) => setBlueprintSettings((prev) => ({ ...prev, ...patch })),
     incomeCategories,
     expenseCategories,
     addCategory: (type, name) => {
@@ -688,19 +1008,47 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     partitionLabel,
     showPersonalQuotes,
     setShowPersonalQuotes: (v) => setShowPersonalQuotesState(v),
-    addTransaction: (t) => setTransactions((s) => [{ ...t, id: crypto.randomUUID() }, ...s]),
-    deleteTransaction: (id) => setTransactions((s) => s.filter((x) => x.id !== id)),
-    addTrade: (t) =>
-      setTrades((s) => [{ ...t, id: crypto.randomUUID(), status: "open" }, ...s]),
-    closeTrade: (id, closeReason, closeNotes) =>
-      setTrades((s) =>
-        s.map((t) =>
-          t.id === id
-            ? { ...t, status: "closed", closeReason, closeNotes: closeNotes || undefined, exitDate: new Date().toISOString() }
-            : t,
-        ),
-      ),
-    deleteTrade: (id) => setTrades((s) => s.filter((x) => x.id !== id)),
+    // Each mutation updates local state first (instant, and the offline record
+    // of truth), then fires the matching remote write. Remote failures are
+    // logged by the repository layer and never surface as UI exceptions —
+    // localStorage still holds the row either way.
+    addTransaction: (t) => {
+      const row: Transaction = { ...t, id: crypto.randomUUID() };
+      setTransactions((s) => [row, ...s]);
+      const sync = getSync();
+      if (sync) void dbUpsertTransaction(sync.client, sync.userId, row);
+    },
+    deleteTransaction: (id) => {
+      setTransactions((s) => s.filter((x) => x.id !== id));
+      const sync = getSync();
+      if (sync) void deleteTransactionRow(sync.client, sync.userId, id);
+    },
+    addTrade: (t) => {
+      const row: Trade = { ...t, id: crypto.randomUUID(), status: "open" };
+      setTrades((s) => [row, ...s]);
+      const sync = getSync();
+      if (sync) void dbUpsertTrade(sync.client, sync.userId, row);
+    },
+    closeTrade: (id, closeReason, closeNotes) => {
+      // Compute the exit stamp once so local state and the remote row agree.
+      const exitDate = new Date().toISOString();
+      const patch = (t: Trade): Trade => ({
+        ...t,
+        status: "closed",
+        closeReason,
+        closeNotes: closeNotes || undefined,
+        exitDate,
+      });
+      setTrades((s) => s.map((t) => (t.id === id ? patch(t) : t)));
+      const existing = stateRef.current.trades.find((t) => t.id === id);
+      const sync = getSync();
+      if (sync && existing) void dbUpsertTrade(sync.client, sync.userId, patch(existing));
+    },
+    deleteTrade: (id) => {
+      setTrades((s) => s.filter((x) => x.id !== id));
+      const sync = getSync();
+      if (sync) void deleteTradeRow(sync.client, sync.userId, id);
+    },
     toggleObligation,
     addPortfolioSnapshots: (entries, notes, snapshotDate) => {
       const date = snapshotDate ?? new Date().toISOString();
@@ -712,36 +1060,51 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         notes,
       }));
       setPortfolioSnapshots((s) => [...rows, ...s]);
+      const sync = getSync();
+      if (sync) void dbUpsertSnapshots(sync.client, sync.userId, rows);
     },
-    deletePortfolioSnapshot: (id) =>
-      setPortfolioSnapshots((s) => s.filter((x) => x.id !== id)),
+    deletePortfolioSnapshot: (id) => {
+      setPortfolioSnapshots((s) => s.filter((x) => x.id !== id));
+      const sync = getSync();
+      if (sync) void deleteSnapshotRow(sync.client, sync.userId, id);
+    },
     grind,
-    addGrindLog: (metric, label, meta) =>
+    addGrindLog: (metric, label, meta) => {
+      const entry: GrindLogEntry = {
+        id: crypto.randomUUID(),
+        loggedAt: new Date().toISOString(),
+        label,
+        meta,
+      };
       setGrind((s) => ({
         ...s,
-        metrics: {
-          ...s.metrics,
-          [metric]: [
-            { id: crypto.randomUUID(), loggedAt: new Date().toISOString(), label, meta },
-            ...s.metrics[metric],
-          ],
-        },
-      })),
-    deleteGrindLog: (metric, id) =>
+        metrics: { ...s.metrics, [metric]: [entry, ...s.metrics[metric]] },
+      }));
+      const sync = getSync();
+      if (sync) void dbUpsertGrindLog(sync.client, sync.userId, metric, entry);
+    },
+    deleteGrindLog: (metric, id) => {
       setGrind((s) => ({
         ...s,
         metrics: {
           ...s.metrics,
           [metric]: s.metrics[metric].filter((e) => e.id !== id),
         },
-      })),
-    addHustleEntry: (entry) =>
-      setGrind((s) => ({
-        ...s,
-        hustle: [{ ...entry, id: crypto.randomUUID() }, ...s.hustle],
-      })),
-    deleteHustleEntry: (id) =>
-      setGrind((s) => ({ ...s, hustle: s.hustle.filter((e) => e.id !== id) })),
+      }));
+      const sync = getSync();
+      if (sync) void deleteGrindLogRow(sync.client, sync.userId, id);
+    },
+    addHustleEntry: (entry) => {
+      const row: HustleEntry = { ...entry, id: crypto.randomUUID() };
+      setGrind((s) => ({ ...s, hustle: [row, ...s.hustle] }));
+      const sync = getSync();
+      if (sync) void dbUpsertHustleEntry(sync.client, sync.userId, row);
+    },
+    deleteHustleEntry: (id) => {
+      setGrind((s) => ({ ...s, hustle: s.hustle.filter((e) => e.id !== id) }));
+      const sync = getSync();
+      if (sync) void deleteHustleEntryRow(sync.client, sync.userId, id);
+    },
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
