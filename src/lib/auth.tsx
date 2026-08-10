@@ -32,6 +32,7 @@ type AuthCtx = {
   signUp: (email: string, password: string, name?: string) => Promise<SignUpResult>;
   signOut: () => Promise<void>;
   signInWithOAuth: (provider: OAuthProvider) => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
 };
 
 const Ctx = createContext<AuthCtx | null>(null);
@@ -65,6 +66,33 @@ function writeStoredUser(u: AuthUser | null) {
 /** Sync read for route guards (beforeLoad). Matches AuthProvider localStorage key. */
 export function getStoredAuthUser(): AuthUser | null {
   return readStoredUser();
+}
+
+/**
+ * Session-restore watchdog. A hung getSession()/token-refresh network call
+ * (dead connection, no fetch timeout anywhere in @supabase/auth-js) would
+ * otherwise leave `loading` true forever — and _authenticated.tsx's Layout
+ * gates BOTH revealing AppShell and firing the redirect-to-login effect on
+ * `loading`, so a hang there strands the user on a spinner with no way out.
+ * On timeout we fail toward "not signed in": the mirror already painted
+ * whatever it had, and letting the app move on to /login is safer than an
+ * indefinite blank screen.
+ */
+const SESSION_RESTORE_TIMEOUT_MS = 8000;
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timed out")), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
 }
 
 /** Supabase user → the app's slim AuthUser shape. */
@@ -130,13 +158,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     void (async () => {
       try {
-        const { data } = await supabase.auth.getSession();
+        const { data } = await withTimeout(supabase.auth.getSession(), SESSION_RESTORE_TIMEOUT_MS);
         if (cancelled) return;
         applySession(data.session);
       } catch {
-        // Session restore failed (offline, storage blocked). Leave whatever the
-        // mirror gave us — onAuthStateChange corrects it once the client
-        // recovers. What matters is that `loading` still clears below.
+        // Session restore failed OR timed out (offline, storage blocked, a
+        // hung token-refresh request). Leave whatever the mirror gave us —
+        // onAuthStateChange corrects it once/if the client recovers. What
+        // matters is that `loading` still clears below either way, so the
+        // route guard can make its own decision instead of spinning forever.
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -224,16 +254,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       );
     }
 
+    // Routed through /auth/callback (not straight to /dashboard) so there is a
+    // dedicated page to wait out the code exchange and surface a provider-side
+    // error, instead of racing the exchange against _authenticated's route guard.
     const redirectTo =
-      typeof window !== "undefined" ? `${window.location.origin}/dashboard` : undefined;
+      typeof window !== "undefined" ? `${window.location.origin}/auth/callback` : undefined;
     const { error } = await supabase.auth.signInWithOAuth({ provider, options: { redirectTo } });
     if (error) throw new Error(error.message);
     // On success the browser leaves for the provider; the session is picked up
-    // by onAuthStateChange when it redirects back to /dashboard.
+    // by onAuthStateChange when it redirects back to /auth/callback.
   };
 
+  const signInWithGoogle = () => signInWithOAuth("google");
+
   return (
-    <Ctx.Provider value={{ user, loading, signIn, signUp, signOut, signInWithOAuth }}>
+    <Ctx.Provider
+      value={{ user, loading, signIn, signUp, signOut, signInWithOAuth, signInWithGoogle }}
+    >
       {children}
     </Ctx.Provider>
   );

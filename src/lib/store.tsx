@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
 import {
   deleteGrindLogRow,
@@ -560,6 +561,9 @@ const SNAP_KEY = "finstride.portfolio.snapshots";
 const CACHE_OWNER_KEY = "finstride.cache.owner";
 const LOCAL_OWNER = "local";
 
+/** See the trackedWrite()/getPendingWriteCount() doc comment below for what this guards. */
+const PENDING_WRITES_KEY = "finstride.pendingWrites";
+
 const ALL_LOCAL_KEYS = [
   TX_KEY,
   TR_KEY,
@@ -571,6 +575,7 @@ const ALL_LOCAL_KEYS = [
   CUSTOM_PARTITIONS_KEY,
   SHOW_PERSONAL_QUOTES_KEY,
   PENDING_KEY,
+  PENDING_WRITES_KEY,
 ];
 
 /** Full local snapshot — also the payload shape the first-login migration pushes up. */
@@ -684,6 +689,50 @@ function writeCacheOwner(owner: string): void {
   }
 }
 
+/**
+ * Count of remote writes fired but not yet confirmed successful, persisted so
+ * it survives a reload/offline period (unlike a plain in-memory ref).
+ *
+ * This is a deliberately minimal safety net, not a durable retry queue: it
+ * does not know WHAT failed or replay it, only THAT something might still be
+ * unsynced. Its one job is to block the load effect's "cloud wins" wholesale
+ * state replacement while the count is nonzero — without it, a write that
+ * failed (offline, expired token, RLS rejection — repository.ts logs these to
+ * the console and nothing else) would be permanently and silently erased the
+ * next time a load succeeds and overwrites local state with the cloud's
+ * (never-received-that-write) version.
+ */
+function getPendingWriteCount(): number {
+  try {
+    return Number(localStorage.getItem(PENDING_WRITES_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function adjustPendingWriteCount(delta: number): void {
+  try {
+    const next = Math.max(0, getPendingWriteCount() + delta);
+    if (next === 0) localStorage.removeItem(PENDING_WRITES_KEY);
+    else localStorage.setItem(PENDING_WRITES_KEY, String(next));
+  } catch {
+    // Ignore — worst case the safety net can't engage this session.
+  }
+}
+
+/**
+ * Fire a remote write, tracking it in the pending-write count for the
+ * duration. On failure the count is deliberately left incremented (see
+ * PENDING_WRITES_KEY) rather than decremented, so a failed write keeps
+ * blocking "cloud wins" until the user is back online and something succeeds.
+ */
+function trackedWrite(promise: Promise<boolean>): void {
+  adjustPendingWriteCount(1);
+  void promise.then((ok) => {
+    if (ok) adjustPendingWriteCount(-1);
+  });
+}
+
 export function StoreProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const userId = user?.id ?? null;
@@ -701,18 +750,40 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [customPartitions, setCustomPartitions] = useState<CustomPartition[]>([]);
   const [showPersonalQuotes, setShowPersonalQuotesState] = useState(false);
 
+  const owner = userId ?? LOCAL_OWNER;
+
   /**
-   * Gates the persist effects until the initial load finishes.
+   * Which identity's load has fully completed — null until then, and re-armed
+   * (via `owner` changing) on every sign-in/sign-out.
    *
-   * Without it those effects run on the very first commit — while state is
-   * still empty — and overwrite good stored data with empty arrays. That was
-   * already a latent race with synchronous localStorage; it becomes a real
-   * data-loss window now that the load can await a network round-trip.
+   * This is owner-scoped rather than a bare boolean because StoreProvider
+   * stays mounted across sign-in: on the commit where `userId` flips, a bare
+   * "have we ever hydrated" flag would still read true from the PREVIOUS
+   * identity's completed load, letting the settings/pending remote-sync
+   * effects below fire — with state that is either the previous user's, or
+   * this device's pre-login local defaults — against the NEWLY authenticated
+   * account, before that account's own data has even been fetched. Comparing
+   * against the current `owner` makes those effects correctly see "not yet
+   * hydrated for THIS identity" during that transition.
    */
-  const [hydrated, setHydrated] = useState(false);
+  const [hydratedOwner, setHydratedOwner] = useState<string | null>(null);
+  const hydrated = hydratedOwner === owner;
+
   /** Latest state, readable from mutation closures without re-subscribing effects. */
   const stateRef = useRef({ trades, grind });
   stateRef.current = { trades, grind };
+
+  /**
+   * Set by every mutator; cleared at the start of each load. Guards the
+   * "cloud wins" replacement below from silently discarding an edit the user
+   * made during the load's network round-trip — that fetch's snapshot
+   * necessarily predates any such edit, so applying it afterward would erase
+   * the edit from state and then, once `hydrated` flips, from localStorage too.
+   */
+  const localWriteDuringLoadRef = useRef(false);
+  const markLocalWrite = () => {
+    localWriteDuringLoadRef.current = true;
+  };
 
   /** Live sync target, or null when running local-only (offline/unauthenticated/unconfigured). */
   const getSync = (): { client: FinStrideClient; userId: string } | null => {
@@ -724,6 +795,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // ── Load / sync ──────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
+    localWriteDuringLoadRef.current = false;
 
     void (async () => {
       const identity = userId ?? LOCAL_OWNER;
@@ -755,48 +827,88 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
       const client = cloudEnabled && userId ? getSupabaseBrowserClient() : null;
       if (!client || !userId) {
+        // Local-only session (offline / unauthenticated / Supabase not
+        // configured) — safe to stamp ownership unconditionally, nothing
+        // remote is at risk of being mis-attributed.
         if (cloudEnabled) writeCacheOwner(identity);
-        if (!cancelled) setHydrated(true);
+        if (!cancelled) setHydratedOwner(identity);
         return;
       }
 
       const remote = await fetchAllUserData(client, userId, currentMonthKey());
       if (cancelled) return;
 
-      if (remote) {
-        const firstLoginWithLocalData =
-          isBundleEmpty(remote) &&
-          localStateHasData(local) &&
-          priorOwner === LOCAL_OWNER &&
-          !hasMigrated(userId);
-
-        if (firstLoginWithLocalData) {
-          // Pre-auth data on this device, empty cloud account: push it up and
-          // keep the state we already applied (it is exactly what was sent).
-          await migrateLocalDataToSupabase(client, userId, local, currentMonthKey());
-        } else {
-          // Cloud is the source of truth for an authenticated user.
-          setTransactions(remote.transactions);
-          setTrades(remote.trades);
-          setPortfolioSnapshots(remote.portfolioSnapshots);
-          setGrind(remote.grind);
-          if (remote.settings) {
-            setBlueprintSettings(remote.settings.blueprint);
-            setShowPersonalQuotesState(remote.settings.showPersonalQuotes);
-            setCustomPaymentModes(remote.settings.customPaymentModes);
-            setCustomPartitions(remote.settings.customPartitions);
-            setCustomCategories({
-              income: remote.settings.customIncomeCategories,
-              expense: remote.settings.customExpenseCategories,
-            });
-          }
-          setPendingChecklist(remote.pending ?? {});
-        }
-        markMigrated(userId);
+      if (!remote) {
+        // Read failed (network, RLS, expired token, Supabase outage).
+        // Deliberately do NOT stamp the cache owner or touch the migration
+        // flag here — both must only ever be set once we've gotten a real
+        // answer from the cloud, or a single transient failure permanently
+        // poisons the "empty cloud vs. real local data" migration gate and
+        // the cross-tenant clear on every subsequent load. Keep running on
+        // the local snapshot already applied above for this session.
+        toast.error("Couldn't reach the cloud — showing your last saved data.");
+        if (!cancelled) setHydratedOwner(identity);
+        return;
       }
 
-      writeCacheOwner(identity);
-      if (!cancelled) setHydrated(true);
+      const firstLoginWithLocalData =
+        isBundleEmpty(remote) &&
+        localStateHasData(local) &&
+        priorOwner === LOCAL_OWNER &&
+        !hasMigrated(userId);
+
+      if (firstLoginWithLocalData) {
+        // Pre-auth data on this device, empty cloud account: push it up and
+        // keep the state we already applied (it is exactly what was sent).
+        const result = await migrateLocalDataToSupabase(client, userId, local, currentMonthKey());
+        if (cancelled) return;
+        if (result.failures === 0) {
+          markMigrated(userId);
+          writeCacheOwner(identity);
+        } else {
+          // Partial failure: leave both the migration flag and the cache
+          // owner unset. priorOwner stays LOCAL_OWNER, so the NEXT load
+          // re-opens this exact branch and retries — instead of falling
+          // through to "cloud wins" and deleting the rows that never made it
+          // for merely being absent remotely.
+          toast.error(
+            `${result.failures} item(s) didn't sync to the cloud yet — will retry next time you're online.`,
+          );
+        }
+      } else if (localWriteDuringLoadRef.current) {
+        // An edit landed locally while this fetch was in flight — trust it
+        // over this now-stale snapshot instead of silently discarding it.
+        // The read itself succeeded, so ownership bookkeeping is still accurate.
+        writeCacheOwner(identity);
+      } else if (getPendingWriteCount() > 0) {
+        // A write from THIS or an earlier (possibly offline) session never
+        // confirmed success. Applying "cloud wins" now would silently delete
+        // exactly those rows, since the cloud never received them — keep
+        // local authoritative until a write actually succeeds and clears
+        // the count, rather than trusting a read that's known to be incomplete.
+        toast.error("Some earlier changes haven't synced yet — keeping your local copy for now.");
+        writeCacheOwner(identity);
+      } else {
+        // Cloud is the source of truth for an authenticated user.
+        setTransactions(remote.transactions);
+        setTrades(remote.trades);
+        setPortfolioSnapshots(remote.portfolioSnapshots);
+        setGrind(remote.grind);
+        if (remote.settings) {
+          setBlueprintSettings(remote.settings.blueprint);
+          setShowPersonalQuotesState(remote.settings.showPersonalQuotes);
+          setCustomPaymentModes(remote.settings.customPaymentModes);
+          setCustomPartitions(remote.settings.customPartitions);
+          setCustomCategories({
+            income: remote.settings.customIncomeCategories,
+            expense: remote.settings.customExpenseCategories,
+          });
+        }
+        setPendingChecklist(remote.pending ?? {});
+        writeCacheOwner(identity);
+      }
+
+      if (!cancelled) setHydratedOwner(identity);
     })();
 
     return () => {
@@ -858,14 +970,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!hydrated) return;
     const sync = getSync();
     if (!sync) return;
-    void dbUpsertSettings(sync.client, sync.userId, {
-      blueprint: blueprintSettings,
-      showPersonalQuotes,
-      customPaymentModes,
-      customPartitions,
-      customIncomeCategories: customCategories.income,
-      customExpenseCategories: customCategories.expense,
-    });
+    trackedWrite(
+      dbUpsertSettings(sync.client, sync.userId, {
+        blueprint: blueprintSettings,
+        showPersonalQuotes,
+        customPaymentModes,
+        customPartitions,
+        customIncomeCategories: customCategories.income,
+        customExpenseCategories: customCategories.expense,
+      }),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     hydrated,
@@ -882,7 +996,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!hydrated) return;
     const sync = getSync();
     if (!sync) return;
-    void upsertPendingObligations(sync.client, sync.userId, currentMonthKey(), pendingChecklist);
+    trackedWrite(upsertPendingObligations(sync.client, sync.userId, currentMonthKey(), pendingChecklist));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, userId, cloudEnabled, pendingChecklist]);
 
@@ -935,8 +1049,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const partitionLabel = (id: string): string =>
     investmentApps.find((a) => a.id === id)?.label ?? id;
 
-  const toggleObligation = (key: ObligationKey) =>
+  const toggleObligation = (key: ObligationKey) => {
+    markLocalWrite();
     setPendingChecklist((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
 
   // ── Context value ────────────────────────────────────────────────────────
   const value: StoreCtx = {
@@ -948,7 +1064,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     latestSnapshotValues,
     riskCapCapital,
     blueprintSettings,
-    updateBlueprintSettings: (patch) => setBlueprintSettings((prev) => ({ ...prev, ...patch })),
+    updateBlueprintSettings: (patch) => {
+      markLocalWrite();
+      setBlueprintSettings((prev) => ({ ...prev, ...patch }));
+    },
     incomeCategories,
     expenseCategories,
     addCategory: (type, name) => {
@@ -956,6 +1075,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (!trimmed) return;
       const defaults = type === "income" ? DEFAULT_INCOME_CATEGORIES : DEFAULT_EXPENSE_CATEGORIES;
       if (defaults.includes(trimmed)) return; // already a default
+      markLocalWrite();
       setCustomCategories((prev) => {
         if (prev[type].includes(trimmed)) return prev;
         return { ...prev, [type]: [...prev[type], trimmed] };
@@ -964,6 +1084,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     deleteCustomCategory: (type, name) => {
       const defaults = type === "income" ? DEFAULT_INCOME_CATEGORIES : DEFAULT_EXPENSE_CATEGORIES;
       if (defaults.includes(name)) return; // cannot delete defaults
+      markLocalWrite();
       setCustomCategories((prev) => ({
         ...prev,
         [type]: prev[type].filter((c) => c !== name),
@@ -974,10 +1095,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const trimmed = name.trim();
       if (!trimmed) return;
       if (DEFAULT_PAYMENT_MODES.includes(trimmed)) return; // already a default
+      markLocalWrite();
       setCustomPaymentModes((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
     },
     deleteCustomPaymentMode: (name) => {
       if (DEFAULT_PAYMENT_MODES.includes(name)) return; // cannot delete defaults
+      markLocalWrite();
       setCustomPaymentModes((prev) => prev.filter((m) => m !== name));
     },
     investmentApps,
@@ -986,6 +1109,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const trimmed = id.trim();
       if (!trimmed) return;
       if (DEFAULT_INVESTMENT_APPS.some((a) => a.id === trimmed)) return; // already a default
+      markLocalWrite();
       setCustomPartitions((prev) =>
         prev.some((p) => p.id === trimmed)
           ? prev
@@ -1002,34 +1126,42 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         portfolioSnapshots.some((s) => s.brokerPartition === id) ||
         trades.some((t) => t.partition === id);
       if (hasReferences) return false;
+      markLocalWrite();
       setCustomPartitions((prev) => prev.filter((p) => p.id !== id));
       return true;
     },
     partitionLabel,
     showPersonalQuotes,
-    setShowPersonalQuotes: (v) => setShowPersonalQuotesState(v),
+    setShowPersonalQuotes: (v) => {
+      markLocalWrite();
+      setShowPersonalQuotesState(v);
+    },
     // Each mutation updates local state first (instant, and the offline record
     // of truth), then fires the matching remote write. Remote failures are
     // logged by the repository layer and never surface as UI exceptions —
     // localStorage still holds the row either way.
     addTransaction: (t) => {
+      markLocalWrite();
       const row: Transaction = { ...t, id: crypto.randomUUID() };
       setTransactions((s) => [row, ...s]);
       const sync = getSync();
-      if (sync) void dbUpsertTransaction(sync.client, sync.userId, row);
+      if (sync) trackedWrite(dbUpsertTransaction(sync.client, sync.userId, row));
     },
     deleteTransaction: (id) => {
+      markLocalWrite();
       setTransactions((s) => s.filter((x) => x.id !== id));
       const sync = getSync();
-      if (sync) void deleteTransactionRow(sync.client, sync.userId, id);
+      if (sync) trackedWrite(deleteTransactionRow(sync.client, sync.userId, id));
     },
     addTrade: (t) => {
+      markLocalWrite();
       const row: Trade = { ...t, id: crypto.randomUUID(), status: "open" };
       setTrades((s) => [row, ...s]);
       const sync = getSync();
-      if (sync) void dbUpsertTrade(sync.client, sync.userId, row);
+      if (sync) trackedWrite(dbUpsertTrade(sync.client, sync.userId, row));
     },
     closeTrade: (id, closeReason, closeNotes) => {
+      markLocalWrite();
       // Compute the exit stamp once so local state and the remote row agree.
       const exitDate = new Date().toISOString();
       const patch = (t: Trade): Trade => ({
@@ -1042,34 +1174,55 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setTrades((s) => s.map((t) => (t.id === id ? patch(t) : t)));
       const existing = stateRef.current.trades.find((t) => t.id === id);
       const sync = getSync();
-      if (sync && existing) void dbUpsertTrade(sync.client, sync.userId, patch(existing));
+      if (sync && existing) trackedWrite(dbUpsertTrade(sync.client, sync.userId, patch(existing)));
     },
     deleteTrade: (id) => {
+      markLocalWrite();
       setTrades((s) => s.filter((x) => x.id !== id));
       const sync = getSync();
-      if (sync) void deleteTradeRow(sync.client, sync.userId, id);
+      if (sync) trackedWrite(deleteTradeRow(sync.client, sync.userId, id));
     },
     toggleObligation,
     addPortfolioSnapshots: (entries, notes, snapshotDate) => {
+      markLocalWrite();
       const date = snapshotDate ?? new Date().toISOString();
-      const rows: PortfolioSnapshot[] = entries.map((e) => ({
-        id: crypto.randomUUID(),
-        snapshotDate: date,
-        brokerPartition: e.brokerPartition,
-        currentValue: e.currentValue,
-        notes,
-      }));
-      setPortfolioSnapshots((s) => [...rows, ...s]);
+      // Match the remote's ON CONFLICT (user_id, snapshot_date, broker_partition)
+      // DO UPDATE: replace an existing row for the same (date, partition) in
+      // place (same id) instead of always prepending a new one. Without this,
+      // re-recording a partition for a day that already has an entry (e.g.
+      // correcting a typo via the Analytics dialog, which pins the date to a
+      // fixed instant per calendar day) created two local rows that collapsed
+      // into the remote's one — a phantom duplicate that also made "delete the
+      // row you can see" remove the wrong id relative to what the cloud held.
+      let resolvedRows: PortfolioSnapshot[] = [];
+      setPortfolioSnapshots((s) => {
+        const byKey = new Map(s.map((row) => [`${row.snapshotDate}|${row.brokerPartition}`, row]));
+        const touchedKeys = new Set(entries.map((e) => `${date}|${e.brokerPartition}`));
+        const untouched = s.filter((row) => !touchedKeys.has(`${row.snapshotDate}|${row.brokerPartition}`));
+        resolvedRows = entries.map((e) => {
+          const existing = byKey.get(`${date}|${e.brokerPartition}`);
+          return {
+            id: existing?.id ?? crypto.randomUUID(),
+            snapshotDate: date,
+            brokerPartition: e.brokerPartition,
+            currentValue: e.currentValue,
+            notes,
+          };
+        });
+        return [...resolvedRows, ...untouched];
+      });
       const sync = getSync();
-      if (sync) void dbUpsertSnapshots(sync.client, sync.userId, rows);
+      if (sync) trackedWrite(dbUpsertSnapshots(sync.client, sync.userId, resolvedRows));
     },
     deletePortfolioSnapshot: (id) => {
+      markLocalWrite();
       setPortfolioSnapshots((s) => s.filter((x) => x.id !== id));
       const sync = getSync();
-      if (sync) void deleteSnapshotRow(sync.client, sync.userId, id);
+      if (sync) trackedWrite(deleteSnapshotRow(sync.client, sync.userId, id));
     },
     grind,
     addGrindLog: (metric, label, meta) => {
+      markLocalWrite();
       const entry: GrindLogEntry = {
         id: crypto.randomUUID(),
         loggedAt: new Date().toISOString(),
@@ -1081,9 +1234,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         metrics: { ...s.metrics, [metric]: [entry, ...s.metrics[metric]] },
       }));
       const sync = getSync();
-      if (sync) void dbUpsertGrindLog(sync.client, sync.userId, metric, entry);
+      if (sync) trackedWrite(dbUpsertGrindLog(sync.client, sync.userId, metric, entry));
     },
     deleteGrindLog: (metric, id) => {
+      markLocalWrite();
       setGrind((s) => ({
         ...s,
         metrics: {
@@ -1092,18 +1246,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         },
       }));
       const sync = getSync();
-      if (sync) void deleteGrindLogRow(sync.client, sync.userId, id);
+      if (sync) trackedWrite(deleteGrindLogRow(sync.client, sync.userId, id));
     },
     addHustleEntry: (entry) => {
+      markLocalWrite();
       const row: HustleEntry = { ...entry, id: crypto.randomUUID() };
       setGrind((s) => ({ ...s, hustle: [row, ...s.hustle] }));
       const sync = getSync();
-      if (sync) void dbUpsertHustleEntry(sync.client, sync.userId, row);
+      if (sync) trackedWrite(dbUpsertHustleEntry(sync.client, sync.userId, row));
     },
     deleteHustleEntry: (id) => {
+      markLocalWrite();
       setGrind((s) => ({ ...s, hustle: s.hustle.filter((e) => e.id !== id) }));
       const sync = getSync();
-      if (sync) void deleteHustleEntryRow(sync.client, sync.userId, id);
+      if (sync) trackedWrite(deleteHustleEntryRow(sync.client, sync.userId, id));
     },
   };
 

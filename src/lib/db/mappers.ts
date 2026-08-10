@@ -135,7 +135,13 @@ export function rowToTrade(r: DbSwingTradeRow): Trade {
 }
 
 // ─── Snapshots <-> portfolio_snapshots ─────────────────────────────────────
-// snapshot_date is TIMESTAMPTZ, so the full instant round-trips with no truncation.
+// snapshot_date is TIMESTAMPTZ, so the INSTANT round-trips with no truncation —
+// but PostgREST serializes it as e.g. "2026-08-10T12:00:00+00:00", not the
+// "2026-08-10T12:00:00.000Z" the app writes and does string equality/ordering
+// on throughout analytics.tsx (exact-date x-axis lookups, dedupe via Set,
+// carry-forward comparisons). Without normalizing on read, a snapshot fetched
+// from the cloud and a snapshot just added locally for the SAME instant compare
+// as different strings — same day, two x-axis points, phantom duplicate rows.
 export function snapshotToRow(s: PortfolioSnapshot, userId: string): DbPortfolioSnapshotInsert {
   return {
     id: s.id,
@@ -147,10 +153,16 @@ export function snapshotToRow(s: PortfolioSnapshot, userId: string): DbPortfolio
   };
 }
 
+/** Canonicalize any ISO-ish timestamp string to the exact format the app writes. */
+function normalizeInstant(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toISOString();
+}
+
 export function rowToSnapshot(r: DbPortfolioSnapshotRow): PortfolioSnapshot {
   return {
     id: r.id,
-    snapshotDate: r.snapshot_date,
+    snapshotDate: normalizeInstant(r.snapshot_date),
     brokerPartition: r.broker_partition,
     currentValue: Number(r.current_value),
     notes: r.notes ?? undefined,
@@ -180,7 +192,11 @@ export function rowToGrindLog(r: DbGrindLogRow): { metric: GrindMetricKey; entry
       : "systemDesign";
   return {
     metric,
-    entry: { id: r.id, loggedAt: r.logged_at, label: r.label, meta: r.meta ?? undefined },
+    // Same PostgREST-vs-JS timestamptz string mismatch as portfolio_snapshots
+    // (see normalizeInstant above) — nothing compares loggedAt today, but
+    // normalizing keeps the app model's timestamp format uniform regardless
+    // of source.
+    entry: { id: r.id, loggedAt: normalizeInstant(r.logged_at), label: r.label, meta: r.meta ?? undefined },
   };
 }
 

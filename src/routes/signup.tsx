@@ -4,18 +4,20 @@ import { Sparkles, Mail, Lock, User as UserIcon, ArrowRight } from "lucide-react
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { GoogleIcon } from "@/components/GoogleIcon";
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/signup")({ component: SignupPage });
 
 function SignupPage() {
-  const { signUp } = useAuth();
+  const { signUp, signInWithGoogle } = useAuth();
   const nav = useNavigate();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -28,6 +30,16 @@ function SignupPage() {
       toast.error(err.message ?? "Sign up failed");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setGoogleLoading(true);
+    try {
+      await signInWithGoogle();
+    } catch (err: any) {
+      toast.error(err.message ?? "Google sign-in failed");
+      setGoogleLoading(false);
     }
   };
 
@@ -45,6 +57,24 @@ function SignupPage() {
         </div>
 
         <div className="glass-strong rounded-2xl p-6 md:p-8">
+          <button
+            type="button"
+            onClick={handleGoogleSignIn}
+            disabled={googleLoading}
+            className="w-full h-11 rounded-xl border border-glass-border bg-white/5 hover:bg-white/10 transition-colors flex items-center justify-center gap-3 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <GoogleIcon className="size-4" />
+            {googleLoading ? "Redirecting…" : "Continue with Google"}
+          </button>
+
+          <div className="my-6 flex items-center gap-3">
+            <div className="h-px flex-1 bg-glass-border" />
+            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              or continue with email
+            </span>
+            <div className="h-px flex-1 bg-glass-border" />
+          </div>
+
           <form onSubmit={submit} className="space-y-4">
             <div>
               <Label htmlFor="name" className="text-xs uppercase tracking-wider text-muted-foreground">Name</Label>

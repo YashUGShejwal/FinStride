@@ -69,9 +69,17 @@ export function isBundleEmpty(b: RemoteBundle): boolean {
 
 // ─── Reads ─────────────────────────────────────────────────────────────────
 /**
- * Load every table for one user in parallel. Returns null only if the whole
- * read fails catastrophically; individual table failures degrade to empty lists
- * so a single broken table can't block the rest of the app.
+ * Load every table for one user in parallel. Returns null if ANY table read
+ * fails — including a resolved-but-failed PostgREST response, not just a
+ * thrown/rejected request.
+ *
+ * This must NOT degrade a failed read to an empty list. postgrest-js resolves
+ * with `{ data: null, error }` on a non-2xx response or even a network
+ * failure (it does not reject by default), so a `data ?? []` fallback would
+ * make "the request failed" indistinguishable from "the table is genuinely
+ * empty" — and the caller (src/lib/store.tsx) treats an empty remote bundle as
+ * authoritative, replacing and then persisting local state with it. A single
+ * transient error would silently blank the user's entire ledger.
  */
 export async function fetchAllUserData(
   client: FinStrideClient,
@@ -115,6 +123,20 @@ export async function fetchAllUserData(
           .maybeSingle(),
       ],
     );
+
+    const failed = [
+      ["cashflow_ledger", txRes.error],
+      ["swing_trades", trRes.error],
+      ["portfolio_snapshots", snapRes.error],
+      ["grind_logs", grindRes.error],
+      ["hustle_entries", hustleRes.error],
+      ["user_settings", settingsRes.error],
+      ["pending_obligations", pendingRes.error],
+    ].find(([, error]) => error);
+    if (failed) {
+      logFailure(`fetchAllUserData (${failed[0]})`, failed[1]);
+      return null;
+    }
 
     const metrics: GrindState["metrics"] = {
       systemDesign: [],
