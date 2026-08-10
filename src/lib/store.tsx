@@ -254,6 +254,13 @@ function normalizeCustomPartitions(raw: unknown): CustomPartition[] {
 // else's personal notes without opting in.
 const SHOW_PERSONAL_QUOTES_KEY = "finstride.quotes.showPersonal";
 
+// ─── Stealth privacy mode ───────────────────────────────────────────────────
+// Blurs sensitive figures (net worth, balances, trade sizes, returns) across
+// the app. A pure UI preference: persisted immediately, never synced to the
+// cloud, and deliberately NOT part of ALL_LOCAL_KEYS so "Delete All Data"
+// doesn't quietly switch privacy off.
+const STEALTH_KEY = "finstride.ui.stealth";
+
 // ─── Monthly obligations checklist ────────────────────────────────────────
 export type ObligationKey = "fixedRunrate" | "scooterEmi" | "growwMfSip" | "ccSettled";
 export type MonthlyPending = Partial<Record<ObligationKey, boolean>>;
@@ -533,6 +540,9 @@ type StoreCtx = {
   // Quote preferences
   showPersonalQuotes: boolean;
   setShowPersonalQuotes: (v: boolean) => void;
+  // Stealth privacy mode
+  isStealthMode: boolean;
+  toggleStealthMode: () => void;
   // Transactions
   addTransaction: (t: Omit<Transaction, "id">) => void;
   deleteTransaction: (id: string) => void;
@@ -786,6 +796,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [customPaymentModes, setCustomPaymentModes] = useState<string[]>([]);
   const [customPartitions, setCustomPartitions] = useState<CustomPartition[]>([]);
   const [showPersonalQuotes, setShowPersonalQuotesState] = useState(false);
+  // Always starts false and reads localStorage after mount: SSR has no
+  // localStorage, so initializing from it lazily would make the server and
+  // first client render disagree on the blur classes (hydration mismatch).
+  const [isStealthMode, setIsStealthMode] = useState(false);
+
+  useEffect(() => {
+    try {
+      setIsStealthMode(localStorage.getItem(STEALTH_KEY) === "true");
+    } catch {
+      // Ignore — stealth simply stays off this session.
+    }
+  }, []);
 
   const owner = userId ?? LOCAL_OWNER;
 
@@ -1185,6 +1207,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setShowPersonalQuotes: (v) => {
       markLocalWrite();
       setShowPersonalQuotesState(v);
+    },
+    isStealthMode,
+    toggleStealthMode: () => {
+      setIsStealthMode((prev) => {
+        const next = !prev;
+        try {
+          localStorage.setItem(STEALTH_KEY, String(next));
+        } catch {
+          // Ignore — the in-memory toggle still applies for this session.
+        }
+        return next;
+      });
     },
     // Each mutation updates local state first (instant, and the offline record
     // of truth), then fires the matching remote write. Remote failures are

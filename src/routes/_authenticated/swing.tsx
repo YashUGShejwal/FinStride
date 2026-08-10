@@ -10,6 +10,8 @@ import {
   type BrokerPartition, type CloseReason, type PortfolioPartitionKey,
 } from "@/lib/store";
 import { inr, fmtDate, todayLocalISO } from "@/lib/format";
+import { AnimatedNumber } from "@/components/AnimatedNumber";
+import { Sensitive } from "@/components/Sensitive";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -105,7 +107,11 @@ function CapitalSnapshotPanel() {
             <p className="text-sm font-semibold">Capital Snapshot</p>
             <p className="text-xs text-muted-foreground">
               {partitionLabel(blueprintSettings.riskCapPartition)} active capital:{" "}
-              <span className="text-foreground font-medium tabular-nums">{inr(riskCapCapital)}</span>
+              <Sensitive>
+                <span className="text-foreground font-medium tnum">
+                  <AnimatedNumber value={riskCapCapital} format={inr} />
+                </span>
+              </Sensitive>
               {!riskCapPartitionHasSnapshot && (
                 <span className="ml-1 text-[oklch(0.78_0.18_80)]">(no snapshot yet)</span>
               )}
@@ -124,12 +130,18 @@ function CapitalSnapshotPanel() {
           {portfolioPartitions.map((p) => {
             const val = latestSnapshotValues[p.key];
             return (
-              <div key={p.key} className="glass rounded-xl p-3">
+              <div key={p.key} className="glass kpi-card rounded-xl p-3">
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
                   {p.label}
                 </p>
-                <p className="text-sm font-semibold tabular-nums mt-1">
-                  {val !== undefined ? inr(val) : <span className="text-muted-foreground">—</span>}
+                <p className="text-sm font-semibold tnum mt-1">
+                  {val !== undefined ? (
+                    <Sensitive>
+                      <AnimatedNumber value={val} format={inr} />
+                    </Sensitive>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
                 </p>
               </div>
             );
@@ -162,7 +174,7 @@ function CapitalSnapshotPanel() {
                     min="0"
                     value={values[p.key] ?? ""}
                     onChange={(e) => setValues((v) => ({ ...v, [p.key]: e.target.value }))}
-                    className="bg-input/40 border-glass-border tabular-nums pl-7"
+                    className="bg-input/40 border-glass-border tnum pl-7"
                     placeholder={
                       latestSnapshotValues[p.key] !== undefined
                         ? String(latestSnapshotValues[p.key])
@@ -304,8 +316,11 @@ function SwingPage() {
         </h1>
         <p className="text-sm text-muted-foreground mt-2">
           Rule-enforced. Equity only. 3% risk cap on{" "}
-          <span className="text-foreground font-medium">{inr(riskCapCapital)}</span> {riskCapPartitionLabel}{" "}
-          capital → max {inr(cap)} per position.
+          <Sensitive>
+            <span className="text-foreground font-medium tnum">{inr(riskCapCapital)}</span>
+          </Sensitive>{" "}
+          {riskCapPartitionLabel} capital → max <Sensitive><span className="tnum">{inr(cap)}</span></Sensitive> per
+          position.
         </p>
       </header>
 
@@ -366,7 +381,7 @@ function SwingPage() {
               min="1"
               value={qty}
               onChange={(e) => setQty(e.target.value)}
-              className="bg-input/40 border-glass-border tabular-nums"
+              className="bg-input/40 border-glass-border tnum"
               placeholder="0"
             />
           </Field>
@@ -406,7 +421,7 @@ function SwingPage() {
               step="0.05"
               value={entry}
               onChange={(e) => setEntry(e.target.value)}
-              className="bg-input/40 border-glass-border tabular-nums"
+              className="bg-input/40 border-glass-border tnum"
               placeholder="0.00"
             />
           </Field>
@@ -416,7 +431,7 @@ function SwingPage() {
               step="0.05"
               value={target}
               onChange={(e) => setTarget(e.target.value)}
-              className="bg-input/40 border-glass-border tabular-nums"
+              className="bg-input/40 border-glass-border tnum"
               placeholder="0.00"
             />
           </Field>
@@ -426,7 +441,7 @@ function SwingPage() {
               step="0.05"
               value={stop}
               onChange={(e) => setStop(e.target.value)}
-              className="bg-input/40 border-glass-border tabular-nums"
+              className="bg-input/40 border-glass-border tnum"
               placeholder="0.00"
             />
           </Field>
@@ -449,11 +464,14 @@ function SwingPage() {
                   Position exposure
                 </span>
                 <span className="ml-2 text-muted-foreground/60">
-                  (3% of {inr(riskCapCapital)} {riskCapPartitionLabel})
+                  (3% of <Sensitive><span className="tnum">{inr(riskCapCapital)}</span></Sensitive>{" "}
+                  {riskCapPartitionLabel})
                 </span>
               </div>
-              <span className="tabular-nums font-medium">
-                {inr(exposure)} / {inr(cap)} cap
+              <span className="tnum font-medium">
+                <Sensitive>
+                  {inr(exposure)} / {inr(cap)} cap
+                </Sensitive>
               </span>
             </div>
             <div className="mt-2 h-2 rounded-full bg-white/5 overflow-hidden">
@@ -520,8 +538,13 @@ function SwingPage() {
                         </span>
                       </div>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {fmtDate(t.entryDate)} • {t.qty} × {inr(t.entryPrice)} • Tgt{" "}
-                        {inr(t.targetPrice)} • SL {inr(t.stopLoss)}
+                        {fmtDate(t.entryDate)} •{" "}
+                        <Sensitive>
+                          <span className="tnum">
+                            {t.qty} × {inr(t.entryPrice)} • Tgt {inr(t.targetPrice)} • SL{" "}
+                            {inr(t.stopLoss)}
+                          </span>
+                        </Sensitive>
                       </p>
                       {t.notes && (
                         <p className="text-xs text-muted-foreground/70 mt-1 italic">{t.notes}</p>
@@ -532,7 +555,7 @@ function SwingPage() {
                         <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
                           R:R
                         </p>
-                        <p className="font-semibold tabular-nums text-sm">
+                        <p className="font-semibold tnum text-sm">
                           {isFinite(r) ? r.toFixed(2) : "—"}
                         </p>
                       </div>
@@ -649,8 +672,13 @@ function SwingPage() {
                     </div>
                     <p className="text-xs text-muted-foreground mt-0.5">
                       Entry {fmtDate(t.entryDate)}
-                      {t.exitDate ? ` → Closed ${fmtDate(t.exitDate)}` : ""} • {t.qty} ×{" "}
-                      {inr(t.entryPrice)} • Tgt {inr(t.targetPrice)} • SL {inr(t.stopLoss)}
+                      {t.exitDate ? ` → Closed ${fmtDate(t.exitDate)}` : ""} •{" "}
+                      <Sensitive>
+                        <span className="tnum">
+                          {t.qty} × {inr(t.entryPrice)} • Tgt {inr(t.targetPrice)} • SL{" "}
+                          {inr(t.stopLoss)}
+                        </span>
+                      </Sensitive>
                     </p>
                     {t.notes && (
                       <p className="text-xs text-muted-foreground/60 mt-0.5 italic">{t.notes}</p>

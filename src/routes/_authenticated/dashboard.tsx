@@ -3,6 +3,8 @@ import { useMemo } from "react";
 import { ArrowDownRight, ArrowUpRight, Wallet, TrendingUp, Shield, Activity } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { inr, fmtDate } from "@/lib/format";
+import { AnimatedNumber } from "@/components/AnimatedNumber";
+import { Sensitive } from "@/components/Sensitive";
 import { DailyQuoteFooter } from "@/components/DailyQuoteFooter";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({ component: Dashboard });
@@ -27,7 +29,7 @@ function Dashboard() {
   return (
     <div className="space-y-6">
       <header>
-        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Command Deck</p>
+        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Glance Hub</p>
         <h1 className="text-3xl md:text-4xl font-semibold mt-1">
           Your <span className="text-gradient">runway</span> at a glance
         </h1>
@@ -40,31 +42,57 @@ function Dashboard() {
           tone="primary"
           icon={<Wallet className="size-5" />}
           label="Monthly Salary Baseline"
-          value={inr(blueprintSettings.defaultSalary)}
+          value={blueprintSettings.defaultSalary}
           hint="Fixed monthly income"
         />
         <KpiCard
           tone="success"
           icon={<Shield className="size-5" />}
           label="Fixed Operational Runway"
-          value={inr(stats.runway)}
-          hint={`After ${inr(stats.commitments)} commitments`}
+          value={stats.runway}
+          hint={
+            <>
+              After <Sensitive><span className="tnum">{inr(stats.commitments)}</span></Sensitive>{" "}
+              commitments
+            </>
+          }
         />
         <KpiCard
           tone="danger"
           icon={<Activity className="size-5" />}
           label="Active Commitments"
-          value={inr(stats.commitments)}
-          hint={`${inr(blueprintSettings.fixedRunrate)} runrate + ${inr(blueprintSettings.scooterEmi)} EMI`}
+          value={stats.commitments}
+          hint={
+            <>
+              <Sensitive><span className="tnum">{inr(blueprintSettings.fixedRunrate)}</span></Sensitive>{" "}
+              runrate +{" "}
+              <Sensitive><span className="tnum">{inr(blueprintSettings.scooterEmi)}</span></Sensitive>{" "}
+              EMI
+            </>
+          }
         />
       </section>
 
       {/* Secondary stats */}
       <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <MiniStat label="Income (logged)" value={inr(stats.income)} icon={<ArrowUpRight className="size-4 text-[oklch(0.72_0.18_155)]" />} />
-        <MiniStat label="Expenses (logged)" value={inr(stats.expense)} icon={<ArrowDownRight className="size-4 text-[oklch(0.7_0.22_20)]" />} />
-        <MiniStat label="Net flow" value={inr(stats.net)} icon={<Wallet className="size-4 text-primary" />} />
-        <MiniStat label="Active trades" value={String(trades.length)} icon={<TrendingUp className="size-4 text-accent" />} />
+        <MiniStat
+          label="Income (logged)"
+          icon={<ArrowUpRight className="size-4 text-[oklch(0.72_0.18_155)]" />}
+        >
+          <Sensitive><AnimatedNumber value={stats.income} format={inr} /></Sensitive>
+        </MiniStat>
+        <MiniStat
+          label="Expenses (logged)"
+          icon={<ArrowDownRight className="size-4 text-[oklch(0.7_0.22_20)]" />}
+        >
+          <Sensitive><AnimatedNumber value={stats.expense} format={inr} /></Sensitive>
+        </MiniStat>
+        <MiniStat label="Net flow" icon={<Wallet className="size-4 text-primary" />}>
+          <Sensitive><AnimatedNumber value={stats.net} format={inr} /></Sensitive>
+        </MiniStat>
+        <MiniStat label="Active trades" icon={<TrendingUp className="size-4 text-accent" />}>
+          {String(trades.length)}
+        </MiniStat>
       </section>
 
       {/* Recent ledger */}
@@ -91,8 +119,10 @@ function Dashboard() {
                     <p className="text-xs text-muted-foreground">{fmtDate(t.date)} • {t.account}</p>
                   </div>
                 </div>
-                <p className={`font-semibold tabular-nums ${t.type === "income" ? "text-[oklch(0.78_0.16_155)]" : "text-[oklch(0.75_0.18_25)]"}`}>
-                  {t.type === "income" ? "+" : "−"}{inr(t.amount)}
+                <p className={`font-semibold tnum ${t.type === "income" ? "text-[oklch(0.78_0.16_155)]" : "text-[oklch(0.75_0.18_25)]"}`}>
+                  <Sensitive>
+                    {t.type === "income" ? "+" : "−"}{inr(t.amount)}
+                  </Sensitive>
                 </p>
               </li>
             ))}
@@ -118,29 +148,31 @@ function Dashboard() {
   );
 }
 
-function KpiCard({ tone, icon, label, value, hint }: { tone: "primary" | "success" | "danger"; icon: React.ReactNode; label: string; value: string; hint: string }) {
+function KpiCard({ tone, icon, label, value, hint }: { tone: "primary" | "success" | "danger"; icon: React.ReactNode; label: string; value: number; hint: React.ReactNode }) {
   const grad = tone === "primary" ? "gradient-primary" : tone === "success" ? "gradient-success" : "gradient-danger";
   return (
-    <div className="glass rounded-2xl p-5 relative overflow-hidden">
+    <div className="glass kpi-card rounded-2xl p-5 relative overflow-hidden">
       <div className={`absolute -right-10 -top-10 size-32 ${grad} opacity-20 blur-2xl rounded-full`} />
       <div className="flex items-center justify-between">
         <p className="text-xs uppercase tracking-wider text-muted-foreground">{label}</p>
         <div className={`size-9 rounded-xl ${grad} grid place-items-center text-background`}>{icon}</div>
       </div>
-      <p className="text-3xl font-semibold mt-3 tabular-nums">{value}</p>
+      <p className="text-3xl font-semibold mt-3 tnum">
+        <Sensitive><AnimatedNumber value={value} format={inr} /></Sensitive>
+      </p>
       <p className="text-xs text-muted-foreground mt-1">{hint}</p>
     </div>
   );
 }
 
-function MiniStat({ label, value, icon }: { label: string; value: string; icon: React.ReactNode }) {
+function MiniStat({ label, children, icon }: { label: string; children: React.ReactNode; icon: React.ReactNode }) {
   return (
-    <div className="glass rounded-xl p-4">
+    <div className="glass kpi-card rounded-xl p-4">
       <div className="flex items-center justify-between">
         <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</p>
         {icon}
       </div>
-      <p className="text-lg font-semibold mt-2 tabular-nums">{value}</p>
+      <p className="text-lg font-semibold mt-2 tnum">{children}</p>
     </div>
   );
 }

@@ -13,6 +13,7 @@ import {
   DEFAULT_INVESTMENT_APPS,
 } from "@/lib/store";
 import { inr } from "@/lib/format";
+import { Sensitive } from "@/components/Sensitive";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -146,7 +147,8 @@ function SettingsPage() {
           <div>
             <h2 className="font-semibold">Blueprint Configuration</h2>
             <p className="text-xs text-muted-foreground">
-              Changes reflect immediately in Dashboard KPIs, Pending, and Swing risk cap.
+              Changes reflect immediately in Dashboard KPIs, Cash Flow's Obligations & Dues, and
+              the Swing risk cap.
             </p>
           </div>
         </div>
@@ -155,25 +157,25 @@ function SettingsPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <BpField
               label="Monthly Salary Baseline (₹)"
-              hint={`Currently: ${inr(blueprintSettings.defaultSalary)}`}
+              hint={<CurrentAmount value={blueprintSettings.defaultSalary} />}
               value={bp.defaultSalary}
               onChange={(v) => setBp((s) => ({ ...s, defaultSalary: v }))}
             />
             <BpField
               label="Fixed Runrate / Rent (₹)"
-              hint={`Currently: ${inr(blueprintSettings.fixedRunrate)}`}
+              hint={<CurrentAmount value={blueprintSettings.fixedRunrate} />}
               value={bp.fixedRunrate}
               onChange={(v) => setBp((s) => ({ ...s, fixedRunrate: v }))}
             />
             <BpField
               label="Loan/EMI (₹)"
-              hint={`Currently: ${inr(blueprintSettings.scooterEmi)}`}
+              hint={<CurrentAmount value={blueprintSettings.scooterEmi} />}
               value={bp.scooterEmi}
               onChange={(v) => setBp((s) => ({ ...s, scooterEmi: v }))}
             />
             <BpField
               label="Investment SIP (₹)"
-              hint={`Currently: ${inr(blueprintSettings.growwMfSip)}`}
+              hint={<CurrentAmount value={blueprintSettings.growwMfSip} />}
               value={bp.growwMfSip}
               onChange={(v) => setBp((s) => ({ ...s, growwMfSip: v }))}
             />
@@ -333,7 +335,9 @@ function SettingsPage() {
           <div>
             <h2 className="font-semibold">Data Management</h2>
             <p className="text-xs text-muted-foreground">
-              Back up everything to a file, restore from a backup, or wipe local data and start fresh.
+              Back up everything to a file, restore from a backup, or wipe local data and start
+              fresh. Backups also include legacy Grind Deck data recorded before that module was
+              retired.
             </p>
           </div>
         </div>
@@ -379,9 +383,9 @@ function SettingsPage() {
                   <TriangleAlert className="size-4 text-destructive" /> Delete all local data?
                 </AlertDialogTitle>
                 <AlertDialogDescription>
-                  This permanently clears every transaction, trade, portfolio snapshot, Grind Deck
-                  entry, and setting stored on this device, and resets everything to zero/empty
-                  defaults. Export a backup first if you want to keep a copy. This cannot be undone.
+                  This permanently clears every transaction, trade, portfolio snapshot, and
+                  setting stored on this device, and resets everything to zero/empty defaults.
+                  Export a backup first if you want to keep a copy. This cannot be undone.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -402,6 +406,18 @@ function SettingsPage() {
 }
 
 // ─── Blueprint field ────────────────────────────────────────────────────────
+/** "Currently: ₹X" hint — the amount blurs in stealth mode like every other figure. */
+function CurrentAmount({ value }: { value: number }) {
+  return (
+    <>
+      Currently:{" "}
+      <Sensitive>
+        <span className="tnum">{inr(value)}</span>
+      </Sensitive>
+    </>
+  );
+}
+
 function BpField({
   label,
   hint,
@@ -413,7 +429,7 @@ function BpField({
   step = "1",
 }: {
   label: string;
-  hint: string;
+  hint: React.ReactNode;
   value: string;
   onChange: (v: string) => void;
   suffix?: string;
@@ -437,7 +453,7 @@ function BpField({
           step={step}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className={`bg-input/40 border-glass-border tabular-nums ${suffix ? "pr-8" : ""}`}
+          className={`bg-input/40 border-glass-border tnum ${suffix ? "pr-8" : ""}`}
         />
       </div>
       <p className="text-[11px] text-muted-foreground mt-1">{hint}</p>

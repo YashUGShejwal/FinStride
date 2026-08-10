@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { LogOut, Mail, Shield, Wallet, TrendingUp } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useStore } from "@/lib/store";
+import { Sensitive } from "@/components/Sensitive";
 import { Button } from "@/components/ui/button";
 import { inr } from "@/lib/format";
 
@@ -32,7 +33,17 @@ function ProfilePage() {
       <section className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <Stat icon={<Wallet className="size-4 text-primary" />} label="Transactions" value={String(transactions.length)} />
         <Stat icon={<TrendingUp className="size-4 text-accent" />} label="Swing trades" value={String(trades.length)} />
-        <Stat icon={<Shield className="size-4 text-[oklch(0.78_0.16_155)]" />} label="Risk cap" value={riskCapCapital > 0 ? inr(riskCapCapital * blueprintSettings.defaultRiskCapPct) : `${(blueprintSettings.defaultRiskCapPct * 100).toFixed(1)}%`} />
+        <Stat
+          icon={<Shield className="size-4 text-[oklch(0.78_0.16_155)]" />}
+          label="Risk cap"
+          value={
+            <Sensitive>
+              {riskCapCapital > 0
+                ? inr(riskCapCapital * blueprintSettings.defaultRiskCapPct)
+                : `${(blueprintSettings.defaultRiskCapPct * 100).toFixed(1)}%`}
+            </Sensitive>
+          }
+        />
       </section>
 
       <section className="glass rounded-2xl p-5">
@@ -60,9 +71,9 @@ function ProfilePage() {
       <section className="glass rounded-2xl p-5">
         <h2 className="font-semibold">Blueprint</h2>
         <ul className="mt-3 text-sm space-y-2 text-muted-foreground">
-          <li>• Salary baseline <span className="text-foreground font-medium">{inr(blueprintSettings.defaultSalary)}</span></li>
-          <li>• Fixed runrate <span className="text-foreground font-medium">{inr(blueprintSettings.fixedRunrate)}</span> + loan EMI <span className="text-foreground font-medium">{inr(blueprintSettings.scooterEmi)}</span></li>
-          <li>• <span className="text-foreground font-medium">{(blueprintSettings.defaultRiskCapPct * 100).toFixed(1)}%</span> per-trade risk cap on latest {partitionLabel(blueprintSettings.riskCapPartition)} snapshot</li>
+          <li>• Salary baseline <Sensitive><span className="text-foreground font-medium tnum">{inr(blueprintSettings.defaultSalary)}</span></Sensitive></li>
+          <li>• Fixed runrate <Sensitive><span className="text-foreground font-medium tnum">{inr(blueprintSettings.fixedRunrate)}</span></Sensitive> + loan EMI <Sensitive><span className="text-foreground font-medium tnum">{inr(blueprintSettings.scooterEmi)}</span></Sensitive></li>
+          <li>• <span className="text-foreground font-medium tnum">{(blueprintSettings.defaultRiskCapPct * 100).toFixed(1)}%</span> per-trade risk cap on latest {partitionLabel(blueprintSettings.riskCapPartition)} snapshot</li>
           <li>• F&O instruments blocked at the input layer</li>
         </ul>
       </section>
@@ -75,14 +86,14 @@ function ProfilePage() {
   );
 }
 
-function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; value: React.ReactNode }) {
   return (
-    <div className="glass rounded-xl p-4">
+    <div className="glass kpi-card rounded-xl p-4">
       <div className="flex items-center justify-between">
         <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</p>
         {icon}
       </div>
-      <p className="text-lg font-semibold mt-2 tabular-nums">{value}</p>
+      <p className="text-lg font-semibold mt-2 tnum">{value}</p>
     </div>
   );
 }

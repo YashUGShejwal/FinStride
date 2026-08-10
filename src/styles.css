@@ -40,54 +40,60 @@
 :root {
   --radius: 1rem;
 
-  /* Dark glass palette - default and only theme */
-  --background: oklch(0.16 0.02 265);
-  --foreground: oklch(0.97 0.01 250);
+  /* ── Obsidian Dark — default and only theme ─────────────────────────────
+     App floor #05070a, card surfaces #0d111d. Kept as hex (not oklch) so the
+     two anchor colors match the spec byte-for-byte; everything else derives
+     from the same near-black blue family. */
+  --background: #05070a;
+  --foreground: oklch(0.96 0.008 250);
 
-  --card: oklch(0.22 0.025 265 / 0.55);
-  --card-foreground: oklch(0.97 0.01 250);
+  --card: #0d111d;
+  --card-foreground: oklch(0.96 0.008 250);
 
-  --popover: oklch(0.2 0.03 265);
-  --popover-foreground: oklch(0.97 0.01 250);
+  --popover: #0d111d;
+  --popover-foreground: oklch(0.96 0.008 250);
 
-  --primary: oklch(0.72 0.18 195);
-  --primary-foreground: oklch(0.13 0.02 265);
+  --primary: oklch(0.78 0.15 165);
+  --primary-foreground: #05070a;
 
-  --secondary: oklch(0.28 0.04 270 / 0.6);
-  --secondary-foreground: oklch(0.97 0.01 250);
+  --secondary: oklch(0.2 0.02 260);
+  --secondary-foreground: oklch(0.96 0.008 250);
 
-  --muted: oklch(0.26 0.03 265 / 0.6);
-  --muted-foreground: oklch(0.7 0.02 255);
+  --muted: oklch(0.19 0.015 260);
+  --muted-foreground: oklch(0.62 0.015 255);
 
-  --accent: oklch(0.68 0.22 305);
-  --accent-foreground: oklch(0.13 0.02 265);
+  --accent: oklch(0.72 0.14 195);
+  --accent-foreground: #05070a;
 
-  --destructive: oklch(0.65 0.24 25);
+  --destructive: oklch(0.63 0.22 25);
   --destructive-foreground: oklch(0.98 0.01 0);
 
-  --success: oklch(0.72 0.18 155);
-  --success-foreground: oklch(0.12 0.02 265);
+  --success: oklch(0.74 0.17 160);
+  --success-foreground: #05070a;
 
-  --warning: oklch(0.78 0.17 75);
-  --warning-foreground: oklch(0.12 0.02 265);
+  --warning: oklch(0.78 0.16 75);
+  --warning-foreground: #05070a;
 
   --border: oklch(1 0 0 / 0.08);
-  --input: oklch(1 0 0 / 0.06);
-  --ring: oklch(0.72 0.18 195);
+  --input: oklch(1 0 0 / 0.05);
+  --ring: oklch(0.78 0.15 165);
 
-  --glass: oklch(0.22 0.03 270 / 0.5);
-  --glass-border: oklch(1 0 0 / 0.1);
+  --glass: oklch(0.155 0.015 260 / 0.72);
+  --glass-border: oklch(1 0 0 / 0.08);
 
-  --gradient-app: radial-gradient(1200px 800px at 10% -10%, oklch(0.32 0.12 280 / 0.55), transparent 60%),
-                  radial-gradient(900px 700px at 110% 10%, oklch(0.3 0.14 200 / 0.45), transparent 60%),
-                  linear-gradient(180deg, oklch(0.14 0.02 265), oklch(0.11 0.015 265));
-  --gradient-primary: linear-gradient(135deg, oklch(0.72 0.18 195), oklch(0.68 0.22 270));
-  --gradient-accent: linear-gradient(135deg, oklch(0.68 0.22 305), oklch(0.72 0.18 220));
-  --gradient-success: linear-gradient(135deg, oklch(0.72 0.18 155), oklch(0.7 0.17 190));
-  --gradient-danger: linear-gradient(135deg, oklch(0.7 0.22 20), oklch(0.6 0.24 350));
+  --gradient-app: radial-gradient(1100px 700px at 15% -10%, oklch(0.2 0.05 200 / 0.32), transparent 60%),
+                  radial-gradient(900px 650px at 105% 5%, oklch(0.2 0.06 165 / 0.22), transparent 55%),
+                  linear-gradient(180deg, #070a10, #05070a 55%);
+  --gradient-primary: linear-gradient(135deg, oklch(0.78 0.15 165), oklch(0.7 0.14 200));
+  --gradient-accent: linear-gradient(135deg, oklch(0.72 0.14 195), oklch(0.68 0.16 250));
+  --gradient-success: linear-gradient(135deg, oklch(0.74 0.17 160), oklch(0.72 0.15 190));
+  --gradient-danger: linear-gradient(135deg, oklch(0.68 0.21 22), oklch(0.6 0.22 350));
 
-  --shadow-glow: 0 10px 40px -10px oklch(0.72 0.18 195 / 0.45);
-  --shadow-card: 0 8px 32px -8px oklch(0 0 0 / 0.5);
+  --shadow-glow: 0 10px 40px -10px oklch(0.78 0.15 165 / 0.35);
+  --shadow-card: 0 8px 32px -12px oklch(0 0 0 / 0.65);
+
+  --font-mono-nums: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
 }
 
 @layer base {
@@ -102,6 +108,7 @@
   body {
     color: var(--color-foreground);
     background: var(--gradient-app);
+    background-color: #05070a;
     background-attachment: fixed;
     -webkit-font-smoothing: antialiased;
     font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Inter, "Helvetica Neue", sans-serif;
@@ -117,7 +124,7 @@
     box-shadow: var(--shadow-card);
   }
   .glass-strong {
-    background: oklch(0.2 0.025 265 / 0.78);
+    background: oklch(0.14 0.015 260 / 0.85);
     backdrop-filter: blur(24px) saturate(160%);
     -webkit-backdrop-filter: blur(24px) saturate(160%);
     border: 1px solid var(--glass-border);
@@ -134,4 +141,38 @@
   }
   .glow { box-shadow: var(--shadow-glow); }
   .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+
+  /* Financial figures: monospaced tabular numerals, everywhere money renders. */
+  .tnum {
+    font-family: var(--font-mono-nums);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+
+  /* Primary KPI metric cards: quiet hairline that warms to emerald on hover. */
+  .kpi-card {
+    border: 1px solid oklch(1 0 0 / 0.08);
+    transition: border-color 200ms ease, box-shadow 200ms ease, transform 200ms ease;
+  }
+  .kpi-card:hover {
+    border-color: oklch(0.72 0.17 160 / 0.3);
+    box-shadow: 0 0 0 1px oklch(0.72 0.17 160 / 0.12), var(--shadow-card);
+  }
+
+  /* Stealth privacy mode: sensitive figures blur out and can't be selected;
+     hovering a value momentarily reveals it without leaving stealth. The
+     reveal is gated to genuinely hover-capable devices — on touch screens a
+     tap would apply sticky :hover and expose the value to exactly the
+     shoulder-surfer stealth exists for. */
+  .stealth-blur {
+    filter: blur(8px);
+    user-select: none;
+    -webkit-user-select: none;
+    transition: filter 220ms ease;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .stealth-blur:hover {
+      filter: blur(0);
+    }
+  }
 }

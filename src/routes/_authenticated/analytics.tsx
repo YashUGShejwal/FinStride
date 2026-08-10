@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   PieChart, Pie, Cell, ResponsiveContainer,
@@ -15,6 +15,8 @@ import {
   type PortfolioSnapshot,
 } from "@/lib/store";
 import { inr, fmtDate, todayLocalISO } from "@/lib/format";
+import { AnimatedNumber } from "@/components/AnimatedNumber";
+import { Sensitive } from "@/components/Sensitive";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,7 +25,14 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 
-export const Route = createFileRoute("/_authenticated/analytics")({ component: AnalyticsPage });
+type AnalyticsSearch = { action?: "add-snapshot" };
+
+export const Route = createFileRoute("/_authenticated/analytics")({
+  validateSearch: (search: Record<string, unknown>): AnalyticsSearch => ({
+    action: search.action === "add-snapshot" ? "add-snapshot" : undefined,
+  }),
+  component: AnalyticsPage,
+});
 
 // ─── Dark theme colours per partition ─────────────────────────────────────
 // Hand-picked for the 4 built-in defaults; any custom partition a user adds
@@ -71,8 +80,8 @@ function DarkTooltip({
     <div className="glass-strong rounded-xl border border-glass-border p-3 text-xs space-y-1 shadow-xl">
       <p className="text-muted-foreground mb-1">{label}</p>
       {payload.map((e, i) => (
-        <p key={i} style={{ color: e.color }} className="font-medium tabular-nums">
-          {e.dataKey}: {inr(e.value)}
+        <p key={i} style={{ color: e.color }} className="font-medium tnum">
+          {e.dataKey}: <Sensitive>{inr(e.value)}</Sensitive>
         </p>
       ))}
     </div>
@@ -90,15 +99,17 @@ function PieTooltip({
   return (
     <div className="glass-strong rounded-xl border border-glass-border p-3 text-xs shadow-xl space-y-0.5">
       <p className="font-semibold text-foreground">{d.name}</p>
-      <p className="tabular-nums text-muted-foreground">{inr(d.value)}</p>
-      <p className="tabular-nums text-muted-foreground">{d.pct.toFixed(1)}%</p>
+      <p className="tnum text-muted-foreground">
+        <Sensitive>{inr(d.value)}</Sensitive>
+      </p>
+      <p className="tnum text-muted-foreground">{d.pct.toFixed(1)}%</p>
     </div>
   );
 }
 
 // ─── Main page ─────────────────────────────────────────────────────────────
 function AnalyticsPage() {
-  const { transactions, portfolioSnapshots, latestSnapshotValues, portfolioPartitions } = useStore();
+  const { transactions, portfolioSnapshots, latestSnapshotValues, portfolioPartitions, isStealthMode } = useStore();
   const ALL_PARTITIONS = useMemo(
     () => portfolioPartitions.map((p) => p.key),
     [portfolioPartitions],
@@ -114,6 +125,17 @@ function AnalyticsPage() {
   const [addSnapshotOpen, setAddSnapshotOpen] = useState(false);
 
   useEffect(() => { setMounted(true); }, []);
+
+  // Deep-link intent from the command palette: ?action=add-snapshot opens the
+  // dialog, then the param is cleared so refresh/back doesn't re-trigger it.
+  const { action } = Route.useSearch();
+  const nav = useNavigate({ from: Route.fullPath });
+  useEffect(() => {
+    if (action === "add-snapshot") {
+      setAddSnapshotOpen(true);
+      void nav({ search: {}, replace: true });
+    }
+  }, [action, nav]);
 
   // ── Global KPI math (unfiltered — transfers are portfolio-wide) ────────────
   const summary = useMemo(() => {
@@ -229,18 +251,20 @@ function AnalyticsPage() {
 
       {/* ── Global KPI tiles ─────────────────────────────────────────────── */}
       <section className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <KpiTile label="Total Deposits"      value={inr(summary.totalDeposits)}   tone="neutral" />
-        <KpiTile label="Total Withdrawals"   value={inr(summary.totalWithdrawals)} tone="neutral" />
-        <KpiTile label="Net Investment"       value={inr(summary.netInvestment)}    tone="neutral" />
-        <KpiTile label="Current Value"        value={inr(summary.currentValue)}     tone="primary" />
+        <KpiTile label="Total Deposits" value={summary.totalDeposits} format={inr} tone="neutral" />
+        <KpiTile label="Total Withdrawals" value={summary.totalWithdrawals} format={inr} tone="neutral" />
+        <KpiTile label="Net Investment" value={summary.netInvestment} format={inr} tone="neutral" />
+        <KpiTile label="Current Value" value={summary.currentValue} format={inr} tone="primary" />
         <KpiTile
           label="Absolute Return"
-          value={(summary.absoluteReturn >= 0 ? "+" : "") + inr(Math.abs(summary.absoluteReturn))}
+          value={summary.absoluteReturn}
+          format={(n) => (n >= 0 ? "+" : "−") + inr(Math.abs(n))}
           tone={summary.absoluteReturn >= 0 ? "success" : "danger"}
         />
         <KpiTile
           label="Return %"
-          value={`${summary.percentageReturn >= 0 ? "+" : ""}${summary.percentageReturn.toFixed(2)}%`}
+          value={summary.percentageReturn}
+          format={(n) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`}
           tone={summary.percentageReturn >= 0 ? "success" : "danger"}
           subtext="Returns computed against all partitions"
         />
@@ -389,10 +413,16 @@ function AnalyticsPage() {
                     />
                     <div className="min-w-0">
                       <p className="text-sm font-medium truncate">{d.name}</p>
-                      <p className="text-[11px] text-muted-foreground">{d.pct.toFixed(1)}% of portfolio</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        <span className="tnum">{d.pct.toFixed(1)}%</span> of portfolio
+                      </p>
                     </div>
                   </div>
-                  <p className="font-semibold tabular-nums text-sm shrink-0">{inr(d.value)}</p>
+                  <p className="font-semibold tnum text-sm shrink-0">
+                    <Sensitive>
+                      <AnimatedNumber value={d.value} format={inr} />
+                    </Sensitive>
+                  </p>
                 </li>
               ))}
             </ul>
@@ -425,7 +455,11 @@ function AnalyticsPage() {
                 />
                 <YAxis
                   tick={{ fontSize: 11, fill: "oklch(0.65 0 0)" }}
-                  tickFormatter={(v: number) => `₹${(v / 1000).toFixed(0)}K`}
+                  // Recharts renders ticks as raw SVG text that the Sensitive
+                  // wrapper can't blur, so stealth mode masks them outright.
+                  tickFormatter={(v: number) =>
+                    isStealthMode ? "₹•••" : `₹${(v / 1000).toFixed(0)}K`
+                  }
                   width={60}
                 />
                 <Tooltip content={<DarkTooltip />} />
@@ -571,7 +605,7 @@ function AddSnapshotDialog({
                 min="0"
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
-                className="bg-input/40 border-glass-border tabular-nums pl-7"
+                className="bg-input/40 border-glass-border tnum pl-7"
                 placeholder="0"
                 required
               />
@@ -607,7 +641,7 @@ const UNDO_WINDOW_MS = 5000;
 
 // ─── Snapshot history (grouped by partition, delete-with-undo) ────────────
 function SnapshotHistorySection() {
-  const { portfolioSnapshots, deletePortfolioSnapshot, portfolioPartitions, partitionLabel } = useStore();
+  const { portfolioSnapshots, deletePortfolioSnapshot, portfolioPartitions, partitionLabel, isStealthMode } = useStore();
   const [expanded, setExpanded] = useState<Set<PortfolioPartitionKey>>(new Set());
   const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set());
   const deleteTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -642,9 +676,11 @@ function SnapshotHistorySection() {
     }, UNDO_WINDOW_MS);
     deleteTimers.current.set(snap.id, timer);
 
+    // A toast string can't carry the Sensitive blur wrapper, so stealth mode
+    // masks the balance outright instead of broadcasting it for 5 seconds.
     toast("Snapshot removed", {
       duration: UNDO_WINDOW_MS,
-      description: `${partitionLabel(snap.brokerPartition)} • ${inr(snap.currentValue)} • ${fmtDate(snap.snapshotDate)}`,
+      description: `${partitionLabel(snap.brokerPartition)} • ${isStealthMode ? "₹••••••" : inr(snap.currentValue)} • ${fmtDate(snap.snapshotDate)}`,
       action: {
         label: "Undo",
         onClick: () => {
@@ -703,8 +739,11 @@ function SnapshotHistorySection() {
                     <div className="text-left min-w-0">
                       <p className="text-sm font-medium">{p.label}</p>
                       <p className="text-[11px] text-muted-foreground">
-                        {rows.length} snapshot{rows.length !== 1 ? "s" : ""} • latest {inr(latest.currentValue)} on{" "}
-                        {fmtDate(latest.snapshotDate)}
+                        {rows.length} snapshot{rows.length !== 1 ? "s" : ""} • latest{" "}
+                        <Sensitive>
+                          <span className="tnum">{inr(latest.currentValue)}</span>
+                        </Sensitive>{" "}
+                        on {fmtDate(latest.snapshotDate)}
                       </p>
                     </div>
                   </div>
@@ -720,7 +759,9 @@ function SnapshotHistorySection() {
                     {rows.map((s) => (
                       <li key={s.id} className="flex items-center justify-between gap-3 px-3.5 py-2.5">
                         <div className="min-w-0">
-                          <p className="text-sm font-medium tabular-nums">{inr(s.currentValue)}</p>
+                          <p className="text-sm font-medium tnum">
+                            <Sensitive>{inr(s.currentValue)}</Sensitive>
+                          </p>
                           <p className="text-[11px] text-muted-foreground">
                             {fmtDate(s.snapshotDate)}
                             {s.notes ? ` • ${s.notes}` : ""}
@@ -749,11 +790,13 @@ function SnapshotHistorySection() {
 function KpiTile({
   label,
   value,
+  format,
   tone,
   subtext,
 }: {
   label: string;
-  value: string;
+  value: number;
+  format: (n: number) => string;
   tone: "neutral" | "primary" | "success" | "danger";
   subtext?: string;
 }) {
@@ -763,9 +806,13 @@ function KpiTile({
     : tone === "danger"  ? "text-[oklch(0.78_0.18_25)]"
     : "text-foreground";
   return (
-    <div className="glass rounded-xl p-4 flex flex-col gap-1">
+    <div className="glass kpi-card rounded-xl p-4 flex flex-col gap-1">
       <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
-      <p className={`text-lg font-semibold tabular-nums ${color}`}>{value}</p>
+      <p className={`text-lg font-semibold tnum ${color}`}>
+        <Sensitive>
+          <AnimatedNumber value={value} format={format} />
+        </Sensitive>
+      </p>
       {subtext && <p className="text-[10px] text-muted-foreground/70 leading-tight">{subtext}</p>}
     </div>
   );

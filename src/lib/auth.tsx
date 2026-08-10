@@ -72,7 +72,7 @@ export function getStoredAuthUser(): AuthUser | null {
  * Session-restore watchdog. A hung getSession()/token-refresh network call
  * (dead connection, no fetch timeout anywhere in @supabase/auth-js) would
  * otherwise leave `loading` true forever — and _authenticated.tsx's Layout
- * gates BOTH revealing AppShell and firing the redirect-to-login effect on
+ * gates BOTH revealing the workstation shell and firing the redirect-to-login effect on
  * `loading`, so a hang there strands the user on a spinner with no way out.
  * On timeout we fail toward "not signed in": the mirror already painted
  * whatever it had, and letting the app move on to /login is safer than an
@@ -238,7 +238,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const supabase = authClient();
     if (supabase) {
       const { error } = await supabase.auth.signOut();
-      // Deliberately not rethrown: sign-out call sites (AppShell) don't catch,
+      // Deliberately not rethrown: sign-out call sites (the shell's user menu) don't catch,
       // and a failed remote revoke must never block the local sign-out or leave
       // the route guard believing the user is still in.
       if (error) console.warn("[auth] remote sign-out failed:", error.message);
