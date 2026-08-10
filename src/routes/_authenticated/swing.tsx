@@ -6,7 +6,7 @@ import {
   Wallet, Pencil,
 } from "lucide-react";
 import {
-  useStore, BLUEPRINT, INVESTMENT_APPS, PORTFOLIO_PARTITIONS,
+  useStore, INVESTMENT_APPS, PORTFOLIO_PARTITIONS,
   type BrokerPartition, type CloseReason, type PortfolioPartitionKey,
 } from "@/lib/store";
 import { inr, fmtDate } from "@/lib/format";
@@ -193,7 +193,7 @@ function CapitalSnapshotPanel() {
 
 // ─── Main page ─────────────────────────────────────────────────────────────
 function SwingPage() {
-  const { trades, addTrade, closeTrade, deleteTrade, dhanSwingCapital } = useStore();
+  const { trades, addTrade, closeTrade, deleteTrade, dhanSwingCapital, blueprintSettings } = useStore();
 
   // ── entry form state ──────────────────────────────────────────────────────
   const [partition, setPartition] = useState<BrokerPartition>("Dhan Swing");
@@ -214,8 +214,8 @@ function SwingPage() {
 
   // ── dynamic risk cap from latest Dhan Swing snapshot ─────────────────────
   const cap = useMemo(
-    () => dhanSwingCapital * BLUEPRINT.riskCapPct,
-    [dhanSwingCapital],
+    () => dhanSwingCapital * blueprintSettings.defaultRiskCapPct,
+    [dhanSwingCapital, blueprintSettings.defaultRiskCapPct],
   );
   const exposure = useMemo(() => Number(qty) * Number(entry) || 0, [qty, entry]);
   const exceedsCap = exposure > cap;

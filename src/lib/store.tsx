@@ -40,7 +40,6 @@ export function appsForScope(scope: "cashflow" | "swing"): InvestmentApp[] {
 }
 
 // ─── Portfolio snapshots ───────────────────────────────────────────────────
-// The four partitions we track with manual point-in-time capital snapshots.
 export type PortfolioPartitionKey = "Zerodha Vault" | "Dhan Swing" | "INDmoney US" | "Cash";
 
 export const PORTFOLIO_PARTITIONS: readonly {
@@ -56,22 +55,19 @@ export const PORTFOLIO_PARTITIONS: readonly {
 
 /**
  * One per-partition row — mirrors portfolio_snapshots DB schema exactly.
- * Local camelCase fields map 1-to-1: snapshotDate↔snapshot_date,
- * brokerPartition↔broker_partition, currentValue↔current_value.
  */
 export type PortfolioSnapshot = {
   id: string;
-  snapshotDate: string;                    // ISO — DB: snapshot_date
-  brokerPartition: PortfolioPartitionKey;  // DB: broker_partition
-  currentValue: number;                    // DB: current_value
-  notes?: string;                          // local-only; not in DB schema
+  snapshotDate: string;
+  brokerPartition: PortfolioPartitionKey;
+  currentValue: number;
+  notes?: string;
 };
 
 const PORTFOLIO_PARTITION_KEYS = PORTFOLIO_PARTITIONS.map((p) => p.key) as PortfolioPartitionKey[];
 
 function normalizeSnapshot(raw: Record<string, unknown>): PortfolioSnapshot | PortfolioSnapshot[] {
   if (raw.brokerPartition !== undefined) {
-    // New per-row shape
     const partition = raw.brokerPartition as string;
     return {
       id: String(raw.id),
@@ -83,8 +79,7 @@ function normalizeSnapshot(raw: Record<string, unknown>): PortfolioSnapshot | Po
       notes: raw.notes ? String(raw.notes) : undefined,
     };
   }
-  // Legacy grouped shape: { id, recordedAt, values: { "Dhan Swing": 200000, … } }
-  // Expand into one row per partition so stored data migrates cleanly.
+  // Legacy grouped shape migration
   const legacyValues = (raw.values ?? {}) as Record<string, unknown>;
   const date = String(raw.recordedAt ?? new Date().toISOString());
   const rows: PortfolioSnapshot[] = [];
@@ -103,6 +98,58 @@ function normalizeSnapshot(raw: Record<string, unknown>): PortfolioSnapshot | Po
   return rows;
 }
 
+// ─── Dynamic Blueprint Settings ────────────────────────────────────────────
+export type BlueprintSettings = {
+  defaultSalary: number;
+  fixedRunrate: number;
+  scooterEmi: number;
+  defaultRiskCapPct: number; // 0–1, e.g. 0.03
+  growwMfSip: number;
+};
+
+export const DEFAULT_BLUEPRINT: BlueprintSettings = {
+  defaultSalary: 76000,
+  fixedRunrate: 39000,
+  scooterEmi: 9000,
+  defaultRiskCapPct: 0.03,
+  growwMfSip: 5000,
+};
+
+const BLUEPRINT_KEY = "finstride.blueprint.settings";
+
+function normalizeBlueprint(raw: unknown): BlueprintSettings {
+  if (!raw || typeof raw !== "object") return DEFAULT_BLUEPRINT;
+  const r = raw as Record<string, unknown>;
+  return {
+    defaultSalary:    Number(r.defaultSalary)    || DEFAULT_BLUEPRINT.defaultSalary,
+    fixedRunrate:     Number(r.fixedRunrate)      || DEFAULT_BLUEPRINT.fixedRunrate,
+    scooterEmi:       Number(r.scooterEmi)        || DEFAULT_BLUEPRINT.scooterEmi,
+    defaultRiskCapPct: typeof r.defaultRiskCapPct === "number" ? r.defaultRiskCapPct : DEFAULT_BLUEPRINT.defaultRiskCapPct,
+    growwMfSip:       Number(r.growwMfSip)        || DEFAULT_BLUEPRINT.growwMfSip,
+  };
+}
+
+// ─── Dynamic Categories ────────────────────────────────────────────────────
+export const DEFAULT_INCOME_CATEGORIES: readonly string[] = [
+  "Salary", "Freelance", "Capital Transfer (In)", "Other",
+];
+export const DEFAULT_EXPENSE_CATEGORIES: readonly string[] = [
+  "Fixed Runrate", "Scooter EMI", "Capital Transfer (Out)", "Other",
+];
+
+type CustomCategories = { income: string[]; expense: string[] };
+const CATEGORIES_KEY = "finstride.categories.custom";
+const DEFAULT_CUSTOM_CATEGORIES: CustomCategories = { income: [], expense: [] };
+
+function normalizeCustomCategories(raw: unknown): CustomCategories {
+  if (!raw || typeof raw !== "object") return DEFAULT_CUSTOM_CATEGORIES;
+  const r = raw as Record<string, unknown>;
+  return {
+    income:  Array.isArray(r.income)  ? (r.income  as string[]).filter((s) => typeof s === "string") : [],
+    expense: Array.isArray(r.expense) ? (r.expense as string[]).filter((s) => typeof s === "string") : [],
+  };
+}
+
 // ─── Monthly obligations checklist ────────────────────────────────────────
 export type ObligationKey = "fixedRunrate" | "scooterEmi" | "growwMfSip" | "ccSettled";
 export type MonthlyPending = Partial<Record<ObligationKey, boolean>>;
@@ -119,7 +166,7 @@ function loadAllPending(): Record<string, MonthlyPending> {
 }
 
 export function currentMonthKey(): string {
-  return new Date().toISOString().slice(0, 7); // "YYYY-MM"
+  return new Date().toISOString().slice(0, 7);
 }
 
 // ─── Legacy data normalizers ───────────────────────────────────────────────
@@ -143,19 +190,67 @@ function normalizePaymentMode(raw: unknown): PaymentMode {
   return "Bank Account";
 }
 
+// ─── Data types ────────────────────────────────────────────────────────────
+export type TxType = "income" | "expense";
+/**
+ * User-extensible string. Default values live in DEFAULT_INCOME_CATEGORIES /
+ * DEFAULT_EXPENSE_CATEGORIES. Custom additions are persisted separately.
+ */
+export type TxCategory = string;
+
+/**
+ * Mirrors cashflow_ledger DB columns (camelCase).
+ * tags is a local UI-only field with no DB column.
+ */
+export type Transaction = {
+  id: string;
+  date: string;
+  type: TxType;
+  category: TxCategory;
+  account: PaymentMode;
+  amount: number;
+  tags: string[];
+  notes?: string;
+};
+
 // Accepts new schema (account), previous interim (paymentMode), and legacy (partition)
 function normalizeTransaction(raw: Record<string, unknown>): Transaction {
   return {
     id: String(raw.id),
     date: String(raw.date),
-    type: raw.type as TxType,
-    category: raw.category as TxCategory,
+    type: raw.type === "income" ? "income" : "expense",
+    category: raw.category ? String(raw.category) : "Other",
     account: normalizePaymentMode(raw.account ?? raw.paymentMode ?? raw.partition),
     amount: Number(raw.amount),
     tags: Array.isArray(raw.tags) ? (raw.tags as string[]) : [],
     notes: raw.notes ? String(raw.notes) : undefined,
   };
 }
+
+export type TradeStatus = "open" | "closed";
+export type CloseReason = "target" | "stoploss" | "other";
+
+/**
+ * Mirrors swing_trades DB columns (camelCase).
+ * direction, partition, closeReason, closeNotes are local-only extensions.
+ */
+export type Trade = {
+  id: string;
+  ticker: string;
+  entryDate: string;
+  direction: "LONG";
+  qty: number;
+  entryPrice: number;
+  targetPrice: number;
+  stopLoss: number;
+  source: "TheDoji" | "Self";
+  partition: BrokerPartition;
+  notes?: string;
+  status: TradeStatus;
+  closeReason?: CloseReason;
+  closeNotes?: string;
+  exitDate?: string;
+};
 
 function normalizeTrade(raw: Record<string, unknown>): Trade {
   return {
@@ -176,52 +271,6 @@ function normalizeTrade(raw: Record<string, unknown>): Trade {
     exitDate: raw.exitDate ? String(raw.exitDate) : (raw.closedAt ? String(raw.closedAt) : undefined),
   };
 }
-
-// ─── Data types ────────────────────────────────────────────────────────────
-export type TxType = "income" | "expense";
-export type TxCategory = "Salary" | "Fixed Runrate" | "Scooter EMI" | "Freelance" | "Other";
-
-/**
- * Mirrors cashflow_ledger DB columns (camelCase).
- * account↔cashflow_ledger.account, date↔date, type↔type, etc.
- * tags is a local UI-only field with no DB column.
- */
-export type Transaction = {
-  id: string;
-  date: string;           // DB: date
-  type: TxType;           // DB: type
-  category: TxCategory;   // DB: category
-  account: PaymentMode;   // DB: account ("Bank Account" | "Cash" | "Credit Card")
-  amount: number;         // DB: amount
-  tags: string[];         // local UI only — not in DB schema
-  notes?: string;         // DB: notes
-};
-
-export type TradeStatus = "open" | "closed";
-export type CloseReason = "target" | "stoploss" | "other";
-
-/**
- * Mirrors swing_trades DB columns (camelCase).
- * qty↔qty, entryDate↔entry_date, exitDate↔exit_date, etc.
- * direction, partition, closeReason, closeNotes are local-only extensions.
- */
-export type Trade = {
-  id: string;
-  ticker: string;          // DB: ticker
-  entryDate: string;       // DB: entry_date (ISO)
-  direction: "LONG";       // local only
-  qty: number;             // DB: qty
-  entryPrice: number;      // DB: entry_price
-  targetPrice: number;     // DB: target_price
-  stopLoss: number;        // DB: stop_loss
-  source: "TheDoji" | "Self"; // DB: source
-  partition: BrokerPartition; // local only — broker account used
-  notes?: string;          // local only — entry rationale
-  status: TradeStatus;     // DB: status
-  closeReason?: CloseReason;  // local only
-  closeNotes?: string;     // local only
-  exitDate?: string;       // DB: exit_date (ISO)
-};
 
 // ─── Grind Deck ───────────────────────────────────────────────────────────
 export type GrindMetricKey = "systemDesign" | "leetcode" | "linkedinOutreach";
@@ -255,7 +304,7 @@ export const GRIND_METRIC_META: Record<
 
 export type GrindLogEntry = {
   id: string;
-  loggedAt: string; // ISO
+  loggedAt: string;
   label: string;
   meta?: string;
 };
@@ -271,7 +320,7 @@ export const HUSTLE_CATEGORIES: readonly HustleCategory[] = [
 
 export type HustleEntry = {
   id: string;
-  date: string; // ISO
+  date: string;
   category: HustleCategory;
   description: string;
   amount: number;
@@ -336,22 +385,28 @@ type StoreCtx = {
   trades: Trade[];
   creditCardDues: number;
   pendingChecklist: MonthlyPending;
-  // Portfolio snapshot state — per-row, aligned with portfolio_snapshots schema
   portfolioSnapshots: PortfolioSnapshot[];
-  /** Latest current_value per broker_partition; built from the most-recent row per partition. */
   latestSnapshotValues: Partial<Record<PortfolioPartitionKey, number>>;
-  /** Latest recorded Dhan Swing capital; falls back to BLUEPRINT.accountBalance if no snapshot. */
+  /** Latest recorded Dhan Swing capital; 0 if no snapshot recorded yet. */
   dhanSwingCapital: number;
+  // Blueprint — user-editable
+  blueprintSettings: BlueprintSettings;
+  updateBlueprintSettings: (patch: Partial<BlueprintSettings>) => void;
+  // Dynamic categories
+  incomeCategories: string[];
+  expenseCategories: string[];
+  addCategory: (type: "income" | "expense", name: string) => void;
+  deleteCustomCategory: (type: "income" | "expense", name: string) => void;
+  // Transactions
   addTransaction: (t: Omit<Transaction, "id">) => void;
   deleteTransaction: (id: string) => void;
+  // Trades
   addTrade: (t: Omit<Trade, "id" | "status">) => void;
   closeTrade: (id: string, closeReason: CloseReason, closeNotes?: string) => void;
   deleteTrade: (id: string) => void;
+  // Obligations
   toggleObligation: (key: ObligationKey) => void;
-  /**
-   * Add one or more snapshot rows in a single "session" (all share the same timestamp).
-   * Each entry becomes a separate row — mirrors portfolio_snapshots.
-   */
+  // Portfolio snapshots
   addPortfolioSnapshots: (
     entries: Array<{ brokerPartition: PortfolioPartitionKey; currentValue: number }>,
     notes?: string,
@@ -369,7 +424,6 @@ const Ctx = createContext<StoreCtx | null>(null);
 const TX_KEY   = "finstride.transactions";
 const TR_KEY   = "finstride.trades";
 const SNAP_KEY = "finstride.portfolio.snapshots";
-// GRIND_KEY defined above near GrindState types
 
 const seedTx: Transaction[] = [
   { id: crypto.randomUUID(), date: new Date(Date.now() - 86400000 * 2).toISOString(), type: "income",  category: "Salary",        account: "Bank Account", amount: 76000, tags: ["monthly"],    notes: "May salary" },
@@ -378,12 +432,15 @@ const seedTx: Transaction[] = [
 ];
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [trades, setTrades] = useState<Trade[]>([]);
+  const [transactions, setTransactions]       = useState<Transaction[]>([]);
+  const [trades, setTrades]                   = useState<Trade[]>([]);
   const [pendingChecklist, setPendingChecklist] = useState<MonthlyPending>({});
   const [portfolioSnapshots, setPortfolioSnapshots] = useState<PortfolioSnapshot[]>([]);
-  const [grind, setGrind] = useState<GrindState>(EMPTY_GRIND);
+  const [grind, setGrind]                     = useState<GrindState>(EMPTY_GRIND);
+  const [blueprintSettings, setBlueprintSettings] = useState<BlueprintSettings>(DEFAULT_BLUEPRINT);
+  const [customCategories, setCustomCategories] = useState<CustomCategories>(DEFAULT_CUSTOM_CATEGORIES);
 
+  // ── Initial load ────────────────────────────────────────────────────────
   useEffect(() => {
     try {
       const tx = localStorage.getItem(TX_KEY);
@@ -405,6 +462,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       const gr = localStorage.getItem(GRIND_KEY);
       setGrind(gr ? normalizeGrindState(JSON.parse(gr)) : EMPTY_GRIND);
+      const bp = localStorage.getItem(BLUEPRINT_KEY);
+      if (bp) setBlueprintSettings(normalizeBlueprint(JSON.parse(bp)));
+      const cc = localStorage.getItem(CATEGORIES_KEY);
+      if (cc) setCustomCategories(normalizeCustomCategories(JSON.parse(cc)));
     } catch {
       setTransactions(seedTx);
     }
@@ -412,6 +473,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setPendingChecklist(allPending[currentMonthKey()] ?? {});
   }, []);
 
+  // ── Persist effects ──────────────────────────────────────────────────────
   useEffect(() => {
     if (transactions.length) localStorage.setItem(TX_KEY, JSON.stringify(transactions));
   }, [transactions]);
@@ -434,11 +496,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(GRIND_KEY, JSON.stringify(grind));
   }, [grind]);
 
+  useEffect(() => {
+    localStorage.setItem(BLUEPRINT_KEY, JSON.stringify(blueprintSettings));
+  }, [blueprintSettings]);
+
+  useEffect(() => {
+    localStorage.setItem(CATEGORIES_KEY, JSON.stringify(customCategories));
+  }, [customCategories]);
+
+  // ── Derived values ───────────────────────────────────────────────────────
   const creditCardDues = transactions
     .filter((t) => t.type === "expense" && t.account === "Credit Card")
     .reduce((sum, t) => sum + t.amount, 0);
 
-  // Latest value per partition: find the most-recent row for each key
   const latestSnapshotValues = PORTFOLIO_PARTITION_KEYS.reduce(
     (acc, key) => {
       const rows = portfolioSnapshots.filter((s) => s.brokerPartition === key);
@@ -450,12 +520,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     {} as Partial<Record<PortfolioPartitionKey, number>>,
   );
 
-  // Dhan Swing capital from latest snapshot; fall back to Blueprint default
-  const dhanSwingCapital = latestSnapshotValues["Dhan Swing"] ?? BLUEPRINT.accountBalance;
+  const dhanSwingCapital = latestSnapshotValues["Dhan Swing"] ?? 0;
+
+  const incomeCategories  = [...DEFAULT_INCOME_CATEGORIES,  ...customCategories.income];
+  const expenseCategories = [...DEFAULT_EXPENSE_CATEGORIES, ...customCategories.expense];
 
   const toggleObligation = (key: ObligationKey) =>
     setPendingChecklist((prev) => ({ ...prev, [key]: !prev[key] }));
 
+  // ── Context value ────────────────────────────────────────────────────────
   const value: StoreCtx = {
     transactions,
     trades,
@@ -464,6 +537,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     portfolioSnapshots,
     latestSnapshotValues,
     dhanSwingCapital,
+    blueprintSettings,
+    updateBlueprintSettings: (patch) =>
+      setBlueprintSettings((prev) => ({ ...prev, ...patch })),
+    incomeCategories,
+    expenseCategories,
+    addCategory: (type, name) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      const defaults = type === "income" ? DEFAULT_INCOME_CATEGORIES : DEFAULT_EXPENSE_CATEGORIES;
+      if (defaults.includes(trimmed)) return; // already a default
+      setCustomCategories((prev) => {
+        if (prev[type].includes(trimmed)) return prev;
+        return { ...prev, [type]: [...prev[type], trimmed] };
+      });
+    },
+    deleteCustomCategory: (type, name) => {
+      const defaults = type === "income" ? DEFAULT_INCOME_CATEGORIES : DEFAULT_EXPENSE_CATEGORIES;
+      if (defaults.includes(name)) return; // cannot delete defaults
+      setCustomCategories((prev) => ({
+        ...prev,
+        [type]: prev[type].filter((c) => c !== name),
+      }));
+    },
     addTransaction: (t) => setTransactions((s) => [{ ...t, id: crypto.randomUUID() }, ...s]),
     deleteTransaction: (id) => setTransactions((s) => s.filter((x) => x.id !== id)),
     addTrade: (t) =>
@@ -472,13 +568,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setTrades((s) =>
         s.map((t) =>
           t.id === id
-            ? {
-                ...t,
-                status: "closed",
-                closeReason,
-                closeNotes: closeNotes || undefined,
-                exitDate: new Date().toISOString(),
-              }
+            ? { ...t, status: "closed", closeReason, closeNotes: closeNotes || undefined, exitDate: new Date().toISOString() }
             : t,
         ),
       ),
@@ -531,16 +621,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
 export const useStore = () => {
   const v = useContext(Ctx);
-  if (!v) throw new Error("useStore within StoreProvider");
+  if (!v) throw new Error("useStore must be used within StoreProvider");
   return v;
-};
-
-// ─── Business constants — Personal Cashflow Blueprint ─────────────────────
-export const BLUEPRINT = {
-  salaryBaseline: 76000,
-  fixedRunrate: 39000,
-  scooterEmi: 9000,
-  growwMfSip: 5000,      // monthly SIP commitment
-  accountBalance: 300000, // total account balance for risk cap
-  riskCapPct: 0.03,       // 3% per-trade rule
 };
