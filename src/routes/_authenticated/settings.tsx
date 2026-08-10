@@ -344,7 +344,9 @@ function CategoryColumn({
   allCategories: string[];
   defaults: readonly string[];
   onAdd: (name: string) => void;
-  onDelete: (name: string) => void;
+  // Returning false signals the deletion was blocked (e.g. still referenced by
+  // existing records) — anything else (including void) is treated as success.
+  onDelete: (name: string) => void | boolean;
 }) {
   const [input, setInput] = useState("");
 
@@ -376,8 +378,12 @@ function CategoryColumn({
               ) : (
                 <button
                   onClick={() => {
-                    onDelete(cat);
-                    toast.success(`"${cat}" removed`);
+                    const result = onDelete(cat);
+                    if (result === false) {
+                      toast.error(`"${cat}" is still in use — remove its records first`);
+                    } else {
+                      toast.success(`"${cat}" removed`);
+                    }
                   }}
                   className="text-muted-foreground hover:text-destructive shrink-0"
                 >

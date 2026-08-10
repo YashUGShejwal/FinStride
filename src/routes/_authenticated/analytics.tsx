@@ -103,6 +103,12 @@ function AnalyticsPage() {
     () => portfolioPartitions.map((p) => p.key),
     [portfolioPartitions],
   );
+  // A partition's position in this canonical, unfiltered list — used as the seed
+  // for fallback colors so the same custom partition gets the same color everywhere
+  // on the page, regardless of which locally-filtered/reordered array (pieData,
+  // the active partition filter, etc.) happens to be rendering it.
+  const canonicalPartitionIndex = (key: PortfolioPartitionKey) =>
+    Math.max(0, portfolioPartitions.findIndex((p) => p.key === key));
   const [mounted, setMounted] = useState(false);
   const [filters, setFilters] = useState<AnalyticsFilter>(() => ({ partitions: [...ALL_PARTITIONS] }));
   const [addSnapshotOpen, setAddSnapshotOpen] = useState(false);
@@ -346,10 +352,10 @@ function AnalyticsPage() {
                       `${name}: ${pct.toFixed(0)}%`
                     }
                   >
-                    {pieData.map((d, i) => (
+                    {pieData.map((d) => (
                       <Cell
                         key={d.key}
-                        fill={colorForPartition(d.key, i)}
+                        fill={colorForPartition(d.key, canonicalPartitionIndex(d.key))}
                         stroke="transparent"
                       />
                     ))}
@@ -371,7 +377,7 @@ function AnalyticsPage() {
           </div>
           {pieData.length > 0 ? (
             <ul className="space-y-2">
-              {pieData.map((d, i) => (
+              {pieData.map((d) => (
                 <li
                   key={d.key}
                   className="flex items-center justify-between gap-3 p-3 rounded-xl border border-glass-border bg-white/3"
@@ -379,7 +385,7 @@ function AnalyticsPage() {
                   <div className="flex items-center gap-2.5 min-w-0">
                     <span
                       className="size-3 rounded-full shrink-0"
-                      style={{ backgroundColor: hexForPartition(d.key, i) }}
+                      style={{ backgroundColor: hexForPartition(d.key, canonicalPartitionIndex(d.key)) }}
                     />
                     <div className="min-w-0">
                       <p className="text-sm font-medium truncate">{d.name}</p>
@@ -426,14 +432,14 @@ function AnalyticsPage() {
                 <Legend
                   wrapperStyle={{ fontSize: 11, paddingTop: 12 }}
                 />
-                {(filters.partitions.length > 0 ? filters.partitions : ALL_PARTITIONS).map((key, i) => (
+                {(filters.partitions.length > 0 ? filters.partitions : ALL_PARTITIONS).map((key) => (
                   <Line
                     key={key}
                     type="monotone"
                     dataKey={key}
-                    stroke={hexForPartition(key, i)}
+                    stroke={hexForPartition(key, canonicalPartitionIndex(key))}
                     strokeWidth={2.5}
-                    dot={{ r: 4, fill: hexForPartition(key, i), strokeWidth: 0 }}
+                    dot={{ r: 4, fill: hexForPartition(key, canonicalPartitionIndex(key)), strokeWidth: 0 }}
                     activeDot={{ r: 6 }}
                     connectNulls={false}
                   />

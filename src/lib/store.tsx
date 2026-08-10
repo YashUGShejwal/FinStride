@@ -115,12 +115,15 @@ const BLUEPRINT_KEY = "finstride.blueprint.settings";
 function normalizeBlueprint(raw: unknown): BlueprintSettings {
   if (!raw || typeof raw !== "object") return DEFAULT_BLUEPRINT;
   const r = raw as Record<string, unknown>;
+  // typeof === "number" (not `Number(x) || fallback`) so an intentionally-saved
+  // 0 (e.g. "EMI paid off") isn't silently reverted to the hardcoded default —
+  // 0 is falsy in JS, so `||` would otherwise always prefer the fallback.
   return {
-    defaultSalary:    Number(r.defaultSalary)    || DEFAULT_BLUEPRINT.defaultSalary,
-    fixedRunrate:     Number(r.fixedRunrate)      || DEFAULT_BLUEPRINT.fixedRunrate,
-    scooterEmi:       Number(r.scooterEmi)        || DEFAULT_BLUEPRINT.scooterEmi,
+    defaultSalary:    typeof r.defaultSalary    === "number" ? r.defaultSalary    : DEFAULT_BLUEPRINT.defaultSalary,
+    fixedRunrate:     typeof r.fixedRunrate      === "number" ? r.fixedRunrate      : DEFAULT_BLUEPRINT.fixedRunrate,
+    scooterEmi:       typeof r.scooterEmi        === "number" ? r.scooterEmi        : DEFAULT_BLUEPRINT.scooterEmi,
     defaultRiskCapPct: typeof r.defaultRiskCapPct === "number" ? r.defaultRiskCapPct : DEFAULT_BLUEPRINT.defaultRiskCapPct,
-    growwMfSip:       Number(r.growwMfSip)        || DEFAULT_BLUEPRINT.growwMfSip,
+    growwMfSip:       typeof r.growwMfSip        === "number" ? r.growwMfSip        : DEFAULT_BLUEPRINT.growwMfSip,
     riskCapPartition: typeof r.riskCapPartition === "string" && r.riskCapPartition.trim()
       ? r.riskCapPartition
       : DEFAULT_BLUEPRINT.riskCapPartition,
@@ -435,7 +438,8 @@ type StoreCtx = {
   investmentApps: InvestmentApp[];
   portfolioPartitions: { key: PortfolioPartitionKey; label: string; description: string }[];
   addBrokerPartition: (id: string, description?: string) => void;
-  deleteCustomBrokerPartition: (id: string) => void;
+  /** Returns false (and does not delete) if the id is a default, or if trades/snapshots still reference it. */
+  deleteCustomBrokerPartition: (id: string) => boolean;
   partitionLabel: (id: string) => string;
   // Quote preferences
   showPersonalQuotes: boolean;
@@ -569,10 +573,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // Latest value per partition, derived straight from recorded snapshots — works
   // for any partition (default or custom), not just an enumerated list.
   const latestSnapshotValues = (() => {
+    // portfolioSnapshots is newest-inserted-first (addPortfolioSnapshots prepends),
+    // so on an exact snapshotDate tie (e.g. re-entering today's value to correct a
+    // mistake) the FIRST occurrence encountered here is the most recent edit —
+    // strict `>` preserves that instead of letting a later (older) tie overwrite it.
     const latest = new Map<string, PortfolioSnapshot>();
     for (const s of portfolioSnapshots) {
       const existing = latest.get(s.brokerPartition);
-      if (!existing || s.snapshotDate >= existing.snapshotDate) {
+      if (!existing || s.snapshotDate > existing.snapshotDate) {
         latest.set(s.brokerPartition, s);
       }
     }
@@ -665,8 +673,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       );
     },
     deleteCustomBrokerPartition: (id) => {
-      if (DEFAULT_INVESTMENT_APPS.some((a) => a.id === id)) return; // cannot delete defaults
+      if (DEFAULT_INVESTMENT_APPS.some((a) => a.id === id)) return false; // cannot delete defaults
+      // Block deletion while trades/snapshots still reference this partition —
+      // every partition-scoped view (Analytics charts, Snapshot history) reads
+      // from portfolioPartitions, so deleting it out from under existing data
+      // would orphan that data: still summed into totals, but invisible everywhere else.
+      const hasReferences =
+        portfolioSnapshots.some((s) => s.brokerPartition === id) ||
+        trades.some((t) => t.partition === id);
+      if (hasReferences) return false;
       setCustomPartitions((prev) => prev.filter((p) => p.id !== id));
+      return true;
     },
     partitionLabel,
     showPersonalQuotes,

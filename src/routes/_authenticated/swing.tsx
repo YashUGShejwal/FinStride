@@ -62,6 +62,11 @@ function CapitalSnapshotPanel() {
   const [values, setValues] = useState<Partial<Record<PortfolioPartitionKey, string>>>({});
 
   const hasAnySnapshot = Object.keys(latestSnapshotValues).length > 0;
+  // Specifically whether the CONFIGURED risk-cap partition has a snapshot — hasAnySnapshot
+  // (any partition at all) would otherwise hide this hint once the user has snapshotted a
+  // *different* partition, leaving "₹0 active capital" with no explanation for why it's 0.
+  const riskCapPartitionHasSnapshot =
+    latestSnapshotValues[blueprintSettings.riskCapPartition] !== undefined;
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -101,8 +106,8 @@ function CapitalSnapshotPanel() {
             <p className="text-xs text-muted-foreground">
               {partitionLabel(blueprintSettings.riskCapPartition)} active capital:{" "}
               <span className="text-foreground font-medium tabular-nums">{inr(riskCapCapital)}</span>
-              {!hasAnySnapshot && (
-                <span className="ml-1 text-[oklch(0.78_0.18_80)]">(using default)</span>
+              {!riskCapPartitionHasSnapshot && (
+                <span className="ml-1 text-[oklch(0.78_0.18_80)]">(no snapshot yet)</span>
               )}
             </p>
           </div>
@@ -219,7 +224,7 @@ function SwingPage() {
   const [closeReason, setCloseReason] = useState<CloseReason | null>(null);
   const [closeNotes, setCloseNotes] = useState("");
 
-  // ── dynamic risk cap from latest Dhan Swing snapshot ─────────────────────
+  // ── dynamic risk cap from latest snapshot of the configured risk-cap partition ──
   const cap = useMemo(
     () => riskCapCapital * blueprintSettings.defaultRiskCapPct,
     [riskCapCapital, blueprintSettings.defaultRiskCapPct],
@@ -299,7 +304,7 @@ function SwingPage() {
         </h1>
         <p className="text-sm text-muted-foreground mt-2">
           Rule-enforced. Equity only. 3% risk cap on{" "}
-          <span className="text-foreground font-medium">{inr(riskCapCapital)}</span> {riskCapPartitionLabel}
+          <span className="text-foreground font-medium">{inr(riskCapCapital)}</span> {riskCapPartitionLabel}{" "}
           capital → max {inr(cap)} per position.
         </p>
       </header>
@@ -456,7 +461,7 @@ function SwingPage() {
                 className={`h-full transition-all duration-200 ${
                   exceedsCap ? "bg-destructive" : "gradient-primary"
                 }`}
-                style={{ width: `${Math.min(100, (exposure / cap) * 100)}%` }}
+                style={{ width: `${cap > 0 ? Math.min(100, (exposure / cap) * 100) : 0}%` }}
               />
             </div>
             {exceedsCap && (
