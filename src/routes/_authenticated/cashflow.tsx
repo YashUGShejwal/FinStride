@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState, type FormEvent } from "react";
 import { Search, Plus, Trash2, ArrowUpRight, ArrowDownRight } from "lucide-react";
 import { useStore, PAYMENT_MODES, type PaymentMode, type TxType } from "@/lib/store";
-import { inr, fmtDate } from "@/lib/format";
+import { inr, fmtDate, todayLocalISO } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,7 +17,7 @@ function CashflowPage() {
   const [q, setQ] = useState("");
 
   const [form, setForm] = useState({
-    date: new Date().toISOString().slice(0, 10),
+    date: todayLocalISO(),
     type: "expense" as TxType,
     category: expenseCategories[0] ?? "Other",
     account: "Bank Account" as PaymentMode,

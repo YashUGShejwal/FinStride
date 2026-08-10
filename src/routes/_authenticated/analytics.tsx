@@ -1,19 +1,29 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   PieChart, Pie, Cell, ResponsiveContainer,
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
 } from "recharts";
-import { PieChart as PieChartIcon, TrendingUp, X, Filter } from "lucide-react";
+import {
+  PieChart as PieChartIcon, TrendingUp, X, Filter,
+  Plus, History, ChevronDown, ChevronUp, Trash2,
+} from "lucide-react";
+import { toast } from "sonner";
 import {
   useStore,
   PORTFOLIO_PARTITIONS,
+  partitionLabel,
   type PortfolioPartitionKey,
+  type PortfolioSnapshot,
 } from "@/lib/store";
-import { inr } from "@/lib/format";
+import { inr, fmtDate, todayLocalISO } from "@/lib/format";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 
 export const Route = createFileRoute("/_authenticated/analytics")({ component: AnalyticsPage });
 
@@ -85,6 +95,7 @@ function AnalyticsPage() {
   const { transactions, portfolioSnapshots, latestSnapshotValues } = useStore();
   const [mounted, setMounted] = useState(false);
   const [filters, setFilters] = useState<AnalyticsFilter>({ partitions: [...ALL_PARTITIONS] });
+  const [addSnapshotOpen, setAddSnapshotOpen] = useState(false);
 
   useEffect(() => { setMounted(true); }, []);
 
@@ -180,15 +191,25 @@ function AnalyticsPage() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Module</p>
-        <h1 className="text-3xl md:text-4xl font-semibold mt-1">
-          Portfolio <span className="text-gradient">analytics</span>
-        </h1>
-        <p className="text-sm text-muted-foreground mt-2">
-          Investment returns, allocation breakdown, and value trends over time.
-        </p>
+      <header className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Module</p>
+          <h1 className="text-3xl md:text-4xl font-semibold mt-1">
+            Portfolio <span className="text-gradient">analytics</span>
+          </h1>
+          <p className="text-sm text-muted-foreground mt-2">
+            Investment returns, allocation breakdown, and value trends over time.
+          </p>
+        </div>
+        <Button
+          onClick={() => setAddSnapshotOpen(true)}
+          className="gradient-primary text-primary-foreground border-0 gap-2 h-10 shrink-0"
+        >
+          <Plus className="size-4" /> Add Snapshot
+        </Button>
       </header>
+
+      <AddSnapshotDialog open={addSnapshotOpen} onOpenChange={setAddSnapshotOpen} />
 
       {/* ── Global KPI tiles ─────────────────────────────────────────────── */}
       <section className="grid grid-cols-2 md:grid-cols-3 gap-3">
@@ -418,7 +439,292 @@ function AnalyticsPage() {
           />
         )}
       </section>
+
+      {/* ── Snapshot history ────────────────────────────────────────────────── */}
+      <SnapshotHistorySection />
     </div>
+  );
+}
+
+// ─── Add Snapshot dialog ───────────────────────────────────────────────────
+function pinToNoonUTC(dateOnly: string): string {
+  return `${dateOnly}T12:00:00.000Z`;
+}
+
+function AddSnapshotDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const { addPortfolioSnapshots } = useStore();
+  const [date, setDate] = useState(todayLocalISO);
+  const [partition, setPartition] = useState<PortfolioPartitionKey>("Zerodha Vault");
+  const [value, setValue] = useState("");
+  const [notes, setNotes] = useState("");
+
+  const resetForm = () => {
+    setDate(todayLocalISO());
+    setPartition("Zerodha Vault");
+    setValue("");
+    setNotes("");
+  };
+
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!date) {
+      toast.error("Pick a date");
+      return;
+    }
+    const n = Number(value);
+    if (isNaN(n) || n < 0) {
+      toast.error("Enter a valid current value");
+      return;
+    }
+    addPortfolioSnapshots(
+      [{ brokerPartition: partition, currentValue: n }],
+      notes.trim() || undefined,
+      pinToNoonUTC(date),
+    );
+    toast.success(`Snapshot saved for ${partitionLabel(partition)}`);
+    resetForm();
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        onOpenChange(v);
+        if (!v) resetForm();
+      }}
+    >
+      <DialogContent className="glass-strong border-glass-border">
+        <DialogHeader>
+          <DialogTitle>Add portfolio snapshot</DialogTitle>
+          <DialogDescription>
+            Record a point-in-time value for one broker partition.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Date
+              </Label>
+              <Input
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="bg-input/40 border-glass-border mt-1.5"
+                required
+              />
+            </div>
+            <div>
+              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Broker Partition
+              </Label>
+              <Select value={partition} onValueChange={(v: PortfolioPartitionKey) => setPartition(v)}>
+                <SelectTrigger className="bg-input/40 border-glass-border mt-1.5">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PORTFOLIO_PARTITIONS.map((p) => (
+                    <SelectItem key={p.key} value={p.key}>
+                      {p.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div>
+            <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Current Value (₹)
+            </Label>
+            <div className="mt-1.5 relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
+                ₹
+              </span>
+              <Input
+                type="number"
+                step="1"
+                min="0"
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                className="bg-input/40 border-glass-border tabular-nums pl-7"
+                placeholder="0"
+                required
+              />
+            </div>
+          </div>
+
+          <div>
+            <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Notes (optional)
+            </Label>
+            <Input
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              className="bg-input/40 border-glass-border mt-1.5"
+              placeholder="Post-market valuation, rebalance note…"
+            />
+          </div>
+
+          <DialogFooter>
+            <Button type="submit" className="gradient-primary text-primary-foreground border-0 gap-2">
+              <Plus className="size-4" /> Save snapshot
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Must match the toast `duration` below — otherwise the Undo action can
+// disappear from screen before the deferred delete it's meant to cancel fires.
+const UNDO_WINDOW_MS = 5000;
+
+// ─── Snapshot history (grouped by partition, delete-with-undo) ────────────
+function SnapshotHistorySection() {
+  const { portfolioSnapshots, deletePortfolioSnapshot } = useStore();
+  const [expanded, setExpanded] = useState<Set<PortfolioPartitionKey>>(new Set());
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set());
+  const deleteTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  const togglePartition = (key: PortfolioPartitionKey) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  // Optimistic delete: hide immediately, defer the actual store mutation, and
+  // let an "Undo" toast action cancel it before it fires.
+  const handleDelete = (snap: PortfolioSnapshot) => {
+    // Guard against re-entrancy (e.g. a fast double-click on the same row
+    // before the optimistic hide re-renders) orphaning a previous timer.
+    const existingTimer = deleteTimers.current.get(snap.id);
+    if (existingTimer) clearTimeout(existingTimer);
+
+    setPendingDeleteIds((prev) => new Set(prev).add(snap.id));
+
+    const timer = setTimeout(() => {
+      deletePortfolioSnapshot(snap.id);
+      deleteTimers.current.delete(snap.id);
+      setPendingDeleteIds((prev) => {
+        const next = new Set(prev);
+        next.delete(snap.id);
+        return next;
+      });
+    }, UNDO_WINDOW_MS);
+    deleteTimers.current.set(snap.id, timer);
+
+    toast("Snapshot removed", {
+      duration: UNDO_WINDOW_MS,
+      description: `${partitionLabel(snap.brokerPartition)} • ${inr(snap.currentValue)} • ${fmtDate(snap.snapshotDate)}`,
+      action: {
+        label: "Undo",
+        onClick: () => {
+          const t = deleteTimers.current.get(snap.id);
+          if (t) {
+            clearTimeout(t);
+            deleteTimers.current.delete(snap.id);
+          }
+          setPendingDeleteIds((prev) => {
+            const next = new Set(prev);
+            next.delete(snap.id);
+            return next;
+          });
+        },
+      },
+    });
+  };
+
+  const visibleSnapshots = portfolioSnapshots.filter((s) => !pendingDeleteIds.has(s.id));
+
+  return (
+    <section className="glass rounded-2xl p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <History className="size-4 text-primary" />
+        <h2 className="font-semibold">Snapshot history</h2>
+        <span className="text-xs text-muted-foreground font-normal ml-1">
+          ({visibleSnapshots.length} total)
+        </span>
+      </div>
+
+      {visibleSnapshots.length === 0 ? (
+        <EmptyChart icon={<History className="size-10 opacity-30" />} text="No snapshots recorded yet" />
+      ) : (
+        <div className="space-y-3">
+          {PORTFOLIO_PARTITIONS.map((p) => {
+            const rows = visibleSnapshots
+              .filter((s) => s.brokerPartition === p.key)
+              .sort((a, b) => b.snapshotDate.localeCompare(a.snapshotDate));
+            if (rows.length === 0) return null;
+
+            const isOpen = expanded.has(p.key);
+            const latest = rows[0];
+
+            return (
+              <div key={p.key} className="rounded-xl border border-glass-border overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => togglePartition(p.key)}
+                  className="w-full flex items-center justify-between p-3.5 hover:bg-white/5 transition-colors"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span
+                      className="size-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: PARTITION_HEX[p.key] }}
+                    />
+                    <div className="text-left min-w-0">
+                      <p className="text-sm font-medium">{p.label}</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        {rows.length} snapshot{rows.length !== 1 ? "s" : ""} • latest {inr(latest.currentValue)} on{" "}
+                        {fmtDate(latest.snapshotDate)}
+                      </p>
+                    </div>
+                  </div>
+                  {isOpen ? (
+                    <ChevronUp className="size-4 text-muted-foreground shrink-0" />
+                  ) : (
+                    <ChevronDown className="size-4 text-muted-foreground shrink-0" />
+                  )}
+                </button>
+
+                {isOpen && (
+                  <ul className="border-t border-glass-border divide-y divide-glass-border">
+                    {rows.map((s) => (
+                      <li key={s.id} className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium tabular-nums">{inr(s.currentValue)}</p>
+                          <p className="text-[11px] text-muted-foreground">
+                            {fmtDate(s.snapshotDate)}
+                            {s.notes ? ` • ${s.notes}` : ""}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleDelete(s)}
+                          className="text-muted-foreground hover:text-destructive p-1.5 shrink-0"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 

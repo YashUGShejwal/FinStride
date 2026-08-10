@@ -10,7 +10,7 @@ import {
   type GrindMetricKey,
   type HustleCategory,
 } from "@/lib/store";
-import { inr, inrCompact, fmtDate } from "@/lib/format";
+import { inr, inrCompact, fmtDate, todayLocalISO } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -148,7 +148,7 @@ function SideHustleEngine() {
   const { grind, addHustleEntry, deleteHustleEntry } = useStore();
   const entries = grind.hustle;
 
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(todayLocalISO);
   const [category, setCategory] = useState<HustleCategory>("Freelance");
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");

@@ -9,7 +9,7 @@ import {
   useStore, INVESTMENT_APPS, PORTFOLIO_PARTITIONS,
   type BrokerPartition, type CloseReason, type PortfolioPartitionKey,
 } from "@/lib/store";
-import { inr, fmtDate } from "@/lib/format";
+import { inr, fmtDate, todayLocalISO } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -199,7 +199,7 @@ function SwingPage() {
   const [partition, setPartition] = useState<BrokerPartition>("Dhan Swing");
   const [ticker, setTicker] = useState("");
   const [fnoBlocked, setFnoBlocked] = useState(false);
-  const [entryDate, setEntryDate] = useState(new Date().toISOString().slice(0, 10));
+  const [entryDate, setEntryDate] = useState(todayLocalISO);
   const [qty, setQty] = useState("");
   const [entry, setEntry] = useState("");
   const [target, setTarget] = useState("");

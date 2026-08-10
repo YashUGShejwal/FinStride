@@ -410,6 +410,7 @@ type StoreCtx = {
   addPortfolioSnapshots: (
     entries: Array<{ brokerPartition: PortfolioPartitionKey; currentValue: number }>,
     notes?: string,
+    snapshotDate?: string,
   ) => void;
   deletePortfolioSnapshot: (id: string) => void;
   // Grind Deck
@@ -574,11 +575,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       ),
     deleteTrade: (id) => setTrades((s) => s.filter((x) => x.id !== id)),
     toggleObligation,
-    addPortfolioSnapshots: (entries, notes) => {
-      const snapshotDate = new Date().toISOString();
+    addPortfolioSnapshots: (entries, notes, snapshotDate) => {
+      const date = snapshotDate ?? new Date().toISOString();
       const rows: PortfolioSnapshot[] = entries.map((e) => ({
         id: crypto.randomUUID(),
-        snapshotDate,
+        snapshotDate: date,
         brokerPartition: e.brokerPartition,
         currentValue: e.currentValue,
         notes,

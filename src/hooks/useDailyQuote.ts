@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { FINSTRIDE_QUOTES, type MotivationQuote } from "@/lib/quotes";
+import { todayLocalISO } from "@/lib/format";
 
 const OWNER_EMAIL = "test78@gmail.com"; // swap for your real email
 
@@ -29,7 +30,7 @@ export function useDailyQuote(userEmail: string): MotivationQuote | null {
 
     if (pool.length === 0) return;
 
-    const today = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+    const today = todayLocalISO();
 
     try {
       const savedDate = localStorage.getItem(DATE_KEY);
