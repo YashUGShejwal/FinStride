@@ -24,13 +24,13 @@ function PendingPage() {
     },
     {
       key: "scooterEmi",
-      label: "Scooter EMI",
+      label: "Loan/EMI",
       amount: blueprintSettings.scooterEmi,
       description: `Fixed at ${inr(blueprintSettings.scooterEmi)} / month`,
     },
     {
       key: "growwMfSip",
-      label: "Groww MF SIP",
+      label: "Investment SIP",
       amount: blueprintSettings.growwMfSip,
       description: `Monthly mutual fund SIP commitment — ${inr(blueprintSettings.growwMfSip)}`,
     },

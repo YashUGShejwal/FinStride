@@ -29,10 +29,10 @@ export const Route = createFileRoute("/_authenticated/analytics")({ component: A
 // Hand-picked for the 4 built-in defaults; any custom partition a user adds
 // via Settings falls back to a hue cycled by its position in the list.
 const PARTITION_COLORS: Partial<Record<string, string>> = {
-  "Zerodha Vault": "oklch(0.72 0.18 250)",   // blue
-  "Dhan Swing":    "oklch(0.72 0.18 155)",   // green
-  "INDmoney US":   "oklch(0.72 0.15 290)",   // purple
-  "Cash":          "oklch(0.78 0.14 80)",    // amber
+  "Long-Term Portfolio":  "oklch(0.72 0.18 250)", // blue
+  "Primary Broker":       "oklch(0.72 0.18 155)", // green
+  "International Broker": "oklch(0.72 0.15 290)", // purple
+  "Cash":                 "oklch(0.78 0.14 80)",  // amber
 };
 const FALLBACK_HUES = [20, 340, 200, 60, 130, 280] as const;
 function colorForPartition(key: string, index: number): string {
@@ -41,10 +41,10 @@ function colorForPartition(key: string, index: number): string {
 
 // Recharts needs hex/rgb for the legend dot; provide a parallel hex map + fallback
 const PARTITION_HEX: Partial<Record<string, string>> = {
-  "Zerodha Vault": "#4f8ef7",
-  "Dhan Swing":    "#3ecf75",
-  "INDmoney US":   "#a78bfa",
-  "Cash":          "#f59e0b",
+  "Long-Term Portfolio":  "#4f8ef7",
+  "Primary Broker":       "#3ecf75",
+  "International Broker": "#a78bfa",
+  "Cash":                 "#f59e0b",
 };
 const FALLBACK_HEX = ["#fb7185", "#f472b6", "#38bdf8", "#facc15", "#34d399", "#c084fc"] as const;
 function hexForPartition(key: string, index: number): string {

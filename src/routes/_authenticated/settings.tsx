@@ -1,6 +1,9 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useState, type FormEvent } from "react";
-import { Settings, Lock, Trash2, Plus, RotateCcw, Save, Wallet, Sparkles } from "lucide-react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useRef, useState, type FormEvent } from "react";
+import {
+  Settings, Lock, Trash2, Plus, RotateCcw, Save, Wallet, Sparkles,
+  Download, Upload, TriangleAlert, DatabaseZap,
+} from "lucide-react";
 import {
   useStore,
   DEFAULT_BLUEPRINT,
@@ -15,6 +18,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/settings")({ component: SettingsPage });
@@ -36,11 +44,42 @@ function SettingsPage() {
     portfolioPartitions,
     showPersonalQuotes,
     setShowPersonalQuotes,
+    exportData,
+    importData,
+    resetAllData,
   } = useStore();
+  const nav = useNavigate();
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   const riskCapPartitionLabel =
     portfolioPartitions.find((p) => p.key === blueprintSettings.riskCapPartition)?.label ??
     blueprintSettings.riskCapPartition;
+
+  const handleExport = () => {
+    if (exportData()) toast.success("Backup downloaded");
+    else toast.error("Couldn't create the backup file");
+  };
+
+  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file next time
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = typeof reader.result === "string" ? reader.result : "";
+      const result = importData(text);
+      if (result.success) toast.success("Backup restored");
+      else toast.error(result.error ?? "Import failed");
+    };
+    reader.onerror = () => toast.error("Couldn't read that file");
+    reader.readAsText(file);
+  };
+
+  const handleDeleteAll = () => {
+    resetAllData();
+    toast.success("All local data cleared");
+    nav({ to: "/dashboard" });
+  };
 
   // ── Blueprint form local state (controlled, saved on submit) ──────────────
   const [bp, setBp] = useState({
@@ -127,13 +166,13 @@ function SettingsPage() {
               onChange={(v) => setBp((s) => ({ ...s, fixedRunrate: v }))}
             />
             <BpField
-              label="Scooter EMI (₹)"
+              label="Loan/EMI (₹)"
               hint={`Currently: ${inr(blueprintSettings.scooterEmi)}`}
               value={bp.scooterEmi}
               onChange={(v) => setBp((s) => ({ ...s, scooterEmi: v }))}
             />
             <BpField
-              label="Groww MF SIP (₹)"
+              label="Investment SIP (₹)"
               hint={`Currently: ${inr(blueprintSettings.growwMfSip)}`}
               value={bp.growwMfSip}
               onChange={(v) => setBp((s) => ({ ...s, growwMfSip: v }))}
@@ -282,6 +321,80 @@ function SettingsPage() {
             checked={showPersonalQuotes}
             onCheckedChange={(checked) => setShowPersonalQuotes(checked)}
           />
+        </div>
+      </section>
+
+      {/* Data Management */}
+      <section className="glass rounded-2xl p-5 md:p-6">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="size-9 rounded-xl gradient-success grid place-items-center shrink-0">
+            <DatabaseZap className="size-4 text-background" />
+          </div>
+          <div>
+            <h2 className="font-semibold">Data Management</h2>
+            <p className="text-xs text-muted-foreground">
+              Back up everything to a file, restore from a backup, or wipe local data and start fresh.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            type="button"
+            onClick={handleExport}
+            variant="secondary"
+            className="gap-2 h-10 glass-strong border-glass-border"
+          >
+            <Download className="size-4" /> Export Data (JSON)
+          </Button>
+
+          <Button
+            type="button"
+            onClick={() => importInputRef.current?.click()}
+            variant="secondary"
+            className="gap-2 h-10 glass-strong border-glass-border"
+          >
+            <Upload className="size-4" /> Import Data (JSON)
+          </Button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            onChange={handleImportFile}
+            className="hidden"
+          />
+
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                type="button"
+                className="gap-2 h-10 border-0 bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                <Trash2 className="size-4" /> Delete All Data
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent className="glass-strong border-glass-border">
+              <AlertDialogHeader>
+                <AlertDialogTitle className="flex items-center gap-2">
+                  <TriangleAlert className="size-4 text-destructive" /> Delete all local data?
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  This permanently clears every transaction, trade, portfolio snapshot, Grind Deck
+                  entry, and setting stored on this device, and resets everything to zero/empty
+                  defaults. Export a backup first if you want to keep a copy. This cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleDeleteAll}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  Delete everything
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </section>
     </div>

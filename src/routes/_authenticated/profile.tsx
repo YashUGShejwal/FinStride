@@ -61,7 +61,7 @@ function ProfilePage() {
         <h2 className="font-semibold">Blueprint</h2>
         <ul className="mt-3 text-sm space-y-2 text-muted-foreground">
           <li>• Salary baseline <span className="text-foreground font-medium">{inr(blueprintSettings.defaultSalary)}</span></li>
-          <li>• Fixed runrate <span className="text-foreground font-medium">{inr(blueprintSettings.fixedRunrate)}</span> + scooter EMI <span className="text-foreground font-medium">{inr(blueprintSettings.scooterEmi)}</span></li>
+          <li>• Fixed runrate <span className="text-foreground font-medium">{inr(blueprintSettings.fixedRunrate)}</span> + loan EMI <span className="text-foreground font-medium">{inr(blueprintSettings.scooterEmi)}</span></li>
           <li>• <span className="text-foreground font-medium">{(blueprintSettings.defaultRiskCapPct * 100).toFixed(1)}%</span> per-trade risk cap on latest {partitionLabel(blueprintSettings.riskCapPartition)} snapshot</li>
           <li>• F&O instruments blocked at the input layer</li>
         </ul>

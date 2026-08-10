@@ -267,12 +267,12 @@ export function settingsToRow(b: SettingsBundle, userId: string): DbUserSettings
  * in sync with DEFAULT_BLUEPRINT in src/lib/store.tsx.
  */
 const SETTINGS_FALLBACK = {
-  defaultSalary: 76000,
-  fixedRunrate: 39000,
-  scooterEmi: 9000,
-  growwMfSip: 5000,
+  defaultSalary: 0,
+  fixedRunrate: 0,
+  scooterEmi: 0,
+  growwMfSip: 0,
   defaultRiskCapPct: 0.03,
-  riskCapPartition: "Dhan Swing",
+  riskCapPartition: "Primary Broker",
 } as const;
 
 export function rowToSettings(r: DbUserSettings): SettingsBundle {

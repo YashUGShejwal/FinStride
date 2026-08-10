@@ -47,33 +47,33 @@ export type InvestmentApp = {
 
 export const DEFAULT_INVESTMENT_APPS: readonly InvestmentApp[] = [
   {
-    id: "Zerodha Vault",
-    label: "Zerodha Vault",
+    id: "Long-Term Portfolio",
+    label: "Long-Term Portfolio",
     description: "Long-hold equity vault (delivery)",
     scopes: ["cashflow", "swing"],
   },
   {
-    id: "Dhan Swing",
-    label: "Dhan Swing",
+    id: "Primary Broker",
+    label: "Primary Broker",
     description: "Active swing book — equity only",
     scopes: ["cashflow", "swing"],
   },
   {
-    id: "INDmoney US",
-    label: "INDmoney US",
-    description: "US equities partition",
+    id: "International Broker",
+    label: "International Broker",
+    description: "International equities partition",
     scopes: ["cashflow", "swing"],
   },
   {
-    id: "CoinDCX Crypto",
-    label: "CoinDCX Crypto",
+    id: "Crypto Wallet",
+    label: "Crypto Wallet",
     description: "Crypto holdings",
     scopes: ["cashflow", "swing"],
   },
   {
-    id: "Groww MF",
-    label: "Groww MF",
-    description: "Mutual Fund SIPs via Groww",
+    id: "Mutual Funds",
+    label: "Mutual Funds",
+    description: "Mutual fund SIPs",
     scopes: ["cashflow", "swing"],
   },
   {
@@ -94,9 +94,9 @@ export const DEFAULT_PORTFOLIO_PARTITIONS: readonly {
   label: string;
   description: string;
 }[] = [
-  { key: "Zerodha Vault", label: "Zerodha Vault", description: "Long-term ETFs & SGBs" },
-  { key: "Dhan Swing", label: "Dhan Swing", description: "Active equity swings" },
-  { key: "INDmoney US", label: "INDmoney US", description: "US fractional stocks" },
+  { key: "Long-Term Portfolio", label: "Long-Term Portfolio", description: "Long-term ETFs & bonds" },
+  { key: "Primary Broker", label: "Primary Broker", description: "Active equity swings" },
+  { key: "International Broker", label: "International Broker", description: "International fractional stocks" },
   { key: "Cash", label: "Liquid Cash", description: "Emergency bank balance" },
 ] as const;
 
@@ -155,13 +155,17 @@ export type BlueprintSettings = {
   riskCapPartition: PortfolioPartitionKey;
 };
 
+// A fresh install must show ₹0 everywhere until the user configures their own
+// numbers — these fallbacks are the initial state / "reset to defaults" value,
+// never a stand-in for real financial data. riskCapPct stays 3% since it's a
+// risk-management RULE, not a personal financial figure the way the ₹ amounts are.
 export const DEFAULT_BLUEPRINT: BlueprintSettings = {
-  defaultSalary: 76000,
-  fixedRunrate: 39000,
-  scooterEmi: 9000,
+  defaultSalary: 0,
+  fixedRunrate: 0,
+  scooterEmi: 0,
   defaultRiskCapPct: 0.03,
-  growwMfSip: 5000,
-  riskCapPartition: "Dhan Swing",
+  growwMfSip: 0,
+  riskCapPartition: "Primary Broker",
 };
 
 const BLUEPRINT_KEY = "finstride.blueprint.settings";
@@ -199,12 +203,12 @@ export const DEFAULT_INCOME_CATEGORIES: readonly string[] = [
 ];
 export const DEFAULT_EXPENSE_CATEGORIES: readonly string[] = [
   "Fixed Runrate",
-  "Scooter EMI",
+  "Loan/EMI",
   "Capital Transfer (Out)",
   "Other",
 ];
 
-type CustomCategories = { income: string[]; expense: string[] };
+export type CustomCategories = { income: string[]; expense: string[] };
 const CATEGORIES_KEY = "finstride.categories.custom";
 const DEFAULT_CUSTOM_CATEGORIES: CustomCategories = { income: [], expense: [] };
 
@@ -270,11 +274,20 @@ export function currentMonthKey(): string {
 }
 
 // ─── Legacy data normalizers ───────────────────────────────────────────────
+// Maps both the old underscore-formatted names AND the earlier (specific
+// broker-branded) canonical names to the current generic defaults, so any
+// trade/snapshot recorded before this pass still resolves to a real default
+// partition instead of surviving as an orphaned literal string.
 const LEGACY_PARTITION_MAP: Record<string, string> = {
-  Zerodha_Vault: "Zerodha Vault",
-  Dhan_Swing: "Dhan Swing",
-  INDmoney_US: "INDmoney US",
+  Zerodha_Vault: "Long-Term Portfolio",
+  Dhan_Swing: "Primary Broker",
+  INDmoney_US: "International Broker",
   Liquid_Cash: "Cash",
+  "Zerodha Vault": "Long-Term Portfolio",
+  "Dhan Swing": "Primary Broker",
+  "INDmoney US": "International Broker",
+  "CoinDCX Crypto": "Crypto Wallet",
+  "Groww MF": "Mutual Funds",
 };
 
 // Any non-empty string is a valid partition (built-in default or user custom) —
@@ -285,7 +298,7 @@ function normalizePartition(raw: unknown): string {
   if (typeof raw === "string" && raw.trim()) {
     return LEGACY_PARTITION_MAP[raw] ?? raw;
   }
-  return "Dhan Swing";
+  return "Primary Broker";
 }
 
 // Same reasoning as normalizePartition — any non-empty string is valid.
@@ -366,7 +379,7 @@ function normalizeTrade(raw: Record<string, unknown>): Trade {
     targetPrice: Number(raw.targetPrice),
     stopLoss: Number(raw.stopLoss),
     source: raw.source === "Self" ? "Self" : "TheDoji",
-    partition: normalizePartition(raw.partition ?? "Dhan Swing"),
+    partition: normalizePartition(raw.partition ?? "Primary Broker"),
     notes: raw.notes ? String(raw.notes) : undefined,
     status: raw.status === "closed" ? "closed" : "open",
     closeReason: (raw.closeReason as CloseReason | undefined) ?? undefined,
@@ -542,6 +555,30 @@ type StoreCtx = {
   deleteGrindLog: (metric: GrindMetricKey, id: string) => void;
   addHustleEntry: (entry: Omit<HustleEntry, "id">) => void;
   deleteHustleEntry: (id: string) => void;
+  // Local data management
+  /** Downloads everything below as a single .json file. Returns false if the browser blocked it. */
+  exportData: () => boolean;
+  /** Replaces current state with a previously-exported backup. Any field missing from the file is left untouched. */
+  importData: (json: string) => { success: boolean; error?: string };
+  /** Wipes every finstride.* localStorage key and resets all in-memory state to empty/default. */
+  resetAllData: () => void;
+};
+
+/** Shape of a file produced by exportData() / accepted by importData(). */
+export type FinStrideBackup = {
+  version: 1;
+  exportedAt: string;
+  transactions: Transaction[];
+  trades: Trade[];
+  portfolioSnapshots: PortfolioSnapshot[];
+  grind: GrindState;
+  /** Full multi-month history, not just the current month. */
+  pendingByMonth: Record<string, MonthlyPending>;
+  blueprintSettings: BlueprintSettings;
+  customPaymentModes: string[];
+  customPartitions: CustomPartition[];
+  customCategories: CustomCategories;
+  showPersonalQuotes: boolean;
 };
 
 const Ctx = createContext<StoreCtx | null>(null);
@@ -1260,6 +1297,156 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setGrind((s) => ({ ...s, hustle: s.hustle.filter((e) => e.id !== id) }));
       const sync = getSync();
       if (sync) trackedWrite(deleteHustleEntryRow(sync.client, sync.userId, id));
+    },
+    exportData: () => {
+      try {
+        const backup: FinStrideBackup = {
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          transactions,
+          trades,
+          portfolioSnapshots,
+          grind,
+          pendingByMonth: loadAllPending(),
+          blueprintSettings,
+          customPaymentModes,
+          customPartitions,
+          customCategories,
+          showPersonalQuotes,
+        };
+        const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `finstride-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    importData: (json) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(json);
+      } catch {
+        return { success: false, error: "That file isn't valid JSON." };
+      }
+      if (!parsed || typeof parsed !== "object") {
+        return { success: false, error: "That file doesn't look like a FinStride backup." };
+      }
+      const b = parsed as Record<string, unknown>;
+
+      // Every field is optional and independently defaulted to the CURRENT
+      // value (not a blank default) when absent or malformed, so importing an
+      // older or hand-edited partial backup can't silently wipe data the file
+      // simply didn't mention. Reuses the exact normalizers the initial
+      // localStorage/remote load already trusts for untrusted raw JSON.
+      const importedTransactions = Array.isArray(b.transactions)
+        ? (b.transactions as Record<string, unknown>[]).map(normalizeTransaction)
+        : transactions;
+      const importedTrades = Array.isArray(b.trades)
+        ? (b.trades as Record<string, unknown>[]).map(normalizeTrade)
+        : trades;
+      let importedSnapshots = portfolioSnapshots;
+      if (Array.isArray(b.portfolioSnapshots)) {
+        const rows: PortfolioSnapshot[] = [];
+        for (const raw of b.portfolioSnapshots as Record<string, unknown>[]) {
+          const result = normalizeSnapshot(raw);
+          if (Array.isArray(result)) rows.push(...result);
+          else rows.push(result);
+        }
+        importedSnapshots = rows;
+      }
+      const importedGrind = b.grind !== undefined ? normalizeGrindState(b.grind) : grind;
+      const importedBlueprint =
+        b.blueprintSettings !== undefined ? normalizeBlueprint(b.blueprintSettings) : blueprintSettings;
+      const importedCats =
+        b.customCategories !== undefined
+          ? normalizeCustomCategories(b.customCategories)
+          : customCategories;
+      const importedPaymentModes =
+        b.customPaymentModes !== undefined
+          ? normalizeCustomPaymentModes(b.customPaymentModes)
+          : customPaymentModes;
+      const importedPartitions =
+        b.customPartitions !== undefined
+          ? normalizeCustomPartitions(b.customPartitions)
+          : customPartitions;
+      const importedShowPersonal =
+        typeof b.showPersonalQuotes === "boolean" ? b.showPersonalQuotes : showPersonalQuotes;
+
+      markLocalWrite();
+      setTransactions(importedTransactions);
+      setTrades(importedTrades);
+      setPortfolioSnapshots(importedSnapshots);
+      setGrind(importedGrind);
+      setBlueprintSettings(importedBlueprint);
+      setCustomCategories(importedCats);
+      setCustomPaymentModes(importedPaymentModes);
+      setCustomPartitions(importedPartitions);
+      setShowPersonalQuotesState(importedShowPersonal);
+
+      if (b.pendingByMonth && typeof b.pendingByMonth === "object") {
+        const monthMap = b.pendingByMonth as Record<string, MonthlyPending>;
+        try {
+          localStorage.setItem(PENDING_KEY, JSON.stringify(monthMap));
+        } catch {
+          // Non-fatal — the current month's slice below still applies in memory.
+        }
+        setPendingChecklist(monthMap[currentMonthKey()] ?? {});
+      }
+
+      // Mirror the import to the cloud too, if this account is synced.
+      const sync = getSync();
+      if (sync) {
+        for (const t of importedTransactions) trackedWrite(dbUpsertTransaction(sync.client, sync.userId, t));
+        for (const t of importedTrades) trackedWrite(dbUpsertTrade(sync.client, sync.userId, t));
+        if (importedSnapshots.length) {
+          trackedWrite(dbUpsertSnapshots(sync.client, sync.userId, importedSnapshots));
+        }
+        trackedWrite(
+          dbUpsertSettings(sync.client, sync.userId, {
+            blueprint: importedBlueprint,
+            showPersonalQuotes: importedShowPersonal,
+            customPaymentModes: importedPaymentModes,
+            customPartitions: importedPartitions,
+            customIncomeCategories: importedCats.income,
+            customExpenseCategories: importedCats.expense,
+          }),
+        );
+      }
+
+      return { success: true };
+    },
+    resetAllData: () => {
+      markLocalWrite();
+      for (const key of ALL_LOCAL_KEYS) {
+        try {
+          localStorage.removeItem(key);
+        } catch {
+          // Nothing actionable — in-memory state below is reset regardless.
+        }
+      }
+      setTransactions([]);
+      setTrades([]);
+      setPortfolioSnapshots([]);
+      setGrind(EMPTY_GRIND);
+      setBlueprintSettings(DEFAULT_BLUEPRINT);
+      setShowPersonalQuotesState(false);
+      setCustomPaymentModes([]);
+      setCustomPartitions([]);
+      setCustomCategories(DEFAULT_CUSTOM_CATEGORIES);
+      setPendingChecklist({});
+      // Deliberately does NOT touch remote Supabase rows or sign the user out —
+      // this clears the LOCAL cache only. For a cloud-synced account, the next
+      // full reload's "cloud wins" load would otherwise just re-populate
+      // everything from the account's still-intact remote data; the caller
+      // should navigate client-side (not a hard reload) immediately after this
+      // so the in-memory reset actually sticks for the current session.
     },
   };
 

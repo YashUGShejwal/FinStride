@@ -208,7 +208,7 @@ function SwingPage() {
   const riskCapPartitionLabel = partitionLabel(blueprintSettings.riskCapPartition);
 
   // ── entry form state ──────────────────────────────────────────────────────
-  const [partition, setPartition] = useState<BrokerPartition>("Dhan Swing");
+  const [partition, setPartition] = useState<BrokerPartition>("Primary Broker");
   const [ticker, setTicker] = useState("");
   const [fnoBlocked, setFnoBlocked] = useState(false);
   const [entryDate, setEntryDate] = useState(todayLocalISO);
