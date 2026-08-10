@@ -771,7 +771,7 @@ function trackedWrite(promise: Promise<boolean>): void {
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const userId = user?.id ?? null;
   const cloudEnabled = isSupabaseConfigured();
 
@@ -862,6 +862,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       });
       setPendingChecklist(local.pending);
 
+      // Auth is still resolving — the initial getSession() restore, or an
+      // active OAuth code exchange on /auth/callback. `userId` here could be
+      // a stale localStorage-mirrored value (AuthProvider paints from it
+      // optimistically before its own check resolves) or about to change
+      // again the moment the exchange finishes. Fetching remote data against
+      // either is exactly the race that produced 401s: the request goes out
+      // before the client's in-memory session is the authoritative one. Do
+      // nothing remote yet — re-run (authLoading is a dependency below) once
+      // auth settles, with whatever userId turns out to be the authoritative
+      // one. The local snapshot already applied above still paints instantly,
+      // so this adds no visible delay for the common (already-signed-in) case.
+      if (authLoading) return;
+
       const client = cloudEnabled && userId ? getSupabaseBrowserClient() : null;
       if (!client || !userId) {
         // Local-only session (offline / unauthenticated / Supabase not
@@ -951,7 +964,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [userId, cloudEnabled]);
+  }, [userId, cloudEnabled, authLoading]);
 
   // ── Persist effects (localStorage = offline cache + local-only store) ────
   // All gated on `hydrated` so they never write pre-load empty state over real data.
