@@ -16,3 +16,23 @@ export function useModKeyLabel(): string | null {
   }, []);
   return label;
 }
+
+/** The `beforeinstallprompt` event — not yet in lib.dom.d.ts. */
+export type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+};
+
+/**
+ * True when the app is currently running as an installed PWA — a standalone
+ * window, or (iOS has no `display-mode` match) the home-screen-launch flag
+ * Safari sets on `navigator`. Client-only: always false during SSR.
+ */
+export function isRunningStandalone(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    ("standalone" in window.navigator &&
+      (window.navigator as { standalone?: boolean }).standalone === true)
+  );
+}

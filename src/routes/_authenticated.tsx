@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Bell, Command as CommandIcon, Eye, EyeOff, LayoutDashboard, LogOut,
-  PieChart, Settings, Sparkles, TrendingUp, User, Wallet,
+  PieChart, Settings, Sparkles, TrendingUp, User, Wallet, WifiOff,
 } from "lucide-react";
 import { getStoredAuthUser, useAuth } from "@/lib/auth";
 import { useStore } from "@/lib/store";
@@ -79,7 +79,7 @@ const TAB_SPRING = { type: "spring", stiffness: 420, damping: 34 } as const;
 function WorkstationShell() {
   const path = useRouterState({ select: (s) => s.location.pathname });
   const { user, signOut } = useAuth();
-  const { isStealthMode, toggleStealthMode } = useStore();
+  const { isStealthMode, toggleStealthMode, isOffline } = useStore();
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   // Global keyboard bindings: Cmd/Ctrl+K → palette, Cmd/Ctrl+Shift+P → stealth.
@@ -154,6 +154,16 @@ function WorkstationShell() {
 
           {/* Right-side controls */}
           <div className="ml-auto flex items-center gap-1.5">
+            {isOffline && (
+              <span
+                className="flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-warning/30 bg-warning/10 text-warning text-xs font-medium"
+                title="No network connection — showing your last saved data"
+              >
+                <WifiOff className="size-3.5" />
+                <span className="hidden sm:inline">Offline</span>
+              </span>
+            )}
+
             <button
               onClick={() => setPaletteOpen(true)}
               className="flex items-center gap-2 h-8 px-2.5 rounded-lg border border-glass-border text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"

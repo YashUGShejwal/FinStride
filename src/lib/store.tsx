@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
+import { isRunningStandalone, type BeforeInstallPromptEvent } from "@/lib/platform";
 import {
   deleteGrindLogRow,
   deleteHustleEntryRow,
@@ -253,6 +254,11 @@ function normalizeCustomPartitions(raw: unknown): CustomPartition[] {
 // owner-email check, and defaults off so a fresh install never shows someone
 // else's personal notes without opting in.
 const SHOW_PERSONAL_QUOTES_KEY = "finstride.quotes.showPersonal";
+
+// ─── Connectivity & installability ─────────────────────────────────────────
+// Neither has a localStorage key: both are live browser/OS facts (network
+// state, install state) that must always reflect the CURRENT device/session,
+// never a persisted value from a previous one.
 
 // ─── Stealth privacy mode ───────────────────────────────────────────────────
 // Blurs sensitive figures (net worth, balances, trade sizes, returns) across
@@ -543,6 +549,14 @@ type StoreCtx = {
   // Stealth privacy mode
   isStealthMode: boolean;
   toggleStealthMode: () => void;
+  // Connectivity
+  isOffline: boolean;
+  // PWA installability — captured once here so it's caught regardless of
+  // which route is mounted when the browser fires the prompt.
+  canInstallApp: boolean;
+  isAppInstalled: boolean;
+  /** Resolves true if the user accepted the native install prompt. False if none was captured, or they dismissed it. */
+  installApp: () => Promise<boolean>;
   // Transactions
   addTransaction: (t: Omit<Transaction, "id">) => void;
   deleteTransaction: (id: string) => void;
@@ -807,6 +821,46 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } catch {
       // Ignore — stealth simply stays off this session.
     }
+  }, []);
+
+  // Starts false (assume online) and corrects on mount: navigator.onLine
+  // doesn't exist during SSR, and "online" is the overwhelmingly common case
+  // for a fresh load anyway, so there's nothing jarring to correct visually.
+  const [isOffline, setIsOffline] = useState(false);
+  useEffect(() => {
+    setIsOffline(!navigator.onLine);
+    const onOnline = () => setIsOffline(false);
+    const onOffline = () => setIsOffline(true);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, []);
+
+  const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(
+    null,
+  );
+  const [isAppInstalled, setIsAppInstalled] = useState(false);
+  useEffect(() => {
+    setIsAppInstalled(isRunningStandalone());
+    const onBeforeInstallPrompt = (e: Event) => {
+      // Suppress the browser's own mini-infobar — the app decides when/where
+      // to offer installation (the banner, and Settings' install button).
+      e.preventDefault();
+      setInstallPromptEvent(e as BeforeInstallPromptEvent);
+    };
+    const onAppInstalled = () => {
+      setIsAppInstalled(true);
+      setInstallPromptEvent(null);
+    };
+    window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
+    window.addEventListener("appinstalled", onAppInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt);
+      window.removeEventListener("appinstalled", onAppInstalled);
+    };
   }, []);
 
   const owner = userId ?? LOCAL_OWNER;
@@ -1219,6 +1273,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         return next;
       });
+    },
+    isOffline,
+    canInstallApp: installPromptEvent !== null,
+    isAppInstalled,
+    installApp: async () => {
+      if (!installPromptEvent) return false;
+      await installPromptEvent.prompt();
+      const choice = await installPromptEvent.userChoice;
+      setInstallPromptEvent(null);
+      if (choice.outcome === "accepted") setIsAppInstalled(true);
+      return choice.outcome === "accepted";
     },
     // Each mutation updates local state first (instant, and the offline record
     // of truth), then fires the matching remote write. Remote failures are

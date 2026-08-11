@@ -10,7 +10,7 @@ import {
 import { Toaster } from "@/components/ui/sonner";
 import { AuthProvider } from "@/lib/auth";
 import { StoreProvider } from "@/lib/store";
-import { PwaInstallBanner } from "@/lib/pwa";
+import { PwaInstallBanner, useServiceWorkerRegistration } from "@/lib/pwa";
 
 import appCss from "../styles.css?url";
 
@@ -92,6 +92,7 @@ function RootShell({ children }: { children: React.ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  useServiceWorkerRegistration();
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>

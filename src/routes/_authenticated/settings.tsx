@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useRef, useState, type FormEvent } from "react";
 import {
   Settings, Lock, Trash2, Plus, RotateCcw, Save, Wallet, Sparkles,
-  Download, Upload, TriangleAlert, DatabaseZap,
+  Download, Upload, TriangleAlert, DatabaseZap, Monitor, CheckCircle2,
 } from "lucide-react";
 import {
   useStore,
@@ -48,6 +48,9 @@ function SettingsPage() {
     exportData,
     importData,
     resetAllData,
+    canInstallApp,
+    isAppInstalled,
+    installApp,
   } = useStore();
   const nav = useNavigate();
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -80,6 +83,11 @@ function SettingsPage() {
     resetAllData();
     toast.success("All local data cleared");
     nav({ to: "/dashboard" });
+  };
+
+  const handleInstall = async () => {
+    const accepted = await installApp();
+    if (accepted) toast.success("FinStride installed");
   };
 
   // ── Blueprint form local state (controlled, saved on submit) ──────────────
@@ -325,6 +333,41 @@ function SettingsPage() {
           />
         </div>
       </section>
+
+      {/* Progressive Web App — only shown when there's something actionable
+          to say: either the browser has offered an install prompt, or the
+          app is already running installed. Browsers that never fire the
+          prompt (iOS Safari, or before the browser decides) show nothing
+          here — the mobile install banner covers those cases separately. */}
+      {(canInstallApp || isAppInstalled) && (
+        <section className="glass rounded-2xl p-5 md:p-6">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="size-9 rounded-xl gradient-primary grid place-items-center shrink-0">
+              <Monitor className="size-4 text-primary-foreground" />
+            </div>
+            <div>
+              <h2 className="font-semibold">Progressive Web App</h2>
+              <p className="text-xs text-muted-foreground">
+                Run FinStride in its own window, with offline access to your last saved data.
+              </p>
+            </div>
+          </div>
+
+          {isAppInstalled ? (
+            <div className="flex items-center gap-2 text-sm text-[oklch(0.78_0.16_155)]">
+              <CheckCircle2 className="size-4" /> FinStride is installed on this device.
+            </div>
+          ) : (
+            <Button
+              type="button"
+              onClick={handleInstall}
+              className="gap-2 h-10 gradient-primary text-primary-foreground border-0"
+            >
+              <Monitor className="size-4" /> Install Desktop App
+            </Button>
+          )}
+        </section>
+      )}
 
       {/* Data Management */}
       <section className="glass rounded-2xl p-5 md:p-6">

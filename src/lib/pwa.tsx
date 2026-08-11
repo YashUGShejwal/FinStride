@@ -1,24 +1,31 @@
 import { useEffect, useState } from "react";
 import { Download, Share2, Smartphone, X, CheckCircle2, MoreVertical, PlusSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
-
-type BeforeInstallPromptEvent = Event & {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
-};
+import { useStore } from "@/lib/store";
+import { isRunningStandalone } from "@/lib/platform";
 
 const SEEN_KEY = "finstride.pwa.dismissed";
 
-function isRunningStandalone(): boolean {
-  if (typeof window === "undefined") return false;
-  return (
-    window.matchMedia("(display-mode: standalone)").matches ||
-    ("standalone" in window.navigator && (window.navigator as { standalone?: boolean }).standalone === true)
-  );
+/**
+ * Registers the offline-caching service worker (public/sw.js). No-op during
+ * SSR (no `navigator`) and in dev (unbuilt assets would just thrash the
+ * cache) — production-only, client-only, and wrapped in an effect so a
+ * registration failure never breaks render.
+ */
+export function useServiceWorkerRegistration() {
+  useEffect(() => {
+    if (!("serviceWorker" in navigator) || !import.meta.env.PROD) return;
+    navigator.serviceWorker.register("/sw.js").catch((err: unknown) => {
+      console.warn("[pwa] service worker registration failed:", err);
+    });
+  }, []);
 }
 
 export function PwaInstallBanner() {
-  const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
+  // The beforeinstallprompt event is captured centrally in StoreProvider (it
+  // fires once, regardless of which route happens to be mounted) — this
+  // banner only decides whether/when to surface it.
+  const { canInstallApp, isAppInstalled, installApp } = useStore();
   const [open, setOpen] = useState(false);
   const [installed, setInstalled] = useState(false);
   const [platform, setPlatform] = useState<"ios" | "android" | "desktop">("desktop");
@@ -33,24 +40,20 @@ export function PwaInstallBanner() {
     const isAndroid = /android/.test(ua);
     setPlatform(isIOS ? "ios" : isAndroid ? "android" : "desktop");
 
-    const handler = (e: Event) => {
-      e.preventDefault();
-      setDeferred(e as BeforeInstallPromptEvent);
-      setOpen(true);
-    };
-    window.addEventListener("beforeinstallprompt", handler);
-
-    // On iOS (no native event) or desktop without prior prompt, show the teaching banner
+    // iOS has no native prompt event at all — show the teaching banner on a delay.
     if (isIOS) {
       const t = setTimeout(() => setOpen(true), 1800);
-      return () => {
-        window.removeEventListener("beforeinstallprompt", handler);
-        clearTimeout(t);
-      };
+      return () => clearTimeout(t);
     }
-
-    return () => window.removeEventListener("beforeinstallprompt", handler);
   }, []);
+
+  // Non-iOS: open as soon as the store captures a native install prompt —
+  // unless the user already dismissed this banner (persists across sessions).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (localStorage.getItem(SEEN_KEY) === "1") return;
+    if (canInstallApp && platform !== "ios") setOpen(true);
+  }, [canInstallApp, platform]);
 
   const dismiss = () => {
     setOpen(false);
@@ -58,16 +61,14 @@ export function PwaInstallBanner() {
   };
 
   const install = async () => {
-    if (deferred) {
-      await deferred.prompt();
-      const choice = await deferred.userChoice;
-      if (choice.outcome === "accepted") {
-        setInstalled(true);
-        setTimeout(dismiss, 1800);
-      }
+    const accepted = await installApp();
+    if (accepted) {
+      setInstalled(true);
+      setTimeout(dismiss, 1800);
     }
   };
 
+  if (isAppInstalled) return null;
   if (!open) return null;
 
   return (
@@ -86,7 +87,7 @@ export function PwaInstallBanner() {
         ) : platform === "ios" ? (
           <IOSInstructions onDismiss={dismiss} />
         ) : (
-          <AndroidPrompt onInstall={install} onDismiss={dismiss} hasNativePrompt={!!deferred} />
+          <AndroidPrompt onInstall={install} onDismiss={dismiss} hasNativePrompt={canInstallApp} />
         )}
       </div>
     </div>
