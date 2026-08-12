@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { motion } from "framer-motion";
 import {
   Search, Plus, Trash2, ArrowUpRight, ArrowDownRight,
@@ -9,6 +9,9 @@ import { useStore, type ObligationKey, type PaymentMode, type TxType } from "@/l
 import { inr, fmtDate, todayLocalISO } from "@/lib/format";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { Sensitive } from "@/components/Sensitive";
+import { useGlowRipple } from "@/hooks/useGlowRipple";
+import { QuickLogDrawer } from "@/components/ui/QuickLogDrawer";
+import { SpotlightCard } from "@/components/ui/SpotlightCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,12 +20,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 
 type CashflowTab = "ledger" | "obligations";
-type CashflowSearch = { tab?: CashflowTab };
+type CashflowSearch = { tab?: CashflowTab; action?: "add" };
 
 export const Route = createFileRoute("/_authenticated/cashflow")({
   validateSearch: (search: Record<string, unknown>): CashflowSearch => ({
     tab:
       search.tab === "obligations" ? "obligations" : search.tab === "ledger" ? "ledger" : undefined,
+    action: search.action === "add" ? "add" : undefined,
   }),
   component: CashflowPage,
 });
@@ -33,7 +37,7 @@ const TABS: { key: CashflowTab; label: string; icon: typeof ListChecks }[] = [
 ];
 
 function CashflowPage() {
-  const { tab } = Route.useSearch();
+  const { tab, action } = Route.useSearch();
   const nav = useNavigate({ from: Route.fullPath });
   const activeTab: CashflowTab = tab ?? "ledger";
 
@@ -42,11 +46,18 @@ function CashflowPage() {
   const setTab = (next: CashflowTab) =>
     nav({ search: { tab: next }, replace: true });
 
+  // ?action=add (palette "Add Transaction", dashboard quick card) expands the
+  // entry drawer; the param self-clears so refresh/back won't re-trigger it.
+  const openFormSignal = action === "add";
+  useEffect(() => {
+    if (action) void nav({ search: { tab }, replace: true });
+  }, [action, tab, nav]);
+
   return (
     <div className="space-y-6">
       <header>
         <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Cash Flow Hub</p>
-        <h1 className="text-3xl md:text-4xl font-semibold mt-1">
+        <h1 className="text-3xl md:text-4xl font-display font-semibold tracking-tight mt-1">
           <span className="text-gradient">Cash flow</span> command
         </h1>
         <p className="text-sm text-muted-foreground mt-2">
@@ -79,7 +90,11 @@ function CashflowPage() {
         })}
       </div>
 
-      {activeTab === "ledger" ? <LedgerSection /> : <ObligationsSection />}
+      {activeTab === "ledger" ? (
+        <LedgerSection openFormSignal={openFormSignal} />
+      ) : (
+        <ObligationsSection />
+      )}
     </div>
   );
 }
@@ -91,10 +106,42 @@ function cnSegment(active: boolean) {
   ].join(" ");
 }
 
+// ─── Quick-log presets ───────────────────────────────────────────────────────
+type QuickPreset = {
+  emoji: string;
+  label: string;
+  type: TxType;
+  category: string;
+  amount: number;
+  note?: string;
+};
+
+// Capital transfers only move money between the user's own accounts — the
+// running totals exclude them, matching the dashboard's operational stats.
+const TRANSFER_CATS = new Set(["Capital Transfer (In)", "Capital Transfer (Out)"]);
+
 // ─── Ledger segment ─────────────────────────────────────────────────────────
-function LedgerSection() {
-  const { transactions, addTransaction, deleteTransaction, incomeCategories, expenseCategories, paymentModes } = useStore();
+function LedgerSection({ openFormSignal }: { openFormSignal: boolean }) {
+  const { transactions, addTransaction, deleteTransaction, incomeCategories, expenseCategories, paymentModes, blueprintSettings } = useStore();
   const [q, setQ] = useState("");
+  const [formOpen, setFormOpen] = useState(openFormSignal);
+  const submitRef = useRef<HTMLButtonElement>(null);
+  const amountRef = useRef<HTMLInputElement>(null);
+  const focusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ledgerRipple = useGlowRipple();
+
+  // Latch, don't mirror: the deep-link signal opens the drawer, but the param
+  // self-clears right after, and manual toggling must keep working.
+  useEffect(() => {
+    if (openFormSignal) setFormOpen(true);
+  }, [openFormSignal]);
+
+  useEffect(
+    () => () => {
+      if (focusTimer.current) clearTimeout(focusTimer.current);
+    },
+    [],
+  );
 
   const [form, setForm] = useState({
     date: todayLocalISO(),
@@ -105,6 +152,46 @@ function LedgerSection() {
     tags: "",
     notes: "",
   });
+
+  // 1-click quick-log chips. All categories referenced here are built-in
+  // defaults, so they always exist in the type-matched category list.
+  const QUICK_PRESETS: QuickPreset[] = [
+    { emoji: "☕", label: "Chai/Coffee", type: "expense", category: "Other", amount: 200, note: "Chai/Coffee" },
+    { emoji: "⛽", label: "Fuel", type: "expense", category: "Other", amount: 1500, note: "Fuel" },
+    { emoji: "🛒", label: "Groceries", type: "expense", category: "Other", amount: 3000, note: "Groceries" },
+    { emoji: "💼", label: "Salary Baseline", type: "income", category: "Salary", amount: blueprintSettings.defaultSalary },
+  ];
+
+  const applyPreset = (p: QuickPreset) => {
+    setForm((s) => ({
+      ...s,
+      // Quick log means "now" — a stale backdate or leftover tags from an
+      // earlier abandoned entry must not silently ride along.
+      date: todayLocalISO(),
+      tags: "",
+      type: p.type,
+      category: p.category,
+      // A 0 salary baseline (fresh install) leaves the field empty for the
+      // user to complete instead of pre-filling an invalid ₹0.
+      amount: p.amount > 0 ? String(p.amount) : "",
+      notes: p.note ?? "",
+    }));
+    setFormOpen(true);
+    // Focus lands once the drawer's expand animation has mounted the target.
+    if (focusTimer.current) clearTimeout(focusTimer.current);
+    focusTimer.current = setTimeout(() => {
+      // If the user has meanwhile clicked into a field, don't steal focus.
+      const active = document.activeElement;
+      if (
+        active instanceof HTMLElement &&
+        ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName)
+      ) {
+        return;
+      }
+      // Complete preset → confirm on submit; amount left blank → fill it in.
+      (p.amount > 0 ? submitRef.current : amountRef.current)?.focus();
+    }, 320);
+  };
 
   // Switch the active category list and reset category when type changes
   const activeCategories = form.type === "income" ? incomeCategories : expenseCategories;
@@ -129,7 +216,17 @@ function LedgerSection() {
     });
     toast.success("Transaction added");
     setForm({ ...form, amount: "", tags: "", notes: "" });
+    ledgerRipple.trigger();
   };
+
+  const totals = useMemo(() => {
+    // Same operational scope as the dashboard's Income/Expenses/Net flow —
+    // two identically-named figures must never disagree.
+    const operational = transactions.filter((t) => !TRANSFER_CATS.has(t.category));
+    const income = operational.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
+    const expense = operational.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
+    return { income, expense, net: income - expense };
+  }, [transactions]);
 
   const filtered = useMemo(() => {
     const s = q.toLowerCase();
@@ -150,11 +247,30 @@ function LedgerSection() {
 
   return (
     <>
-      {/* Entry form */}
-      <section className="glass-strong rounded-2xl p-5 md:p-6">
-        <h2 className="font-semibold mb-4 flex items-center gap-2">
-          <Plus className="size-4 text-primary" /> New entry
-        </h2>
+      {/* 1-click quick-log preset chips */}
+      <div className="flex flex-wrap gap-2">
+        {QUICK_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => applyPreset(p)}
+            className="flex items-center gap-1.5 text-sm px-3.5 py-2 rounded-full border border-glass-border glass hover:border-primary/30 hover:bg-white/5 transition-all active:scale-95"
+          >
+            <span aria-hidden>{p.emoji}</span>
+            <span>{p.label}</span>
+            {p.amount > 0 && p.type === "expense" && (
+              <span className="tnum text-muted-foreground">({inr(p.amount)})</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* Entry form — collapsed by default so the live ledger stays in focus */}
+      <QuickLogDrawer
+        label="Quick Log Entry"
+        open={formOpen}
+        onToggle={() => setFormOpen((v) => !v)}
+      >
         <form onSubmit={submit} className="grid grid-cols-2 md:grid-cols-6 gap-3">
           <Field className="col-span-2 md:col-span-2" label="Date">
             <Input
@@ -212,6 +328,7 @@ function LedgerSection() {
           </Field>
           <Field className="col-span-1 md:col-span-1" label="Amount (₹)">
             <Input
+              ref={amountRef}
               type="number"
               step="1"
               min="0"
@@ -241,6 +358,7 @@ function LedgerSection() {
           </Field>
           <div className="col-span-2 md:col-span-6 flex justify-end">
             <Button
+              ref={submitRef}
               type="submit"
               className="gradient-primary text-primary-foreground border-0 gap-2 glow h-10"
             >
@@ -248,13 +366,37 @@ function LedgerSection() {
             </Button>
           </div>
         </form>
+      </QuickLogDrawer>
+
+      {/* Running totals — spring counters roll up as entries land. Labeled
+          "all time" because the search box below only filters the table.
+          Single column on phones: mono lakh-scale amounts don't fit thirds. */}
+      <section className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <SpotlightCard className="rounded-xl p-4">
+          <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Income · all time</p>
+          <p className="text-lg font-semibold mt-1 tnum text-[oklch(0.78_0.16_155)]">
+            <Sensitive><AnimatedNumber value={totals.income} format={inr} /></Sensitive>
+          </p>
+        </SpotlightCard>
+        <SpotlightCard className="rounded-xl p-4">
+          <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Expenses · all time</p>
+          <p className="text-lg font-semibold mt-1 tnum text-[oklch(0.78_0.18_25)]">
+            <Sensitive><AnimatedNumber value={totals.expense} format={inr} /></Sensitive>
+          </p>
+        </SpotlightCard>
+        <SpotlightCard className="rounded-xl p-4">
+          <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Net flow · all time</p>
+          <p className="text-lg font-semibold mt-1 tnum">
+            <Sensitive><AnimatedNumber value={totals.net} format={inr} /></Sensitive>
+          </p>
+        </SpotlightCard>
       </section>
 
       {/* Ledger */}
-      <section className="glass rounded-2xl p-5">
+      <section className={`glass rounded-2xl p-5 ${ledgerRipple.className}`}>
         <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between mb-4">
           <div>
-            <h2 className="font-semibold">Ledger</h2>
+            <h2 className="font-display font-semibold tracking-tight">Ledger</h2>
             <p className="text-xs text-muted-foreground">
               {filtered.length} of {transactions.length} entries
             </p>
@@ -419,6 +561,8 @@ function Amt({ value }: { value: number }) {
 
 function ObligationsSection() {
   const { creditCardDues, pendingChecklist, toggleObligation, blueprintSettings } = useStore();
+  const ccRipple = useGlowRipple();
+  const listRipple = useGlowRipple();
 
   const OBLIGATIONS: Obligation[] = [
     {
@@ -461,13 +605,13 @@ function ObligationsSection() {
       </p>
 
       {/* Credit Card Outstanding */}
-      <section className="glass-strong rounded-2xl p-5 md:p-6 kpi-card">
+      <SpotlightCard className={`rounded-2xl p-5 md:p-6 ${ccRipple.className}`}>
         <div className="flex items-center gap-3 mb-5">
           <div className="size-9 rounded-xl gradient-danger grid place-items-center shrink-0">
             <CreditCard className="size-4 text-background" />
           </div>
           <div>
-            <h2 className="font-semibold">Credit Card Outstanding</h2>
+            <h2 className="font-display font-semibold tracking-tight">Credit Card Outstanding</h2>
             <p className="text-xs text-muted-foreground">Cumulative card expenses from your ledger</p>
           </div>
         </div>
@@ -483,7 +627,10 @@ function ObligationsSection() {
             </Sensitive>
           </p>
           <button
-            onClick={() => toggleObligation("ccSettled")}
+            onClick={() => {
+              if (!pendingChecklist.ccSettled) ccRipple.trigger();
+              toggleObligation("ccSettled");
+            }}
             className={`flex items-center gap-2 text-sm px-4 py-2.5 rounded-xl border transition-all ${
               pendingChecklist.ccSettled
                 ? "gradient-success border-transparent text-background font-medium"
@@ -514,16 +661,16 @@ function ObligationsSection() {
             Card" to track them here.
           </p>
         )}
-      </section>
+      </SpotlightCard>
 
       {/* Monthly Obligations Checklist */}
-      <section className="glass rounded-2xl p-5">
+      <section className={`glass rounded-2xl p-5 ${listRipple.className}`}>
         <div className="flex items-center gap-3 mb-5">
           <div className="size-9 rounded-xl gradient-primary grid place-items-center shrink-0">
             <CalendarCheck className="size-4 text-primary-foreground" />
           </div>
           <div className="flex-1 min-w-0">
-            <h2 className="font-semibold">Fixed Monthly Obligations</h2>
+            <h2 className="font-display font-semibold tracking-tight">Fixed Monthly Obligations</h2>
             <p className="text-xs text-muted-foreground">
               {settledPct > 0 ? (
                 <>
@@ -547,7 +694,10 @@ function ObligationsSection() {
             return (
               <li key={ob.key}>
                 <button
-                  onClick={() => toggleObligation(ob.key)}
+                  onClick={() => {
+                    if (!pendingChecklist[ob.key]) listRipple.trigger();
+                    toggleObligation(ob.key);
+                  }}
                   className={`w-full flex items-center gap-3 p-4 rounded-xl border text-left transition-all ${
                     paid
                       ? "border-[oklch(0.72_0.18_155/0.3)] bg-[oklch(0.72_0.18_155/0.07)]"

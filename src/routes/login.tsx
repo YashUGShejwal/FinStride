@@ -1,6 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
-import { Sparkles, Mail, Lock, ArrowRight } from "lucide-react";
+import { Mail, Lock, ArrowRight } from "lucide-react";
+import { LogoMark, LogoWordmark } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -46,18 +47,18 @@ function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center px-4 py-10">
       <div className="w-full max-w-md">
-        <div className="flex items-center gap-2 mb-8 justify-center">
-          <div className="size-11 rounded-2xl gradient-primary grid place-items-center glow">
-            <Sparkles className="size-5 text-primary-foreground" />
-          </div>
+        <div className="flex items-center gap-3 mb-8 justify-center">
+          <LogoMark decorative className="size-11" />
           <div>
-            <h1 className="text-2xl font-semibold">FinStride</h1>
+            <h1 className="text-2xl">
+              <LogoWordmark className="text-2xl" />
+            </h1>
             <p className="text-xs text-muted-foreground">Discipline. Runway. Edge.</p>
           </div>
         </div>
 
         <div className="glass-strong rounded-2xl p-6 md:p-8">
-          <h2 className="text-xl font-semibold">Sign in</h2>
+          <h2 className="text-xl font-display font-semibold tracking-tight">Sign in</h2>
           <p className="text-sm text-muted-foreground mt-1">Access your cashflow command deck.</p>
 
           <button

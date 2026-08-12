@@ -1,6 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
-import { Sparkles, Mail, Lock, User as UserIcon, ArrowRight } from "lucide-react";
+import { Mail, Lock, User as UserIcon, ArrowRight } from "lucide-react";
+import { LogoMark } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -46,12 +47,10 @@ function SignupPage() {
   return (
     <div className="min-h-screen flex items-center justify-center px-4 py-10">
       <div className="w-full max-w-md">
-        <div className="flex items-center gap-2 mb-8 justify-center">
-          <div className="size-11 rounded-2xl gradient-accent grid place-items-center glow">
-            <Sparkles className="size-5 text-accent-foreground" />
-          </div>
+        <div className="flex items-center gap-3 mb-8 justify-center">
+          <LogoMark className="size-11" />
           <div>
-            <h1 className="text-2xl font-semibold">Create account</h1>
+            <h1 className="text-2xl font-display font-semibold tracking-tight">Create account</h1>
             <p className="text-xs text-muted-foreground">Your money, your rules.</p>
           </div>
         </div>

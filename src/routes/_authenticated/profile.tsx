@@ -17,7 +17,7 @@ function ProfilePage() {
     <div className="space-y-6">
       <header>
         <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Account</p>
-        <h1 className="text-3xl md:text-4xl font-semibold mt-1">Your <span className="text-gradient">profile</span></h1>
+        <h1 className="text-3xl md:text-4xl font-display font-semibold tracking-tight mt-1">Your <span className="text-gradient">profile</span></h1>
       </header>
 
       <section className="glass-strong rounded-2xl p-6 flex items-center gap-4">
@@ -47,7 +47,7 @@ function ProfilePage() {
       </section>
 
       <section className="glass rounded-2xl p-5">
-        <h2 className="font-semibold">Investment partitions</h2>
+        <h2 className="font-display font-semibold tracking-tight">Investment partitions</h2>
         <p className="text-xs text-muted-foreground mt-0.5 mb-4">Active broker accounts tracked in FinStride</p>
         <ul className="space-y-2">
           {investmentApps.map((a) => (
@@ -69,7 +69,7 @@ function ProfilePage() {
       </section>
 
       <section className="glass rounded-2xl p-5">
-        <h2 className="font-semibold">Blueprint</h2>
+        <h2 className="font-display font-semibold tracking-tight">Blueprint</h2>
         <ul className="mt-3 text-sm space-y-2 text-muted-foreground">
           <li>• Salary baseline <Sensitive><span className="text-foreground font-medium tnum">{inr(blueprintSettings.defaultSalary)}</span></Sensitive></li>
           <li>• Fixed runrate <Sensitive><span className="text-foreground font-medium tnum">{inr(blueprintSettings.fixedRunrate)}</span></Sensitive> + loan EMI <Sensitive><span className="text-foreground font-medium tnum">{inr(blueprintSettings.scooterEmi)}</span></Sensitive></li>

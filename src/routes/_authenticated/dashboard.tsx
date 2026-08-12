@@ -6,6 +6,8 @@ import { inr, fmtDate } from "@/lib/format";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { Sensitive } from "@/components/Sensitive";
 import { DailyQuoteFooter } from "@/components/DailyQuoteFooter";
+import { SpotlightCard } from "@/components/ui/SpotlightCard";
+import { RunwayGauge } from "@/components/ui/RunwayGauge";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({ component: Dashboard });
 
@@ -30,7 +32,7 @@ function Dashboard() {
     <div className="space-y-6">
       <header>
         <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Glance Hub</p>
-        <h1 className="text-3xl md:text-4xl font-semibold mt-1">
+        <h1 className="text-3xl md:text-4xl font-display font-semibold tracking-tight mt-1">
           Your <span className="text-gradient">runway</span> at a glance
         </h1>
         <p className="text-sm text-muted-foreground mt-2">Blueprint-enforced cashflow + disciplined swing trading.</p>
@@ -73,33 +75,41 @@ function Dashboard() {
         />
       </section>
 
-      {/* Secondary stats */}
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <MiniStat
-          label="Income (logged)"
-          icon={<ArrowUpRight className="size-4 text-[oklch(0.72_0.18_155)]" />}
-        >
-          <Sensitive><AnimatedNumber value={stats.income} format={inr} /></Sensitive>
-        </MiniStat>
-        <MiniStat
-          label="Expenses (logged)"
-          icon={<ArrowDownRight className="size-4 text-[oklch(0.7_0.22_20)]" />}
-        >
-          <Sensitive><AnimatedNumber value={stats.expense} format={inr} /></Sensitive>
-        </MiniStat>
-        <MiniStat label="Net flow" icon={<Wallet className="size-4 text-primary" />}>
-          <Sensitive><AnimatedNumber value={stats.net} format={inr} /></Sensitive>
-        </MiniStat>
-        <MiniStat label="Active trades" icon={<TrendingUp className="size-4 text-accent" />}>
-          {String(trades.length)}
-        </MiniStat>
+      {/* Runway gauge + secondary stats */}
+      <section className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-3">
+        <SpotlightCard className="rounded-2xl p-5">
+          <p className="text-xs uppercase tracking-wider text-muted-foreground mb-3">
+            Runway consumption
+          </p>
+          <RunwayGauge consumed={stats.commitments} total={blueprintSettings.defaultSalary} />
+        </SpotlightCard>
+        <div className="grid grid-cols-2 gap-3 content-start">
+          <MiniStat
+            label="Income (logged)"
+            icon={<ArrowUpRight className="size-4 text-[oklch(0.72_0.18_155)]" />}
+          >
+            <Sensitive><AnimatedNumber value={stats.income} format={inr} /></Sensitive>
+          </MiniStat>
+          <MiniStat
+            label="Expenses (logged)"
+            icon={<ArrowDownRight className="size-4 text-[oklch(0.7_0.22_20)]" />}
+          >
+            <Sensitive><AnimatedNumber value={stats.expense} format={inr} /></Sensitive>
+          </MiniStat>
+          <MiniStat label="Net flow" icon={<Wallet className="size-4 text-primary" />}>
+            <Sensitive><AnimatedNumber value={stats.net} format={inr} /></Sensitive>
+          </MiniStat>
+          <MiniStat label="Active trades" icon={<TrendingUp className="size-4 text-accent" />}>
+            {String(trades.length)}
+          </MiniStat>
+        </div>
       </section>
 
       {/* Recent ledger */}
       <section className="glass rounded-2xl p-5">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h2 className="font-semibold">Recent Transactions</h2>
+            <h2 className="font-display font-semibold tracking-tight">Recent Transactions</h2>
             <p className="text-xs text-muted-foreground">Latest 5 movements</p>
           </div>
           <Link to="/cashflow" className="text-xs text-primary hover:underline">Open ledger →</Link>
@@ -131,12 +141,21 @@ function Dashboard() {
       </section>
 
       <section className="grid md:grid-cols-2 gap-4">
-        <Link to="/cashflow" className="glass rounded-2xl p-5 hover:glow transition-all group">
+        {/* action=add lands with the entry drawer already expanded */}
+        <Link
+          to="/cashflow"
+          search={{ tab: "ledger", action: "add" }}
+          className="glass rounded-2xl p-5 hover:glow transition-all group"
+        >
           <Wallet className="size-6 text-primary mb-3" />
           <p className="font-semibold">Log a transaction</p>
           <p className="text-sm text-muted-foreground mt-1">Add income or expense to the ledger.</p>
         </Link>
-        <Link to="/swing" className="glass rounded-2xl p-5 hover:glow transition-all group">
+        <Link
+          to="/swing"
+          search={{ action: "add" }}
+          className="glass rounded-2xl p-5 hover:glow transition-all group"
+        >
           <TrendingUp className="size-6 text-accent mb-3" />
           <p className="font-semibold">Log a swing trade</p>
           <p className="text-sm text-muted-foreground mt-1">Equity only. 3% risk cap. F&O blocked.</p>
@@ -151,7 +170,7 @@ function Dashboard() {
 function KpiCard({ tone, icon, label, value, hint }: { tone: "primary" | "success" | "danger"; icon: React.ReactNode; label: string; value: number; hint: React.ReactNode }) {
   const grad = tone === "primary" ? "gradient-primary" : tone === "success" ? "gradient-success" : "gradient-danger";
   return (
-    <div className="glass kpi-card rounded-2xl p-5 relative overflow-hidden">
+    <SpotlightCard className="rounded-2xl p-5">
       <div className={`absolute -right-10 -top-10 size-32 ${grad} opacity-20 blur-2xl rounded-full`} />
       <div className="flex items-center justify-between">
         <p className="text-xs uppercase tracking-wider text-muted-foreground">{label}</p>
@@ -161,18 +180,18 @@ function KpiCard({ tone, icon, label, value, hint }: { tone: "primary" | "succes
         <Sensitive><AnimatedNumber value={value} format={inr} /></Sensitive>
       </p>
       <p className="text-xs text-muted-foreground mt-1">{hint}</p>
-    </div>
+    </SpotlightCard>
   );
 }
 
 function MiniStat({ label, children, icon }: { label: string; children: React.ReactNode; icon: React.ReactNode }) {
   return (
-    <div className="glass kpi-card rounded-xl p-4">
+    <SpotlightCard className="rounded-xl p-4">
       <div className="flex items-center justify-between">
         <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</p>
         {icon}
       </div>
       <p className="text-lg font-semibold mt-2 tnum">{children}</p>
-    </div>
+    </SpotlightCard>
   );
 }

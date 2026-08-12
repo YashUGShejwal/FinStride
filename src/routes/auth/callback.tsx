@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Sparkles } from "lucide-react";
+import { LogoMark } from "@/components/Logo";
 import { useAuth } from "@/lib/auth";
 import { getSupabaseBrowserClient } from "@/lib/db/client";
 import { toast } from "sonner";
@@ -127,9 +127,7 @@ function AuthCallbackPage() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-4 px-4">
-      <div className="size-11 rounded-2xl gradient-primary grid place-items-center glow">
-        <Sparkles className="size-5 text-primary-foreground" />
-      </div>
+      <LogoMark className="size-11" />
       <div className="size-8 rounded-full border-2 border-primary border-t-transparent animate-spin" />
       <p className="text-sm text-muted-foreground">Completing sign-in…</p>
     </div>

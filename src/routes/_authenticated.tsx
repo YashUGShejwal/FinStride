@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Bell, Command as CommandIcon, Eye, EyeOff, LayoutDashboard, LogOut,
-  PieChart, Settings, Sparkles, TrendingUp, User, Wallet, WifiOff,
+  PieChart, Settings, TrendingUp, User, Wallet, WifiOff,
 } from "lucide-react";
 import { getStoredAuthUser, useAuth } from "@/lib/auth";
 import { useStore } from "@/lib/store";
@@ -11,6 +11,7 @@ import { inr } from "@/lib/format";
 import { useModKeyLabel } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { CommandPalette } from "@/components/CommandPalette";
+import { Logo } from "@/components/Logo";
 import { Sensitive } from "@/components/Sensitive";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
@@ -117,11 +118,10 @@ function WorkstationShell() {
       {/* ── Header: brand · 4 hubs · controls ─────────────────────────────── */}
       <header className="sticky top-0 z-40 glass-strong border-b border-glass-border">
         <div className="max-w-6xl mx-auto px-4 md:px-8 h-14 flex items-center gap-3">
-          <Link to="/dashboard" className="flex items-center gap-2 shrink-0">
-            <div className="size-8 rounded-lg gradient-primary grid place-items-center glow">
-              <Sparkles className="size-4 text-primary-foreground" />
-            </div>
-            <span className="font-semibold tracking-tight hidden sm:inline">FinStride</span>
+          {/* aria-label carries the link name — the wordmark is display:none on
+              mobile and the mark inside Logo is decorative. */}
+          <Link to="/dashboard" aria-label="FinStride — go to dashboard" className="shrink-0">
+            <Logo markClassName="size-8" wordmarkClassName="hidden sm:inline text-base" />
           </Link>
 
           {/* Desktop tab rail with sliding spring indicator */}

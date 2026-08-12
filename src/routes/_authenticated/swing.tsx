@@ -1,7 +1,7 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState, type FormEvent } from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
-  Plus, Trash2, AlertTriangle, ShieldAlert, TrendingUp, Lock,
+  Plus, Trash2, AlertTriangle, ShieldAlert, Lock,
   CheckCircle2, XCircle, MinusCircle, ChevronDown, ChevronUp,
   Wallet, Pencil,
 } from "lucide-react";
@@ -12,6 +12,9 @@ import {
 import { inr, fmtDate, todayLocalISO } from "@/lib/format";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { Sensitive } from "@/components/Sensitive";
+import { useGlowRipple } from "@/hooks/useGlowRipple";
+import { QuickLogDrawer } from "@/components/ui/QuickLogDrawer";
+import { SpotlightCard } from "@/components/ui/SpotlightCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,7 +22,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/_authenticated/swing")({ component: SwingPage });
+type SwingSearch = { action?: "add" };
+
+export const Route = createFileRoute("/_authenticated/swing")({
+  validateSearch: (search: Record<string, unknown>): SwingSearch => ({
+    action: search.action === "add" ? "add" : undefined,
+  }),
+  component: SwingPage,
+});
 
 // Blueprint Rule 2 — F&O ban regex (always active)
 const FNO_REGEX =
@@ -104,7 +114,7 @@ function CapitalSnapshotPanel() {
             <Wallet className="size-4 text-primary-foreground" />
           </div>
           <div className="text-left">
-            <p className="text-sm font-semibold">Capital Snapshot</p>
+            <p className="text-sm font-display font-semibold tracking-tight">Capital Snapshot</p>
             <p className="text-xs text-muted-foreground">
               {partitionLabel(blueprintSettings.riskCapPartition)} active capital:{" "}
               <Sensitive>
@@ -130,7 +140,7 @@ function CapitalSnapshotPanel() {
           {portfolioPartitions.map((p) => {
             const val = latestSnapshotValues[p.key];
             return (
-              <div key={p.key} className="glass kpi-card rounded-xl p-3">
+              <SpotlightCard key={p.key} className="rounded-xl p-3">
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
                   {p.label}
                 </p>
@@ -143,7 +153,7 @@ function CapitalSnapshotPanel() {
                     <span className="text-muted-foreground">—</span>
                   )}
                 </p>
-              </div>
+              </SpotlightCard>
             );
           })}
         </div>
@@ -236,6 +246,29 @@ function SwingPage() {
   const [closeReason, setCloseReason] = useState<CloseReason | null>(null);
   const [closeNotes, setCloseNotes] = useState("");
 
+  // ── quick-log drawer + logged-trade ripple ───────────────────────────────
+  const [formOpen, setFormOpen] = useState(false);
+  const positionsRipple = useGlowRipple();
+
+  // Deep-link intent (command palette "New Swing Trade", dashboard quick
+  // card): ?action=add expands the drawer, then the param self-clears.
+  const { action } = Route.useSearch();
+  const nav = useNavigate({ from: Route.fullPath });
+  useEffect(() => {
+    if (action === "add") {
+      setFormOpen(true);
+      void nav({ search: {}, replace: true });
+    }
+  }, [action, nav]);
+
+  const toggleForm = () => {
+    // Closing the drawer unmounts the ticker input, which is the only thing
+    // that can clear the F&O violation banner — reset it here so the banner
+    // can't be left orphaned above a collapsed drawer.
+    if (formOpen) setFnoBlocked(false);
+    setFormOpen((v) => !v);
+  };
+
   // ── dynamic risk cap from latest snapshot of the configured risk-cap partition ──
   const cap = useMemo(
     () => riskCapCapital * blueprintSettings.defaultRiskCapPct,
@@ -290,6 +323,7 @@ function SwingPage() {
     setTarget("");
     setStop("");
     setEntryNotes("");
+    positionsRipple.trigger();
   };
 
   const handleClose = (id: string) => {
@@ -311,7 +345,7 @@ function SwingPage() {
     <div className="space-y-6">
       <header>
         <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Module</p>
-        <h1 className="text-3xl md:text-4xl font-semibold mt-1">
+        <h1 className="text-3xl md:text-4xl font-display font-semibold tracking-tight mt-1">
           <span className="text-gradient">Swing</span> trade logger
         </h1>
         <p className="text-sm text-muted-foreground mt-2">
@@ -343,11 +377,8 @@ function SwingPage() {
       {/* ── Capital snapshot panel ────────────────────────────────────────────── */}
       <CapitalSnapshotPanel />
 
-      {/* ── Entry form ───────────────────────────────────────────────────────── */}
-      <section className="glass-strong rounded-2xl p-5 md:p-6">
-        <h2 className="font-semibold mb-4 flex items-center gap-2">
-          <TrendingUp className="size-4 text-primary" /> New swing entry
-        </h2>
+      {/* ── Entry form — collapsed by default so open positions lead ─────────── */}
+      <QuickLogDrawer label="Quick Log Trade" open={formOpen} onToggle={toggleForm}>
         <form onSubmit={submit} className="grid grid-cols-2 md:grid-cols-6 gap-3">
           {/* Row 1 */}
           <Field className="col-span-2 md:col-span-2" label="Ticker">
@@ -501,11 +532,11 @@ function SwingPage() {
             </Button>
           </div>
         </form>
-      </section>
+      </QuickLogDrawer>
 
       {/* ── Open positions ────────────────────────────────────────────────────── */}
-      <section className="glass rounded-2xl p-5">
-        <h2 className="font-semibold mb-4">
+      <section className={`glass rounded-2xl p-5 ${positionsRipple.className}`}>
+        <h2 className="font-display font-semibold tracking-tight mb-4">
           Open positions
           {openTrades.length > 0 && (
             <span className="ml-2 text-xs text-muted-foreground font-normal">
@@ -640,7 +671,7 @@ function SwingPage() {
       {/* ── Closed positions ─────────────────────────────────────────────────── */}
       {closedTrades.length > 0 && (
         <section className="glass rounded-2xl p-5">
-          <h2 className="font-semibold mb-4">
+          <h2 className="font-display font-semibold tracking-tight mb-4">
             Closed positions
             <span className="ml-2 text-xs text-muted-foreground font-normal">
               ({closedTrades.length})

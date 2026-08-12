@@ -17,6 +17,7 @@ import {
 import { inr, fmtDate, todayLocalISO } from "@/lib/format";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { Sensitive } from "@/components/Sensitive";
+import { SpotlightCard } from "@/components/ui/SpotlightCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -232,7 +233,7 @@ function AnalyticsPage() {
       <header className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Module</p>
-          <h1 className="text-3xl md:text-4xl font-semibold mt-1">
+          <h1 className="text-3xl md:text-4xl font-display font-semibold tracking-tight mt-1">
             Portfolio <span className="text-gradient">analytics</span>
           </h1>
           <p className="text-sm text-muted-foreground mt-2">
@@ -359,7 +360,7 @@ function AnalyticsPage() {
         <div className="glass rounded-2xl p-5">
           <div className="flex items-center gap-2 mb-4">
             <PieChartIcon className="size-4 text-primary" />
-            <h2 className="font-semibold">Portfolio allocation</h2>
+            <h2 className="font-display font-semibold tracking-tight">Portfolio allocation</h2>
           </div>
           {mounted && pieData.length > 0 ? (
             <div className="h-64">
@@ -397,7 +398,7 @@ function AnalyticsPage() {
         <div className="glass rounded-2xl p-5">
           <div className="flex items-center gap-2 mb-4">
             <PieChartIcon className="size-4 text-[oklch(0.72_0.18_155)]" />
-            <h2 className="font-semibold">Breakdown by broker</h2>
+            <h2 className="font-display font-semibold tracking-tight">Breakdown by broker</h2>
           </div>
           {pieData.length > 0 ? (
             <ul className="space-y-2">
@@ -436,7 +437,7 @@ function AnalyticsPage() {
       <section className="glass rounded-2xl p-5">
         <div className="flex items-center gap-2 mb-4">
           <TrendingUp className="size-4 text-accent" />
-          <h2 className="font-semibold">Portfolio value over time</h2>
+          <h2 className="font-display font-semibold tracking-tight">Portfolio value over time</h2>
         </div>
         {mounted && lineData.length > 0 ? (
           <div className="h-80">
@@ -705,7 +706,7 @@ function SnapshotHistorySection() {
     <section className="glass rounded-2xl p-5">
       <div className="flex items-center gap-2 mb-4">
         <History className="size-4 text-primary" />
-        <h2 className="font-semibold">Snapshot history</h2>
+        <h2 className="font-display font-semibold tracking-tight">Snapshot history</h2>
         <span className="text-xs text-muted-foreground font-normal ml-1">
           ({visibleSnapshots.length} total)
         </span>
@@ -806,7 +807,7 @@ function KpiTile({
     : tone === "danger"  ? "text-[oklch(0.78_0.18_25)]"
     : "text-foreground";
   return (
-    <div className="glass kpi-card rounded-xl p-4 flex flex-col gap-1">
+    <SpotlightCard className="rounded-xl p-4 flex flex-col gap-1">
       <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
       <p className={`text-lg font-semibold tnum ${color}`}>
         <Sensitive>
@@ -814,7 +815,7 @@ function KpiTile({
         </Sensitive>
       </p>
       {subtext && <p className="text-[10px] text-muted-foreground/70 leading-tight">{subtext}</p>}
-    </div>
+    </SpotlightCard>
   );
 }
 

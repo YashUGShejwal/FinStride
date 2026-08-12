@@ -138,7 +138,7 @@ function SettingsPage() {
     <div className="space-y-6">
       <header>
         <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Configuration</p>
-        <h1 className="text-3xl md:text-4xl font-semibold mt-1">
+        <h1 className="text-3xl md:text-4xl font-display font-semibold tracking-tight mt-1">
           App <span className="text-gradient">settings</span>
         </h1>
         <p className="text-sm text-muted-foreground mt-2">
@@ -153,7 +153,7 @@ function SettingsPage() {
             <Settings className="size-4 text-primary-foreground" />
           </div>
           <div>
-            <h2 className="font-semibold">Blueprint Configuration</h2>
+            <h2 className="font-display font-semibold tracking-tight">Blueprint Configuration</h2>
             <p className="text-xs text-muted-foreground">
               Changes reflect immediately in Dashboard KPIs, Cash Flow's Obligations & Dues, and
               the Swing risk cap.
@@ -249,7 +249,7 @@ function SettingsPage() {
             <Settings className="size-4 text-background" />
           </div>
           <div>
-            <h2 className="font-semibold">Category Manager</h2>
+            <h2 className="font-display font-semibold tracking-tight">Category Manager</h2>
             <p className="text-xs text-muted-foreground">
               Add custom income / expense categories. Default categories cannot be removed.
             </p>
@@ -281,7 +281,7 @@ function SettingsPage() {
             <Wallet className="size-4 text-background" />
           </div>
           <div>
-            <h2 className="font-semibold">Payment Modes & Broker Partitions</h2>
+            <h2 className="font-display font-semibold tracking-tight">Payment Modes & Broker Partitions</h2>
             <p className="text-xs text-muted-foreground">
               Add custom payment modes or broker/investment partitions. Default entries cannot be removed.
             </p>
@@ -313,7 +313,7 @@ function SettingsPage() {
             <Sparkles className="size-4 text-primary-foreground" />
           </div>
           <div>
-            <h2 className="font-semibold">Personalization</h2>
+            <h2 className="font-display font-semibold tracking-tight">Personalization</h2>
             <p className="text-xs text-muted-foreground">
               Tune what shows up on your dashboard.
             </p>
@@ -346,7 +346,7 @@ function SettingsPage() {
               <Monitor className="size-4 text-primary-foreground" />
             </div>
             <div>
-              <h2 className="font-semibold">Progressive Web App</h2>
+              <h2 className="font-display font-semibold tracking-tight">Progressive Web App</h2>
               <p className="text-xs text-muted-foreground">
                 Run FinStride in its own window, with offline access to your last saved data.
               </p>
@@ -376,7 +376,7 @@ function SettingsPage() {
             <DatabaseZap className="size-4 text-background" />
           </div>
           <div>
-            <h2 className="font-semibold">Data Management</h2>
+            <h2 className="font-display font-semibold tracking-tight">Data Management</h2>
             <p className="text-xs text-muted-foreground">
               Back up everything to a file, restore from a backup, or wipe local data and start
               fresh. Backups also include legacy Grind Deck data recorded before that module was

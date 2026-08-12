@@ -65,11 +65,33 @@ export function CommandPalette({
 
         <CommandGroup heading="Quick Actions">
           <CommandItem
-            onSelect={() => run(() => nav({ to: "/cashflow", search: { tab: "ledger" } }))}
+            onSelect={() =>
+              run(() =>
+                nav({
+                  to: "/cashflow",
+                  search: { tab: "ledger", action: "add" },
+                  // Replace-in-place when already on the page: the action
+                  // param self-clears via replace, and push-then-replace
+                  // would leave a duplicate history entry (same fix as the
+                  // analytics add-snapshot deep link).
+                  replace: path.startsWith("/cashflow"),
+                }),
+              )
+            }
           >
             <Plus /> Add Transaction
           </CommandItem>
-          <CommandItem onSelect={() => run(() => nav({ to: "/swing" }))}>
+          <CommandItem
+            onSelect={() =>
+              run(() =>
+                nav({
+                  to: "/swing",
+                  search: { action: "add" },
+                  replace: path.startsWith("/swing"),
+                }),
+              )
+            }
+          >
             <TrendingUp /> New Swing Trade
           </CommandItem>
           <CommandItem
