@@ -244,6 +244,18 @@ function normalizeCustomCategories(raw: unknown): CustomCategories {
   };
 }
 
+/**
+ * Which DEFAULT categories the user has deleted — a tombstone list, not the
+ * customs list. income/expenseCategories below always splice
+ * DEFAULT_INCOME_CATEGORIES/DEFAULT_EXPENSE_CATEGORIES back in, so a default
+ * can only ever be made to disappear by being named here; there is no other
+ * mechanism that removes a member of those readonly arrays from what's shown.
+ * Same shape as CustomCategories (reused rather than duplicated), but a
+ * distinct semantic meaning — see addCategory/deleteCategory.
+ */
+const HIDDEN_CATEGORIES_KEY = "finstride.categories.hiddenDefaults";
+const EMPTY_HIDDEN_CATEGORIES: CustomCategories = { income: [], expense: [] };
+
 // ─── Dynamic account modes ──────────────────────────────────────────────────
 const CUSTOM_ACCOUNT_MODES_KEY = "finstride.accountmodes.custom";
 const ACCOUNT_TYPES: readonly AccountType[] = ["bank", "credit_card", "cash", "wallet"];
@@ -268,6 +280,17 @@ function normalizeCustomAccountModes(raw: unknown): AccountMode[] {
     })
     .filter((a) => a.id.trim() !== "");
 }
+
+/** Generic string-array validator, shared by every hidden-defaults tombstone list below. */
+function normalizeStringArray(raw: unknown): string[] {
+  return Array.isArray(raw) ? raw.filter((s): s is string => typeof s === "string") : [];
+}
+
+/**
+ * Which DEFAULT_ACCOUNT_MODES ids the user has deleted — see the doc comment
+ * on HIDDEN_CATEGORIES_KEY above for why this tombstone-list approach exists.
+ */
+const HIDDEN_ACCOUNT_IDS_KEY = "finstride.accountmodes.hiddenDefaults";
 
 // ─── Dynamic broker/investment partitions ──────────────────────────────────
 const CUSTOM_BROKER_PARTITIONS_KEY = "finstride.partitions.custom";
@@ -298,6 +321,9 @@ function normalizeCustomBrokerPartitions(raw: unknown): BrokerPartition[] {
     .filter((p) => p.id.trim() !== "");
 }
 
+/** Which DEFAULT_BROKER_PARTITIONS ids the user has deleted — see HIDDEN_CATEGORIES_KEY above. */
+const HIDDEN_PARTITION_IDS_KEY = "finstride.partitions.hiddenDefaults";
+
 // ─── Quote preferences ──────────────────────────────────────────────────────
 // Whether the app-owner's personal reflection quotes are shown alongside the
 // general pool — driven by an explicit user setting rather than a hardcoded
@@ -315,6 +341,24 @@ const SHOW_PERSONAL_QUOTES_KEY = "finstride.quotes.showPersonal";
 // force re-entering the PIN.
 const OWNER_REFLECTIONS_PIN = String(import.meta.env.VITE_OWNER_PIN ?? "1234");
 const OWNER_UNLOCKED_KEY = "finstride.owner.unlocked";
+
+/**
+ * Direct (non-React-state) localStorage read for isOwnerUnlocked, used inside
+ * the load effect below to gate showPersonalQuotes. The load effect's deps
+ * are [userId, cloudEnabled, authLoading] — NOT isOwnerUnlocked — so a plain
+ * closure read of the React state would go stale after the mount-time effect
+ * that hydrates isOwnerUnlocked runs (same render batch, but the load effect's
+ * closure is already captured with the pre-hydration `false`). Reading straight
+ * from localStorage here sidesteps that instead of adding isOwnerUnlocked to
+ * the load effect's deps, which would re-run the entire fetch on every unlock.
+ */
+function readOwnerUnlocked(): boolean {
+  try {
+    return localStorage.getItem(OWNER_UNLOCKED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
 
 // ─── Connectivity & installability ─────────────────────────────────────────
 // Neither has a localStorage key: both are live browser/OS facts (network
@@ -726,6 +770,9 @@ export type FinStrideBackup = {
   customAccountModes: AccountMode[];
   customBrokerPartitions: BrokerPartition[];
   customCategories: CustomCategories;
+  hiddenDefaultCategories: CustomCategories;
+  hiddenDefaultAccountIds: string[];
+  hiddenDefaultPartitionIds: string[];
   showPersonalQuotes: boolean;
   customObligations: CustomObligation[];
   /** Full multi-month history, not just the current month. */
@@ -759,8 +806,11 @@ const ALL_LOCAL_KEYS = [
   GRIND_KEY,
   BLUEPRINT_KEY,
   CATEGORIES_KEY,
+  HIDDEN_CATEGORIES_KEY,
   CUSTOM_ACCOUNT_MODES_KEY,
+  HIDDEN_ACCOUNT_IDS_KEY,
   CUSTOM_BROKER_PARTITIONS_KEY,
+  HIDDEN_PARTITION_IDS_KEY,
   SHOW_PERSONAL_QUOTES_KEY,
   PENDING_KEY,
   PENDING_WRITES_KEY,
@@ -783,6 +833,9 @@ type LocalState = {
   customBrokerPartitions: BrokerPartition[];
   customIncomeCategories: string[];
   customExpenseCategories: string[];
+  hiddenDefaultCategories: CustomCategories;
+  hiddenDefaultAccountIds: string[];
+  hiddenDefaultPartitionIds: string[];
   pending: MonthlyPending;
   customObligations: CustomObligation[];
   customObligationsPending: Record<string, boolean>;
@@ -799,6 +852,9 @@ const EMPTY_LOCAL_STATE: LocalState = {
   customBrokerPartitions: [],
   customIncomeCategories: [],
   customExpenseCategories: [],
+  hiddenDefaultCategories: EMPTY_HIDDEN_CATEGORIES,
+  hiddenDefaultAccountIds: [],
+  hiddenDefaultPartitionIds: [],
   pending: {},
   customObligations: [],
   customObligationsPending: {},
@@ -824,6 +880,7 @@ function readLocalState(): LocalState {
       else snapshots.push(result);
     }
     const cats = normalizeCustomCategories(readJson<unknown>(CATEGORIES_KEY, null));
+    const hiddenCats = normalizeCustomCategories(readJson<unknown>(HIDDEN_CATEGORIES_KEY, null));
     let showPersonal = false;
     try {
       showPersonal = localStorage.getItem(SHOW_PERSONAL_QUOTES_KEY) === "true";
@@ -836,7 +893,10 @@ function readLocalState(): LocalState {
       portfolioSnapshots: snapshots,
       grind: normalizeGrindState(readJson<unknown>(GRIND_KEY, null)),
       blueprint: normalizeBlueprint(readJson<unknown>(BLUEPRINT_KEY, null)),
-      showPersonalQuotes: showPersonal,
+      // Clamped by the owner-unlock gate, not just the raw persisted toggle —
+      // see readOwnerUnlocked()'s doc comment for why this can never be
+      // silently true on a device that hasn't itself passed the PIN check.
+      showPersonalQuotes: showPersonal && readOwnerUnlocked(),
       customAccountModes: normalizeCustomAccountModes(
         readJson<unknown>(CUSTOM_ACCOUNT_MODES_KEY, null),
       ),
@@ -845,6 +905,11 @@ function readLocalState(): LocalState {
       ),
       customIncomeCategories: cats.income,
       customExpenseCategories: cats.expense,
+      hiddenDefaultCategories: hiddenCats,
+      hiddenDefaultAccountIds: normalizeStringArray(readJson<unknown>(HIDDEN_ACCOUNT_IDS_KEY, null)),
+      hiddenDefaultPartitionIds: normalizeStringArray(
+        readJson<unknown>(HIDDEN_PARTITION_IDS_KEY, null),
+      ),
       pending: loadAllPending()[currentMonthKey()] ?? {},
       customObligations: normalizeCustomObligations(readJson<unknown>(CUSTOM_OBLIGATIONS_KEY, null)),
       customObligationsPending: loadAllCustomObligationsPending()[currentMonthKey()] ?? {},
@@ -950,6 +1015,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     useState<CustomCategories>(DEFAULT_CUSTOM_CATEGORIES);
   const [customAccountModes, setCustomAccountModes] = useState<AccountMode[]>([]);
   const [customBrokerPartitions, setCustomBrokerPartitions] = useState<BrokerPartition[]>([]);
+  const [hiddenDefaultCategories, setHiddenDefaultCategories] =
+    useState<CustomCategories>(EMPTY_HIDDEN_CATEGORIES);
+  const [hiddenDefaultAccountIds, setHiddenDefaultAccountIds] = useState<string[]>([]);
+  const [hiddenDefaultPartitionIds, setHiddenDefaultPartitionIds] = useState<string[]>([]);
   const [customObligations, setCustomObligations] = useState<CustomObligation[]>([]);
   const [customObligationsPending, setCustomObligationsPending] = useState<Record<string, boolean>>(
     {},
@@ -968,11 +1037,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } catch {
       // Ignore — stealth simply stays off this session.
     }
-    try {
-      setIsOwnerUnlockedState(localStorage.getItem(OWNER_UNLOCKED_KEY) === "true");
-    } catch {
-      // Ignore — the gate simply stays locked this session.
-    }
+    setIsOwnerUnlockedState(readOwnerUnlocked());
   }, []);
 
   // Onboarding flag. UNLIKE isStealthMode, this IS owner-scoped: read once
@@ -1107,6 +1172,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         income: local.customIncomeCategories,
         expense: local.customExpenseCategories,
       });
+      setHiddenDefaultCategories(local.hiddenDefaultCategories);
+      setHiddenDefaultAccountIds(local.hiddenDefaultAccountIds);
+      setHiddenDefaultPartitionIds(local.hiddenDefaultPartitionIds);
       setPendingChecklist(local.pending);
       setCustomObligations(local.customObligations);
       setCustomObligationsPending(local.customObligationsPending);
@@ -1195,13 +1263,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setGrind(remote.grind);
         if (remote.settings) {
           setBlueprintSettings(remote.settings.blueprint);
-          setShowPersonalQuotesState(remote.settings.showPersonalQuotes);
+          // Clamped by the owner-unlock gate — see readOwnerUnlocked()'s doc
+          // comment. Without this, unlocking + toggling on one device would
+          // silently turn personal quotes on for every other device/session
+          // that syncs this account, with no PIN check on the receiving side.
+          setShowPersonalQuotesState(remote.settings.showPersonalQuotes && readOwnerUnlocked());
           setCustomAccountModes(remote.settings.customAccountModes);
           setCustomBrokerPartitions(remote.settings.customBrokerPartitions);
           setCustomCategories({
             income: remote.settings.customIncomeCategories,
             expense: remote.settings.customExpenseCategories,
           });
+          setHiddenDefaultCategories(remote.settings.hiddenDefaultCategories);
+          setHiddenDefaultAccountIds(remote.settings.hiddenDefaultAccountIds);
+          setHiddenDefaultPartitionIds(remote.settings.hiddenDefaultPartitionIds);
         }
         setPendingChecklist(remote.pending ?? {});
         writeCacheOwner(identity);
@@ -1259,6 +1334,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [hydrated, customBrokerPartitions]);
 
   useEffect(() => {
+    if (hydrated) localStorage.setItem(HIDDEN_CATEGORIES_KEY, JSON.stringify(hiddenDefaultCategories));
+  }, [hydrated, hiddenDefaultCategories]);
+
+  useEffect(() => {
+    if (hydrated) localStorage.setItem(HIDDEN_ACCOUNT_IDS_KEY, JSON.stringify(hiddenDefaultAccountIds));
+  }, [hydrated, hiddenDefaultAccountIds]);
+
+  useEffect(() => {
+    if (hydrated)
+      localStorage.setItem(HIDDEN_PARTITION_IDS_KEY, JSON.stringify(hiddenDefaultPartitionIds));
+  }, [hydrated, hiddenDefaultPartitionIds]);
+
+  useEffect(() => {
     if (hydrated) localStorage.setItem(SHOW_PERSONAL_QUOTES_KEY, String(showPersonalQuotes));
   }, [hydrated, showPersonalQuotes]);
 
@@ -1289,6 +1377,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         customBrokerPartitions,
         customIncomeCategories: customCategories.income,
         customExpenseCategories: customCategories.expense,
+        hiddenDefaultCategories,
+        hiddenDefaultAccountIds,
+        hiddenDefaultPartitionIds,
       }),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1301,6 +1392,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     customAccountModes,
     customBrokerPartitions,
     customCategories,
+    hiddenDefaultCategories,
+    hiddenDefaultAccountIds,
+    hiddenDefaultPartitionIds,
   ]);
 
   useEffect(() => {
@@ -1337,11 +1431,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const riskCapCapital = latestSnapshotValues[blueprintSettings.riskCapPartition] ?? 0;
 
-  const incomeCategories = [...DEFAULT_INCOME_CATEGORIES, ...customCategories.income];
-  const expenseCategories = [...DEFAULT_EXPENSE_CATEGORIES, ...customCategories.expense];
+  // Every merged list below EXCLUDES defaults the user has deleted (tracked in
+  // the hiddenDefault* tombstone lists) — without that filter, a "deleted"
+  // default just gets spliced right back in by DEFAULT_*, which is exactly the
+  // bug this exclusion exists to prevent (see addCategory/deleteCategory etc.).
+  const incomeCategories = [
+    ...DEFAULT_INCOME_CATEGORIES.filter((c) => !hiddenDefaultCategories.income.includes(c)),
+    ...customCategories.income,
+  ];
+  const expenseCategories = [
+    ...DEFAULT_EXPENSE_CATEGORIES.filter((c) => !hiddenDefaultCategories.expense.includes(c)),
+    ...customCategories.expense,
+  ];
 
-  const accountModes: AccountMode[] = [...DEFAULT_ACCOUNT_MODES, ...customAccountModes];
-  const brokerPartitions: BrokerPartition[] = [...DEFAULT_BROKER_PARTITIONS, ...customBrokerPartitions];
+  const accountModes: AccountMode[] = [
+    ...DEFAULT_ACCOUNT_MODES.filter((a) => !hiddenDefaultAccountIds.includes(a.id)),
+    ...customAccountModes,
+  ];
+  const brokerPartitions: BrokerPartition[] = [
+    ...DEFAULT_BROKER_PARTITIONS.filter((p) => !hiddenDefaultPartitionIds.includes(p.id)),
+    ...customBrokerPartitions,
+  ];
 
   const partitionLabel = (id: string): string =>
     brokerPartitions.find((p) => p.id === id)?.name ?? id;
@@ -1375,8 +1485,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     addCategory: (type, name) => {
       const trimmed = name.trim();
       if (!trimmed) return;
+      const defaults = type === "income" ? DEFAULT_INCOME_CATEGORIES : DEFAULT_EXPENSE_CATEGORIES;
+      // Re-adding a name that matches a previously-deleted default restores
+      // (un-hides) that default rather than creating a redundant custom entry
+      // with the same identity.
+      const restoredDefault = defaults.find((c) => c.toLowerCase() === trimmed.toLowerCase());
+      if (restoredDefault && hiddenDefaultCategories[type].includes(restoredDefault)) {
+        markLocalWrite();
+        setHiddenDefaultCategories((prev) => ({
+          ...prev,
+          [type]: prev[type].filter((c) => c !== restoredDefault),
+        }));
+        return;
+      }
       const all = type === "income" ? incomeCategories : expenseCategories;
-      if (all.some((c) => c.toLowerCase() === trimmed.toLowerCase())) return; // already on the list
+      if (all.some((c) => c.toLowerCase() === trimmed.toLowerCase())) return; // already on the (visible) list
       markLocalWrite();
       setCustomCategories((prev) => ({ ...prev, [type]: [...prev[type], trimmed] }));
     },
@@ -1385,11 +1508,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // no structural FK, so deleting one that's still used by existing
       // transactions is harmless: those rows simply keep their old category
       // string and stop appearing in the add-transaction dropdown's options.
+      //
+      // A default isn't a member of customCategories (it lives in the
+      // DEFAULT_INCOME_CATEGORIES/DEFAULT_EXPENSE_CATEGORIES constant instead),
+      // so "deleting" one can't mean filtering it out of a list it was never
+      // in — it has to be recorded in the hiddenDefaultCategories tombstone
+      // list, which incomeCategories/expenseCategories subtract out above.
       markLocalWrite();
-      setCustomCategories((prev) => ({
-        ...prev,
-        [type]: prev[type].filter((c) => c !== name),
-      }));
+      const defaults = type === "income" ? DEFAULT_INCOME_CATEGORIES : DEFAULT_EXPENSE_CATEGORIES;
+      if (defaults.includes(name)) {
+        setHiddenDefaultCategories((prev) =>
+          prev[type].includes(name) ? prev : { ...prev, [type]: [...prev[type], name] },
+        );
+      } else {
+        setCustomCategories((prev) => ({
+          ...prev,
+          [type]: prev[type].filter((c) => c !== name),
+        }));
+      }
     },
     renameCategory: (type, oldName, newName) => {
       const trimmed = newName.trim();
@@ -1409,7 +1545,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     addAccountMode: (name, type, defaultChannel) => {
       const trimmed = name.trim();
       if (!trimmed) return;
-      if (accountModes.some((a) => a.id === trimmed)) return; // already on the list
+      // Re-adding a name that matches a previously-deleted default restores
+      // (un-hides) the ORIGINAL default — by its canonical id/casing — rather
+      // than creating a redundant custom entry with a near-duplicate identity.
+      const restoredDefault = DEFAULT_ACCOUNT_MODES.find(
+        (a) => a.id.toLowerCase() === trimmed.toLowerCase(),
+      );
+      if (restoredDefault && hiddenDefaultAccountIds.includes(restoredDefault.id)) {
+        markLocalWrite();
+        setHiddenDefaultAccountIds((prev) => prev.filter((id) => id !== restoredDefault.id));
+        return;
+      }
+      // Case-insensitive so a differently-cased retype of an existing entry
+      // ("bank account" vs "Bank Account") is treated as the same account
+      // instead of silently creating a near-duplicate.
+      if (accountModes.some((a) => a.id.toLowerCase() === trimmed.toLowerCase())) return;
       markLocalWrite();
       setCustomAccountModes((prev) => [
         ...prev,
@@ -1424,7 +1574,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const hasReferences = transactions.some((t) => t.account === id);
       if (hasReferences) return false;
       markLocalWrite();
-      setCustomAccountModes((prev) => prev.filter((a) => a.id !== id));
+      // A default isn't a member of customAccountModes (it lives in
+      // DEFAULT_ACCOUNT_MODES instead), so "deleting" one can't mean filtering
+      // it out of a list it was never in — it has to be recorded in the
+      // hiddenDefaultAccountIds tombstone list, which accountModes subtracts
+      // out above. Custom entries are still removed outright, same as before.
+      if (DEFAULT_ACCOUNT_MODES.some((a) => a.id === id)) {
+        setHiddenDefaultAccountIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+      } else {
+        setCustomAccountModes((prev) => prev.filter((a) => a.id !== id));
+      }
       return true;
     },
     updateAccountMode: (id, patch) => {
@@ -1438,7 +1597,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     addBrokerPartition: (name, category, brokerApp, description) => {
       const trimmed = name.trim();
       if (!trimmed) return;
-      if (brokerPartitions.some((p) => p.id === trimmed)) return; // already on the list
+      // Re-adding a name that matches a previously-deleted default restores
+      // (un-hides) the ORIGINAL default rather than creating a redundant
+      // custom entry with a near-duplicate identity.
+      const restoredDefault = DEFAULT_BROKER_PARTITIONS.find(
+        (p) => p.id.toLowerCase() === trimmed.toLowerCase(),
+      );
+      if (restoredDefault && hiddenDefaultPartitionIds.includes(restoredDefault.id)) {
+        markLocalWrite();
+        setHiddenDefaultPartitionIds((prev) => prev.filter((id) => id !== restoredDefault.id));
+        return;
+      }
+      // Case-insensitive so a differently-cased retype of an existing entry
+      // is treated as the same partition instead of silently creating a
+      // near-duplicate.
+      if (brokerPartitions.some((p) => p.id.toLowerCase() === trimmed.toLowerCase())) return;
       markLocalWrite();
       setCustomBrokerPartitions((prev) => [
         ...prev,
@@ -1455,7 +1628,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         trades.some((t) => t.partition === id);
       if (hasReferences) return false;
       markLocalWrite();
-      setCustomBrokerPartitions((prev) => prev.filter((p) => p.id !== id));
+      // A default isn't a member of customBrokerPartitions (it lives in
+      // DEFAULT_BROKER_PARTITIONS instead), so "deleting" one can't mean
+      // filtering it out of a list it was never in — it has to be recorded in
+      // the hiddenDefaultPartitionIds tombstone list, which brokerPartitions
+      // subtracts out above. Custom entries are still removed outright.
+      if (DEFAULT_BROKER_PARTITIONS.some((p) => p.id === id)) {
+        setHiddenDefaultPartitionIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+      } else {
+        setCustomBrokerPartitions((prev) => prev.filter((p) => p.id !== id));
+      }
       return true;
     },
     updateBrokerPartition: (id, patch) => {
@@ -1669,6 +1851,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           customAccountModes,
           customBrokerPartitions,
           customCategories,
+          hiddenDefaultCategories,
+          hiddenDefaultAccountIds,
+          hiddenDefaultPartitionIds,
           showPersonalQuotes,
           customObligations,
           customObligationsPendingByMonth: loadAllCustomObligationsPending(),
@@ -1735,8 +1920,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         b.customBrokerPartitions !== undefined
           ? normalizeCustomBrokerPartitions(b.customBrokerPartitions)
           : customBrokerPartitions;
+      const importedHiddenCategories =
+        b.hiddenDefaultCategories !== undefined
+          ? normalizeCustomCategories(b.hiddenDefaultCategories)
+          : hiddenDefaultCategories;
+      const importedHiddenAccountIds =
+        b.hiddenDefaultAccountIds !== undefined
+          ? normalizeStringArray(b.hiddenDefaultAccountIds)
+          : hiddenDefaultAccountIds;
+      const importedHiddenPartitionIds =
+        b.hiddenDefaultPartitionIds !== undefined
+          ? normalizeStringArray(b.hiddenDefaultPartitionIds)
+          : hiddenDefaultPartitionIds;
+      // Clamped by the owner-unlock gate (React state is safe to read directly
+      // here — unlike the load effect, importData is a plain callback, not a
+      // mount-time effect closure, so there's no stale-value risk). Otherwise
+      // a hand-edited or shared backup file could flip personal quotes on
+      // without ever passing the PIN check on this device.
       const importedShowPersonal =
-        typeof b.showPersonalQuotes === "boolean" ? b.showPersonalQuotes : showPersonalQuotes;
+        (typeof b.showPersonalQuotes === "boolean" ? b.showPersonalQuotes : showPersonalQuotes) &&
+        isOwnerUnlocked;
       const importedObligations =
         b.customObligations !== undefined
           ? normalizeCustomObligations(b.customObligations)
@@ -1751,6 +1954,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setCustomCategories(importedCats);
       setCustomAccountModes(importedAccountModes);
       setCustomBrokerPartitions(importedBrokerPartitions);
+      setHiddenDefaultCategories(importedHiddenCategories);
+      setHiddenDefaultAccountIds(importedHiddenAccountIds);
+      setHiddenDefaultPartitionIds(importedHiddenPartitionIds);
       setShowPersonalQuotesState(importedShowPersonal);
       setCustomObligations(importedObligations);
 
@@ -1790,6 +1996,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             customBrokerPartitions: importedBrokerPartitions,
             customIncomeCategories: importedCats.income,
             customExpenseCategories: importedCats.expense,
+            hiddenDefaultCategories: importedHiddenCategories,
+            hiddenDefaultAccountIds: importedHiddenAccountIds,
+            hiddenDefaultPartitionIds: importedHiddenPartitionIds,
           }),
         );
       }
@@ -1814,6 +2023,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setCustomAccountModes([]);
       setCustomBrokerPartitions([]);
       setCustomCategories(DEFAULT_CUSTOM_CATEGORIES);
+      setHiddenDefaultCategories(EMPTY_HIDDEN_CATEGORIES);
+      setHiddenDefaultAccountIds([]);
+      setHiddenDefaultPartitionIds([]);
       setPendingChecklist({});
       setCustomObligations([]);
       setCustomObligationsPending({});
@@ -1837,6 +2049,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       customBrokerPartitions.length === 0 &&
       customCategories.income.length === 0 &&
       customCategories.expense.length === 0 &&
+      hiddenDefaultCategories.income.length === 0 &&
+      hiddenDefaultCategories.expense.length === 0 &&
+      hiddenDefaultAccountIds.length === 0 &&
+      hiddenDefaultPartitionIds.length === 0 &&
       customObligations.length === 0,
     onboardingCompleted,
     completeOnboarding: () => {

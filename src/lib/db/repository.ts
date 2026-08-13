@@ -12,6 +12,7 @@ import type {
   AccountMode,
   BlueprintSettings,
   BrokerPartition,
+  CustomCategories,
   GrindLogEntry,
   GrindMetricKey,
   GrindState,
@@ -295,6 +296,9 @@ export async function upsertSettings(
     customBrokerPartitions: BrokerPartition[];
     customIncomeCategories: string[];
     customExpenseCategories: string[];
+    hiddenDefaultCategories: CustomCategories;
+    hiddenDefaultAccountIds: string[];
+    hiddenDefaultPartitionIds: string[];
   },
 ): Promise<boolean> {
   const { error } = await client

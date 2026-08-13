@@ -49,6 +49,13 @@ export type DbUserSettings = {
   custom_broker_partitions: DbBrokerPartitionJson[];
   income_categories: string[];
   expense_categories: string[];
+  /** Names of DEFAULT_INCOME_CATEGORIES/DEFAULT_EXPENSE_CATEGORIES the user has deleted — see src/lib/store.tsx's hiddenDefaultCategories doc comment. */
+  hidden_default_income_categories: string[];
+  hidden_default_expense_categories: string[];
+  /** Ids of DEFAULT_ACCOUNT_MODES the user has deleted. */
+  hidden_default_account_ids: string[];
+  /** Ids of DEFAULT_BROKER_PARTITIONS the user has deleted. */
+  hidden_default_partition_ids: string[];
   updated_at: string;
 };
 

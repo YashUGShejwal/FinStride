@@ -73,7 +73,7 @@ function DarkTooltip({
   active, payload, label,
 }: {
   active?: boolean;
-  payload?: Array<{ color: string; dataKey: string; value: number }>;
+  payload?: Array<{ color: string; dataKey: string; name?: string; value: number }>;
   label?: string;
 }) {
   if (!active || !payload?.length) return null;
@@ -82,7 +82,7 @@ function DarkTooltip({
       <p className="text-muted-foreground mb-1">{label}</p>
       {payload.map((e, i) => (
         <p key={i} style={{ color: e.color }} className="font-medium tnum">
-          {e.dataKey}: <Sensitive>{inr(e.value)}</Sensitive>
+          {e.name ?? e.dataKey}: <Sensitive>{inr(e.value)}</Sensitive>
         </p>
       ))}
     </div>
@@ -110,7 +110,7 @@ function PieTooltip({
 
 // ─── Main page ─────────────────────────────────────────────────────────────
 function AnalyticsPage() {
-  const { transactions, portfolioSnapshots, latestSnapshotValues, brokerPartitions, isStealthMode } = useStore();
+  const { transactions, portfolioSnapshots, latestSnapshotValues, brokerPartitions, partitionLabel, isStealthMode } = useStore();
   const ALL_PARTITIONS = useMemo(
     () => brokerPartitions.map((p) => p.id),
     [brokerPartitions],
@@ -347,7 +347,7 @@ function AnalyticsPage() {
                 onClick={() => removePartitionChip(key)}
                 className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border border-glass-border bg-white/8 text-muted-foreground hover:text-foreground transition-colors"
               >
-                {key} <X className="size-3" />
+                {partitionLabel(key)} <X className="size-3" />
               </button>
             ))}
           </div>
@@ -472,6 +472,7 @@ function AnalyticsPage() {
                     key={key}
                     type="monotone"
                     dataKey={key}
+                    name={partitionLabel(key)}
                     stroke={hexForPartition(key, canonicalPartitionIndex(key))}
                     strokeWidth={2.5}
                     dot={{ r: 4, fill: hexForPartition(key, canonicalPartitionIndex(key)), strokeWidth: 0 }}

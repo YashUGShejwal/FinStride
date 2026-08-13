@@ -12,6 +12,7 @@ import type {
   AccountMode,
   BlueprintSettings,
   BrokerPartition,
+  CustomCategories,
   GrindState,
   MonthlyPending,
   PortfolioSnapshot,
@@ -59,6 +60,9 @@ export type LocalDataSnapshot = {
   customBrokerPartitions: BrokerPartition[];
   customIncomeCategories: string[];
   customExpenseCategories: string[];
+  hiddenDefaultCategories: CustomCategories;
+  hiddenDefaultAccountIds: string[];
+  hiddenDefaultPartitionIds: string[];
   pending: MonthlyPending;
 };
 
@@ -99,6 +103,9 @@ export async function migrateLocalDataToSupabase(
       customBrokerPartitions: local.customBrokerPartitions,
       customIncomeCategories: local.customIncomeCategories,
       customExpenseCategories: local.customExpenseCategories,
+      hiddenDefaultCategories: local.hiddenDefaultCategories,
+      hiddenDefaultAccountIds: local.hiddenDefaultAccountIds,
+      hiddenDefaultPartitionIds: local.hiddenDefaultPartitionIds,
     }),
   );
 

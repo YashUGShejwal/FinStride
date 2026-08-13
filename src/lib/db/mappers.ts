@@ -19,6 +19,7 @@ import type {
   AccountType,
   BlueprintSettings,
   BrokerPartition,
+  CustomCategories,
   GrindLogEntry,
   GrindMetricKey,
   HustleCategory,
@@ -239,6 +240,9 @@ export type SettingsBundle = {
   customBrokerPartitions: BrokerPartition[];
   customIncomeCategories: string[];
   customExpenseCategories: string[];
+  hiddenDefaultCategories: CustomCategories;
+  hiddenDefaultAccountIds: string[];
+  hiddenDefaultPartitionIds: string[];
 };
 
 const ACCOUNT_TYPES: readonly string[] = ["bank", "credit_card", "cash", "wallet"];
@@ -311,6 +315,10 @@ export function settingsToRow(b: SettingsBundle, userId: string): DbUserSettings
     custom_broker_partitions: b.customBrokerPartitions.map(brokerPartitionToJson),
     income_categories: b.customIncomeCategories,
     expense_categories: b.customExpenseCategories,
+    hidden_default_income_categories: b.hiddenDefaultCategories.income,
+    hidden_default_expense_categories: b.hiddenDefaultCategories.expense,
+    hidden_default_account_ids: b.hiddenDefaultAccountIds,
+    hidden_default_partition_ids: b.hiddenDefaultPartitionIds,
   };
 }
 
@@ -361,6 +369,12 @@ export function rowToSettings(r: DbUserSettings): SettingsBundle {
       : [],
     customIncomeCategories: list(r.income_categories),
     customExpenseCategories: list(r.expense_categories),
+    hiddenDefaultCategories: {
+      income: list(r.hidden_default_income_categories),
+      expense: list(r.hidden_default_expense_categories),
+    } satisfies CustomCategories,
+    hiddenDefaultAccountIds: list(r.hidden_default_account_ids),
+    hiddenDefaultPartitionIds: list(r.hidden_default_partition_ids),
   };
 }
 

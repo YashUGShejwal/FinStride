@@ -72,6 +72,29 @@ comment on column public.user_settings.custom_broker_partitions is
 comment on column public.user_settings.risk_cap_partition is
   'BrokerPartition.id whose latest snapshot backs the per-trade risk cap (0.03 = 3%), matching DEFAULT_BLUEPRINT.riskCapPartition.';
 
+-- Hidden-defaults tombstone lists. A DEFAULT_* entry (category, account mode,
+-- or broker partition) lives in app code, not a row here — there's nothing to
+-- DELETE from the database when a user removes one. Instead its id/name is
+-- recorded here, and the app subtracts these ids/names back out of the
+-- DEFAULT_* constant before merging in the custom-additions columns above.
+-- Without this, "delete a default" has no durable effect at all: reloading
+-- (or syncing to another device) would just re-show it, since nothing in the
+-- database says it was ever removed.
+alter table public.user_settings
+  add column if not exists hidden_default_income_categories  text[] not null default '{}'::text[],
+  add column if not exists hidden_default_expense_categories text[] not null default '{}'::text[],
+  add column if not exists hidden_default_account_ids        text[] not null default '{}'::text[],
+  add column if not exists hidden_default_partition_ids      text[] not null default '{}'::text[];
+
+comment on column public.user_settings.hidden_default_income_categories is
+  'Names from DEFAULT_INCOME_CATEGORIES the user has deleted. Subtracted from DEFAULT_INCOME_CATEGORIES before merging in income_categories (the custom additions) — see the tombstone-list note above.';
+comment on column public.user_settings.hidden_default_expense_categories is
+  'Names from DEFAULT_EXPENSE_CATEGORIES the user has deleted. Same mechanism as hidden_default_income_categories.';
+comment on column public.user_settings.hidden_default_account_ids is
+  'Ids from DEFAULT_ACCOUNT_MODES the user has deleted. Subtracted from DEFAULT_ACCOUNT_MODES before merging in custom_account_modes — see the tombstone-list note above.';
+comment on column public.user_settings.hidden_default_partition_ids is
+  'Ids from DEFAULT_BROKER_PARTITIONS the user has deleted. Subtracted from DEFAULT_BROKER_PARTITIONS before merging in custom_broker_partitions — see the tombstone-list note above.';
+
 -- ============================================================================
 -- End of 0002_structured_account_partitions.sql
 -- ============================================================================

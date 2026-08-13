@@ -565,7 +565,7 @@ function SwingPage() {
                           {t.source}
                         </span>
                         <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                          {t.partition}
+                          {partitionLabel(t.partition)}
                         </span>
                       </div>
                       <p className="text-xs text-muted-foreground mt-0.5">
@@ -698,7 +698,7 @@ function SwingPage() {
                         </span>
                       )}
                       <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                        {t.partition}
+                        {partitionLabel(t.partition)}
                       </span>
                     </div>
                     <p className="text-xs text-muted-foreground mt-0.5">

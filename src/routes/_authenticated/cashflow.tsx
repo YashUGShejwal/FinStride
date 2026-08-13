@@ -235,10 +235,11 @@ function LedgerSection({ openFormSignal }: { openFormSignal: boolean }) {
         !s ||
         t.category.toLowerCase().includes(s) ||
         t.account.toLowerCase().includes(s) ||
+        accountLabel(t.account).toLowerCase().includes(s) ||
         t.tags.some((x) => x.toLowerCase().includes(s)) ||
         (t.notes?.toLowerCase().includes(s) ?? false),
     );
-  }, [transactions, q]);
+  }, [transactions, q, accountLabel]);
 
   const handleDelete = (id: string) => {
     deleteTransaction(id);
