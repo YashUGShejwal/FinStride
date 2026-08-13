@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useRef, useState, type FormEvent } from "react";
 import {
   Settings, Lock, Trash2, Plus, RotateCcw, Save, Wallet, Sparkles,
-  Download, Upload, TriangleAlert, DatabaseZap, Monitor, CheckCircle2,
+  Download, Upload, TriangleAlert, DatabaseZap, Monitor, CheckCircle2, CalendarClock,
 } from "lucide-react";
 import {
   useStore,
@@ -11,6 +11,7 @@ import {
   DEFAULT_EXPENSE_CATEGORIES,
   DEFAULT_PAYMENT_MODES,
   DEFAULT_INVESTMENT_APPS,
+  type CustomObligation,
 } from "@/lib/store";
 import { inr } from "@/lib/format";
 import { Sensitive } from "@/components/Sensitive";
@@ -35,13 +36,13 @@ function SettingsPage() {
     incomeCategories,
     expenseCategories,
     addCategory,
-    deleteCustomCategory,
+    deleteCategory,
     paymentModes,
-    addPaymentMode,
-    deleteCustomPaymentMode,
+    addAccountMode,
+    deleteAccountMode,
     investmentApps,
-    addBrokerPartition,
-    deleteCustomBrokerPartition,
+    addPartition,
+    deletePartition,
     portfolioPartitions,
     showPersonalQuotes,
     setShowPersonalQuotes,
@@ -51,6 +52,9 @@ function SettingsPage() {
     canInstallApp,
     isAppInstalled,
     installApp,
+    customObligations,
+    addObligation,
+    deleteObligation,
   } = useStore();
   const nav = useNavigate();
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -262,16 +266,33 @@ function SettingsPage() {
             allCategories={incomeCategories}
             defaults={DEFAULT_INCOME_CATEGORIES}
             onAdd={(name) => addCategory("income", name)}
-            onDelete={(name) => deleteCustomCategory("income", name)}
+            onDelete={(name) => deleteCategory("income", name)}
           />
           <CategoryColumn
             title="Expense Categories"
             allCategories={expenseCategories}
             defaults={DEFAULT_EXPENSE_CATEGORIES}
             onAdd={(name) => addCategory("expense", name)}
-            onDelete={(name) => deleteCustomCategory("expense", name)}
+            onDelete={(name) => deleteCategory("expense", name)}
           />
         </div>
+      </section>
+
+      {/* Monthly Obligations Manager */}
+      <section className="glass rounded-2xl p-5 md:p-6">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="size-9 rounded-xl gradient-primary grid place-items-center shrink-0">
+            <CalendarClock className="size-4 text-primary-foreground" />
+          </div>
+          <div>
+            <h2 className="font-display font-semibold tracking-tight">Monthly Obligations</h2>
+            <p className="text-xs text-muted-foreground">
+              Custom recurring items (rent, EMIs, SIPs, subscriptions) tracked alongside the
+              blueprint obligations in Cash Flow's Obligations & Dues tab.
+            </p>
+          </div>
+        </div>
+        <ObligationColumn obligations={customObligations} onAdd={addObligation} onDelete={deleteObligation} />
       </section>
 
       {/* Payment Modes & Broker Partitions */}
@@ -293,15 +314,15 @@ function SettingsPage() {
             title="Payment Modes"
             allCategories={paymentModes}
             defaults={DEFAULT_PAYMENT_MODES}
-            onAdd={(name) => addPaymentMode(name)}
-            onDelete={(name) => deleteCustomPaymentMode(name)}
+            onAdd={(name) => addAccountMode(name)}
+            onDelete={(name) => deleteAccountMode(name)}
           />
           <CategoryColumn
             title="Broker Partitions"
             allCategories={investmentApps.map((a) => a.id)}
             defaults={DEFAULT_INVESTMENT_APPS.map((a) => a.id)}
-            onAdd={(name) => addBrokerPartition(name)}
-            onDelete={(name) => deleteCustomBrokerPartition(name)}
+            onAdd={(name) => addPartition(name)}
+            onDelete={(name) => deletePartition(name)}
           />
         </div>
       </section>
@@ -573,6 +594,97 @@ function CategoryColumn({
           onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleAdd())}
           placeholder="New category…"
           className="bg-input/40 border-glass-border text-sm h-9"
+        />
+        <Button
+          type="button"
+          onClick={handleAdd}
+          size="sm"
+          className="gradient-primary text-primary-foreground border-0 h-9 px-3 shrink-0"
+        >
+          <Plus className="size-4" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Obligation column (label + amount, unlike the string-only CategoryColumn) ─
+function ObligationColumn({
+  obligations,
+  onAdd,
+  onDelete,
+}: {
+  obligations: CustomObligation[];
+  onAdd: (label: string, amount: number) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [label, setLabel] = useState("");
+  const [amount, setAmount] = useState("");
+
+  const handleAdd = () => {
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    if (obligations.some((o) => o.label.toLowerCase() === trimmed.toLowerCase())) {
+      return toast.error(`"${trimmed}" is already on the list`);
+    }
+    const n = Number(amount);
+    if (amount.trim() !== "" && (isNaN(n) || n < 0)) {
+      return toast.error("Amount must be a positive number");
+    }
+    onAdd(trimmed, amount.trim() === "" ? 0 : n);
+    setLabel("");
+    setAmount("");
+    toast.success(`"${trimmed}" added`);
+  };
+
+  return (
+    <div className="space-y-3">
+      {obligations.length === 0 ? (
+        <p className="text-sm text-muted-foreground py-2">
+          No custom obligations yet — the 3 blueprint obligations above always apply.
+        </p>
+      ) : (
+        <ul className="space-y-1.5">
+          {obligations.map((o) => (
+            <li
+              key={o.id}
+              className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border border-glass-border bg-white/3 text-sm"
+            >
+              <span className="min-w-0 truncate">{o.label}</span>
+              <div className="flex items-center gap-3 shrink-0">
+                <Sensitive>
+                  <span className="tnum text-muted-foreground">{inr(o.amount)}</span>
+                </Sensitive>
+                <button
+                  onClick={() => {
+                    onDelete(o.id);
+                    toast.success(`"${o.label}" removed`);
+                  }}
+                  className="text-muted-foreground hover:text-destructive"
+                >
+                  <Trash2 className="size-3.5" />
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex gap-2">
+        <Input
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleAdd())}
+          placeholder="e.g. Netflix, Car Loan EMI…"
+          className="bg-input/40 border-glass-border text-sm h-9"
+        />
+        <Input
+          type="number"
+          min="0"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleAdd())}
+          placeholder="₹ / month"
+          className="bg-input/40 border-glass-border text-sm h-9 tnum w-28 shrink-0"
         />
         <Button
           type="button"

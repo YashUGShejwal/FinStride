@@ -5,7 +5,7 @@ import {
   Search, Plus, Trash2, ArrowUpRight, ArrowDownRight,
   CheckSquare, Square, CreditCard, CalendarCheck, ListChecks, BookOpenText,
 } from "lucide-react";
-import { useStore, type ObligationKey, type PaymentMode, type TxType } from "@/lib/store";
+import { useStore, type PaymentMode, type TxType } from "@/lib/store";
 import { inr, fmtDate, todayLocalISO } from "@/lib/format";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { Sensitive } from "@/components/Sensitive";
@@ -543,11 +543,18 @@ function LedgerSection({ openFormSignal }: { openFormSignal: boolean }) {
 }
 
 // ─── Obligations & Dues segment (formerly the /pending route) ───────────────
-type Obligation = {
-  key: ObligationKey;
+// Unifies the 3 blueprint-driven obligations (toggled via the ObligationKey
+// checklist, cloud-synced) with user-added custom obligations from Settings
+// (toggled via customObligationsPending, local-only — see the CustomObligation
+// comment in store.tsx) into one displayable, one totals-math list.
+type DisplayObligation = {
+  id: string;
   label: string;
   amount: number;
   description: React.ReactNode;
+  paid: boolean;
+  onToggle: () => void;
+  isCustom: boolean;
 };
 
 /** Currency inside helper copy — blurred in stealth mode like the headline amounts. */
@@ -560,42 +567,75 @@ function Amt({ value }: { value: number }) {
 }
 
 function ObligationsSection() {
-  const { creditCardDues, pendingChecklist, toggleObligation, blueprintSettings } = useStore();
+  const {
+    creditCardDues, pendingChecklist, toggleObligation, blueprintSettings,
+    customObligations, customObligationsPending, toggleCustomObligation, deleteObligation,
+  } = useStore();
   const ccRipple = useGlowRipple();
   const listRipple = useGlowRipple();
 
-  const OBLIGATIONS: Obligation[] = [
+  const builtIn: DisplayObligation[] = [
     {
-      key: "fixedRunrate",
+      id: "fixedRunrate",
       label: "Rent / Fixed Runrate",
       amount: blueprintSettings.fixedRunrate,
       description: (
         <>Monthly operational expenses — blueprint threshold <Amt value={blueprintSettings.fixedRunrate} /></>
       ),
+      paid: !!pendingChecklist.fixedRunrate,
+      onToggle: () => {
+        if (!pendingChecklist.fixedRunrate) listRipple.trigger();
+        toggleObligation("fixedRunrate");
+      },
+      isCustom: false,
     },
     {
-      key: "scooterEmi",
+      id: "scooterEmi",
       label: "Loan/EMI",
       amount: blueprintSettings.scooterEmi,
       description: <>Fixed at <Amt value={blueprintSettings.scooterEmi} /> / month</>,
+      paid: !!pendingChecklist.scooterEmi,
+      onToggle: () => {
+        if (!pendingChecklist.scooterEmi) listRipple.trigger();
+        toggleObligation("scooterEmi");
+      },
+      isCustom: false,
     },
     {
-      key: "growwMfSip",
+      id: "growwMfSip",
       label: "Investment SIP",
       amount: blueprintSettings.growwMfSip,
       description: (
         <>Monthly mutual fund SIP commitment — <Amt value={blueprintSettings.growwMfSip} /></>
       ),
+      paid: !!pendingChecklist.growwMfSip,
+      onToggle: () => {
+        if (!pendingChecklist.growwMfSip) listRipple.trigger();
+        toggleObligation("growwMfSip");
+      },
+      isCustom: false,
     },
   ];
+
+  const custom: DisplayObligation[] = customObligations.map((o) => ({
+    id: o.id,
+    label: o.label,
+    amount: o.amount,
+    description: <>Custom monthly obligation — <Amt value={o.amount} /></>,
+    paid: !!customObligationsPending[o.id],
+    onToggle: () => {
+      if (!customObligationsPending[o.id]) listRipple.trigger();
+      toggleCustomObligation(o.id);
+    },
+    isCustom: true,
+  }));
+
+  const OBLIGATIONS = [...builtIn, ...custom];
 
   const month = new Date().toLocaleString("en-IN", { month: "long", year: "numeric" });
 
   const totalObligation = OBLIGATIONS.reduce((s, o) => s + o.amount, 0);
-  const settledAmount = OBLIGATIONS.filter((o) => pendingChecklist[o.key]).reduce(
-    (s, o) => s + o.amount,
-    0,
-  );
+  const settledAmount = OBLIGATIONS.filter((o) => o.paid).reduce((s, o) => s + o.amount, 0);
   const settledPct = totalObligation > 0 ? Math.round((settledAmount / totalObligation) * 100) : 0;
 
   return (
@@ -689,53 +729,56 @@ function ObligationsSection() {
         </div>
 
         <ul className="space-y-2">
-          {OBLIGATIONS.map((ob) => {
-            const paid = !!pendingChecklist[ob.key];
-            return (
-              <li key={ob.key}>
-                <button
-                  onClick={() => {
-                    if (!pendingChecklist[ob.key]) listRipple.trigger();
-                    toggleObligation(ob.key);
-                  }}
-                  className={`w-full flex items-center gap-3 p-4 rounded-xl border text-left transition-all ${
-                    paid
-                      ? "border-[oklch(0.72_0.18_155/0.3)] bg-[oklch(0.72_0.18_155/0.07)]"
-                      : "border-glass-border hover:bg-white/5"
+          {OBLIGATIONS.map((ob) => (
+            <li key={ob.id} className="flex items-center gap-2">
+              <button
+                onClick={ob.onToggle}
+                className={`flex-1 flex items-center gap-3 p-4 rounded-xl border text-left transition-all ${
+                  ob.paid
+                    ? "border-[oklch(0.72_0.18_155/0.3)] bg-[oklch(0.72_0.18_155/0.07)]"
+                    : "border-glass-border hover:bg-white/5"
+                }`}
+              >
+                <span
+                  className={`shrink-0 transition-colors ${
+                    ob.paid ? "text-[oklch(0.78_0.16_155)]" : "text-muted-foreground"
                   }`}
                 >
-                  <span
-                    className={`shrink-0 transition-colors ${
-                      paid ? "text-[oklch(0.78_0.16_155)]" : "text-muted-foreground"
-                    }`}
-                  >
-                    {paid ? (
-                      <CheckSquare className="size-5" />
-                    ) : (
-                      <Square className="size-5" />
-                    )}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <p
-                      className={`text-sm font-medium transition-colors ${
-                        paid ? "line-through text-muted-foreground" : ""
-                      }`}
-                    >
-                      {ob.label}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-0.5">{ob.description}</p>
-                  </div>
+                  {ob.paid ? (
+                    <CheckSquare className="size-5" />
+                  ) : (
+                    <Square className="size-5" />
+                  )}
+                </span>
+                <div className="flex-1 min-w-0">
                   <p
-                    className={`tnum font-semibold text-sm shrink-0 transition-colors ${
-                      paid ? "text-[oklch(0.78_0.16_155)]" : ""
+                    className={`text-sm font-medium transition-colors ${
+                      ob.paid ? "line-through text-muted-foreground" : ""
                     }`}
                   >
-                    <Sensitive>{inr(ob.amount)}</Sensitive>
+                    {ob.label}
                   </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{ob.description}</p>
+                </div>
+                <p
+                  className={`tnum font-semibold text-sm shrink-0 transition-colors ${
+                    ob.paid ? "text-[oklch(0.78_0.16_155)]" : ""
+                  }`}
+                >
+                  <Sensitive>{inr(ob.amount)}</Sensitive>
+                </p>
+              </button>
+              {ob.isCustom && (
+                <button
+                  onClick={() => deleteObligation(ob.id)}
+                  aria-label={`Remove ${ob.label}`}
+                  className="shrink-0 text-muted-foreground hover:text-destructive p-2"
+                >
+                  <Trash2 className="size-4" />
                 </button>
-              </li>
-            );
-          })}
+              )}
+            </li>
+          ))}
         </ul>
 
         {/* Progress bar */}

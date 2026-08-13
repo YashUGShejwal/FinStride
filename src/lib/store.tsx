@@ -30,7 +30,7 @@ import {
 // via Settings. Existing transactions keep working regardless of what's
 // configured later — the type is a plain string, not a closed union.
 export type PaymentMode = string;
-export const DEFAULT_PAYMENT_MODES: readonly string[] = ["Bank Account", "Cash", "Credit Card"];
+export const DEFAULT_PAYMENT_MODES: readonly string[] = ["Bank Account", "Credit Card", "UPI", "Cash"];
 
 // ─── Investment broker partitions (Swing logger, Cashflow, Profile) ────────
 // Extensible: DEFAULT_INVESTMENT_APPS are always available; users can add more
@@ -205,6 +205,10 @@ export const DEFAULT_INCOME_CATEGORIES: readonly string[] = [
 export const DEFAULT_EXPENSE_CATEGORIES: readonly string[] = [
   "Fixed Runrate",
   "Loan/EMI",
+  "Groceries",
+  "Dining",
+  "Subscriptions",
+  "Fuel",
   "Capital Transfer (Out)",
   "Other",
 ];
@@ -285,6 +289,45 @@ function loadAllPending(): Record<string, MonthlyPending> {
 export function currentMonthKey(): string {
   return new Date().toISOString().slice(0, 7);
 }
+
+// ─── Custom monthly obligations ────────────────────────────────────────────
+// User-added obligations beyond the 4 built-in ones above (e.g. "Netflix",
+// "Car Loan EMI"). Local-only for now: user_settings/pending_obligations are
+// fixed-column schemas (see supabase/migrations/0001_initial_schema.sql) with
+// no jsonb column for an arbitrary list, so there's nowhere to sync this to
+// without a schema migration. Kept fully functional device-locally rather
+// than blocked on that — same tradeoff this file already makes for
+// isStealthMode, just for a different reason (schema gap vs. deliberate scope).
+export type CustomObligation = { id: string; label: string; amount: number };
+const CUSTOM_OBLIGATIONS_KEY = "finstride.obligations.custom";
+const CUSTOM_OBLIGATIONS_PENDING_KEY = "finstride.obligations.custom.pending";
+
+function normalizeCustomObligations(raw: unknown): CustomObligation[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
+    .map((r) => ({
+      id: String(r.id ?? ""),
+      label: r.label ? String(r.label) : String(r.id ?? ""),
+      amount: Number(r.amount) || 0,
+    }))
+    .filter((o) => o.id.trim() !== "");
+}
+
+function loadAllCustomObligationsPending(): Record<string, Record<string, boolean>> {
+  try {
+    const raw = localStorage.getItem(CUSTOM_OBLIGATIONS_PENDING_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, Record<string, boolean>>) : {};
+  } catch {
+    return {};
+  }
+}
+
+// ─── First-time onboarding ──────────────────────────────────────────────────
+// Device-local: a returning user's real cloud data (once loaded) already
+// makes isFirstTimeUser false on its own, so this flag only needs to cover
+// the "picked defaults and skipped" case on THIS device — see isFirstTimeUser.
+const ONBOARDING_KEY = "finstride.onboarding.completed";
 
 // ─── Legacy data normalizers ───────────────────────────────────────────────
 // Maps both the old underscore-formatted names AND the earlier (specific
@@ -531,17 +574,17 @@ type StoreCtx = {
   incomeCategories: string[];
   expenseCategories: string[];
   addCategory: (type: "income" | "expense", name: string) => void;
-  deleteCustomCategory: (type: "income" | "expense", name: string) => void;
-  // Dynamic payment modes
+  deleteCategory: (type: "income" | "expense", name: string) => void;
+  // Dynamic account modes (payment modes / bank accounts / cards)
   paymentModes: string[];
-  addPaymentMode: (name: string) => void;
-  deleteCustomPaymentMode: (name: string) => void;
+  addAccountMode: (name: string) => void;
+  deleteAccountMode: (name: string) => void;
   // Dynamic broker/investment partitions
   investmentApps: InvestmentApp[];
   portfolioPartitions: { key: PortfolioPartitionKey; label: string; description: string }[];
-  addBrokerPartition: (id: string, description?: string) => void;
+  addPartition: (id: string, description?: string) => void;
   /** Returns false (and does not delete) if the id is a default, or if trades/snapshots still reference it. */
-  deleteCustomBrokerPartition: (id: string) => boolean;
+  deletePartition: (id: string) => boolean;
   partitionLabel: (id: string) => string;
   // Quote preferences
   showPersonalQuotes: boolean;
@@ -566,6 +609,12 @@ type StoreCtx = {
   deleteTrade: (id: string) => void;
   // Obligations
   toggleObligation: (key: ObligationKey) => void;
+  // Custom monthly obligations (local-only — see comment above CustomObligation)
+  customObligations: CustomObligation[];
+  addObligation: (label: string, amount: number) => void;
+  deleteObligation: (id: string) => void;
+  customObligationsPending: Record<string, boolean>;
+  toggleCustomObligation: (id: string) => void;
   // Portfolio snapshots
   addPortfolioSnapshots: (
     entries: Array<{ brokerPartition: PortfolioPartitionKey; currentValue: number }>,
@@ -586,6 +635,13 @@ type StoreCtx = {
   importData: (json: string) => { success: boolean; error?: string };
   /** Wipes every finstride.* localStorage key and resets all in-memory state to empty/default. */
   resetAllData: () => void;
+  // Onboarding
+  /** True once the initial load for the current identity has fully settled — arrays below are trustworthy only after this. */
+  hydrated: boolean;
+  /** All financial data AND all customizations are empty — the genuine first-run state, not just "currently empty view". */
+  isFirstTimeUser: boolean;
+  onboardingCompleted: boolean;
+  completeOnboarding: () => void;
 };
 
 /** Shape of a file produced by exportData() / accepted by importData(). */
@@ -603,6 +659,9 @@ export type FinStrideBackup = {
   customPartitions: CustomPartition[];
   customCategories: CustomCategories;
   showPersonalQuotes: boolean;
+  customObligations: CustomObligation[];
+  /** Full multi-month history, not just the current month. */
+  customObligationsPendingByMonth: Record<string, Record<string, boolean>>;
 };
 
 const Ctx = createContext<StoreCtx | null>(null);
@@ -637,6 +696,11 @@ const ALL_LOCAL_KEYS = [
   SHOW_PERSONAL_QUOTES_KEY,
   PENDING_KEY,
   PENDING_WRITES_KEY,
+  CUSTOM_OBLIGATIONS_KEY,
+  CUSTOM_OBLIGATIONS_PENDING_KEY,
+  // Not a UI-only preference like isStealthMode: after a full data wipe,
+  // re-showing onboarding matches the "fresh start" intent of that action.
+  ONBOARDING_KEY,
 ];
 
 /** Full local snapshot — also the payload shape the first-login migration pushes up. */
@@ -652,6 +716,8 @@ type LocalState = {
   customIncomeCategories: string[];
   customExpenseCategories: string[];
   pending: MonthlyPending;
+  customObligations: CustomObligation[];
+  customObligationsPending: Record<string, boolean>;
 };
 
 const EMPTY_LOCAL_STATE: LocalState = {
@@ -666,6 +732,8 @@ const EMPTY_LOCAL_STATE: LocalState = {
   customIncomeCategories: [],
   customExpenseCategories: [],
   pending: {},
+  customObligations: [],
+  customObligationsPending: {},
 };
 
 function readJson<T>(key: string, fallback: T): T {
@@ -708,6 +776,8 @@ function readLocalState(): LocalState {
       customIncomeCategories: cats.income,
       customExpenseCategories: cats.expense,
       pending: loadAllPending()[currentMonthKey()] ?? {},
+      customObligations: normalizeCustomObligations(readJson<unknown>(CUSTOM_OBLIGATIONS_KEY, null)),
+      customObligationsPending: loadAllCustomObligationsPending()[currentMonthKey()] ?? {},
     };
   } catch {
     return EMPTY_LOCAL_STATE;
@@ -722,7 +792,8 @@ function localStateHasData(s: LocalState): boolean {
     s.grind.hustle.length > 0 ||
     s.grind.metrics.systemDesign.length > 0 ||
     s.grind.metrics.leetcode.length > 0 ||
-    s.grind.metrics.linkedinOutreach.length > 0
+    s.grind.metrics.linkedinOutreach.length > 0 ||
+    s.customObligations.length > 0
   );
 }
 
@@ -809,6 +880,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     useState<CustomCategories>(DEFAULT_CUSTOM_CATEGORIES);
   const [customPaymentModes, setCustomPaymentModes] = useState<string[]>([]);
   const [customPartitions, setCustomPartitions] = useState<CustomPartition[]>([]);
+  const [customObligations, setCustomObligations] = useState<CustomObligation[]>([]);
+  const [customObligationsPending, setCustomObligationsPending] = useState<Record<string, boolean>>(
+    {},
+  );
   const [showPersonalQuotes, setShowPersonalQuotesState] = useState(false);
   // Always starts false and reads localStorage after mount: SSR has no
   // localStorage, so initializing from it lazily would make the server and
@@ -822,6 +897,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // Ignore — stealth simply stays off this session.
     }
   }, []);
+
+  // Onboarding flag. UNLIKE isStealthMode, this IS owner-scoped: read once
+  // more inside the load effect below (right after clearLocalCache(), never
+  // on a bare mount-only effect) so signing out of one identity and into
+  // another on the same tab doesn't leave the PREVIOUS identity's flag
+  // stuck true — StoreProvider never remounts across sign-in/out, so a
+  // mount-only read would otherwise go stale for the rest of the tab's life.
+  const [onboardingCompleted, setOnboardingCompleted] = useState(false);
 
   // Starts false (assume online) and corrects on mount: navigator.onLine
   // doesn't exist during SSR, and "online" is the overwhelmingly common case
@@ -921,6 +1004,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         clearLocalCache();
       }
 
+      // Re-sync onboardingCompleted for THIS identity now, after any clear
+      // above has run — must happen here, not in a bare mount-only effect,
+      // or a previous identity's completed-onboarding flag (still true in
+      // React state) would silently suppress the wizard for a genuinely
+      // new identity signing into this same tab.
+      try {
+        setOnboardingCompleted(localStorage.getItem(ONBOARDING_KEY) === "true");
+      } catch {
+        setOnboardingCompleted(false);
+      }
+
       // Local first: instant paint, and the only source when offline.
       const local = readLocalState();
       if (cancelled) return;
@@ -937,6 +1031,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         expense: local.customExpenseCategories,
       });
       setPendingChecklist(local.pending);
+      setCustomObligations(local.customObligations);
+      setCustomObligationsPending(local.customObligationsPending);
 
       // Auth is still resolving — the initial getSession() restore, or an
       // active OAuth code exchange on /auth/callback. `userId` here could be
@@ -1088,6 +1184,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (hydrated) localStorage.setItem(SHOW_PERSONAL_QUOTES_KEY, String(showPersonalQuotes));
   }, [hydrated, showPersonalQuotes]);
 
+  useEffect(() => {
+    if (hydrated) localStorage.setItem(CUSTOM_OBLIGATIONS_KEY, JSON.stringify(customObligations));
+  }, [hydrated, customObligations]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const all = loadAllCustomObligationsPending();
+    all[currentMonthKey()] = customObligationsPending;
+    localStorage.setItem(CUSTOM_OBLIGATIONS_PENDING_KEY, JSON.stringify(all));
+  }, [hydrated, customObligationsPending]);
+
   // ── Remote sync for the single-row tables ────────────────────────────────
   // Settings live in one row, so the whole bundle is upserted whenever any
   // part changes — simpler and cheaper than threading a write through each
@@ -1207,7 +1314,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return { ...prev, [type]: [...prev[type], trimmed] };
       });
     },
-    deleteCustomCategory: (type, name) => {
+    deleteCategory: (type, name) => {
       const defaults = type === "income" ? DEFAULT_INCOME_CATEGORIES : DEFAULT_EXPENSE_CATEGORIES;
       if (defaults.includes(name)) return; // cannot delete defaults
       markLocalWrite();
@@ -1217,21 +1324,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }));
     },
     paymentModes,
-    addPaymentMode: (name) => {
+    addAccountMode: (name) => {
       const trimmed = name.trim();
       if (!trimmed) return;
       if (DEFAULT_PAYMENT_MODES.includes(trimmed)) return; // already a default
       markLocalWrite();
       setCustomPaymentModes((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
     },
-    deleteCustomPaymentMode: (name) => {
+    deleteAccountMode: (name) => {
       if (DEFAULT_PAYMENT_MODES.includes(name)) return; // cannot delete defaults
       markLocalWrite();
       setCustomPaymentModes((prev) => prev.filter((m) => m !== name));
     },
     investmentApps,
     portfolioPartitions,
-    addBrokerPartition: (id, description) => {
+    addPartition: (id, description) => {
       const trimmed = id.trim();
       if (!trimmed) return;
       if (DEFAULT_INVESTMENT_APPS.some((a) => a.id === trimmed)) return; // already a default
@@ -1242,7 +1349,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           : [...prev, { id: trimmed, label: trimmed, description: description?.trim() ?? "" }],
       );
     },
-    deleteCustomBrokerPartition: (id) => {
+    deletePartition: (id) => {
       if (DEFAULT_INVESTMENT_APPS.some((a) => a.id === id)) return false; // cannot delete defaults
       // Block deletion while trades/snapshots still reference this partition —
       // every partition-scoped view (Analytics charts, Snapshot history) reads
@@ -1332,6 +1439,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (sync) trackedWrite(deleteTradeRow(sync.client, sync.userId, id));
     },
     toggleObligation,
+    customObligations,
+    addObligation: (label, amount) => {
+      const trimmed = label.trim();
+      if (!trimmed) return;
+      markLocalWrite();
+      setCustomObligations((prev) =>
+        prev.some((o) => o.label.toLowerCase() === trimmed.toLowerCase())
+          ? prev
+          : [...prev, { id: crypto.randomUUID(), label: trimmed, amount: amount > 0 ? amount : 0 }],
+      );
+    },
+    deleteObligation: (id) => {
+      markLocalWrite();
+      setCustomObligations((prev) => prev.filter((o) => o.id !== id));
+      setCustomObligationsPending((prev) => {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    },
+    customObligationsPending,
+    toggleCustomObligation: (id) => {
+      markLocalWrite();
+      setCustomObligationsPending((prev) => ({ ...prev, [id]: !prev[id] }));
+    },
     addPortfolioSnapshots: (entries, notes, snapshotDate) => {
       markLocalWrite();
       const date = snapshotDate ?? new Date().toISOString();
@@ -1425,6 +1558,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           customPartitions,
           customCategories,
           showPersonalQuotes,
+          customObligations,
+          customObligationsPendingByMonth: loadAllCustomObligationsPending(),
         };
         const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
         const url = URL.createObjectURL(blob);
@@ -1490,6 +1625,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           : customPartitions;
       const importedShowPersonal =
         typeof b.showPersonalQuotes === "boolean" ? b.showPersonalQuotes : showPersonalQuotes;
+      const importedObligations =
+        b.customObligations !== undefined
+          ? normalizeCustomObligations(b.customObligations)
+          : customObligations;
 
       markLocalWrite();
       setTransactions(importedTransactions);
@@ -1501,6 +1640,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setCustomPaymentModes(importedPaymentModes);
       setCustomPartitions(importedPartitions);
       setShowPersonalQuotesState(importedShowPersonal);
+      setCustomObligations(importedObligations);
 
       if (b.pendingByMonth && typeof b.pendingByMonth === "object") {
         const monthMap = b.pendingByMonth as Record<string, MonthlyPending>;
@@ -1510,6 +1650,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // Non-fatal — the current month's slice below still applies in memory.
         }
         setPendingChecklist(monthMap[currentMonthKey()] ?? {});
+      }
+
+      if (b.customObligationsPendingByMonth && typeof b.customObligationsPendingByMonth === "object") {
+        const monthMap = b.customObligationsPendingByMonth as Record<string, Record<string, boolean>>;
+        try {
+          localStorage.setItem(CUSTOM_OBLIGATIONS_PENDING_KEY, JSON.stringify(monthMap));
+        } catch {
+          // Non-fatal — the current month's slice below still applies in memory.
+        }
+        setCustomObligationsPending(monthMap[currentMonthKey()] ?? {});
       }
 
       // Mirror the import to the cloud too, if this account is synced.
@@ -1553,12 +1703,34 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setCustomPartitions([]);
       setCustomCategories(DEFAULT_CUSTOM_CATEGORIES);
       setPendingChecklist({});
+      setCustomObligations([]);
+      setCustomObligationsPending({});
+      setOnboardingCompleted(false);
       // Deliberately does NOT touch remote Supabase rows or sign the user out —
       // this clears the LOCAL cache only. For a cloud-synced account, the next
       // full reload's "cloud wins" load would otherwise just re-populate
       // everything from the account's still-intact remote data; the caller
       // should navigate client-side (not a hard reload) immediately after this
       // so the in-memory reset actually sticks for the current session.
+    },
+    hydrated,
+    isFirstTimeUser:
+      transactions.length === 0 &&
+      trades.length === 0 &&
+      portfolioSnapshots.length === 0 &&
+      customPaymentModes.length === 0 &&
+      customPartitions.length === 0 &&
+      customCategories.income.length === 0 &&
+      customCategories.expense.length === 0 &&
+      customObligations.length === 0,
+    onboardingCompleted,
+    completeOnboarding: () => {
+      setOnboardingCompleted(true);
+      try {
+        localStorage.setItem(ONBOARDING_KEY, "true");
+      } catch {
+        // Ignore — the in-memory flag still suppresses the wizard this session.
+      }
     },
   };
 

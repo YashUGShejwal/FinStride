@@ -116,6 +116,23 @@
     -webkit-font-smoothing: antialiased;
     font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Inter, "Helvetica Neue", sans-serif;
   }
+
+  /* Native date picker popup: without this the browser assumes a light UI
+     and renders black text on a white calendar inside this all-dark app. */
+  input[type="date"] {
+    color-scheme: dark;
+  }
+
+  /* Hide the native up/down spin buttons on number inputs across engines —
+     they visually collide with this app's own ₹-prefix/suffix decorations. */
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+  }
 }
 
 @layer utilities {
