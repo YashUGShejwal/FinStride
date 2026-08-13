@@ -10,7 +10,7 @@ export const Route = createFileRoute("/_authenticated/profile")({ component: Pro
 
 function ProfilePage() {
   const { user, signOut } = useAuth();
-  const { transactions, trades, blueprintSettings, riskCapCapital, investmentApps, partitionLabel } = useStore();
+  const { transactions, trades, blueprintSettings, riskCapCapital, brokerPartitions, partitionLabel } = useStore();
   const nav = useNavigate();
 
   return (
@@ -50,18 +50,21 @@ function ProfilePage() {
         <h2 className="font-display font-semibold tracking-tight">Investment partitions</h2>
         <p className="text-xs text-muted-foreground mt-0.5 mb-4">Active broker accounts tracked in FinStride</p>
         <ul className="space-y-2">
-          {investmentApps.map((a) => (
+          {brokerPartitions.map((a) => (
             <li key={a.id} className="flex items-center justify-between gap-3 py-2 border-b border-glass-border/50 last:border-0">
               <div>
-                <p className="text-sm font-medium">{a.label}</p>
+                <p className="text-sm font-medium">{a.name}</p>
                 <p className="text-xs text-muted-foreground mt-0.5">{a.description}</p>
               </div>
               <div className="flex gap-1 flex-wrap justify-end">
-                {a.scopes.map((s) => (
-                  <span key={s} className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/8 text-muted-foreground">
-                    {s}
+                <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/8 text-muted-foreground">
+                  {a.category.replace(/_/g, " ")}
+                </span>
+                {a.brokerApp && (
+                  <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/8 text-muted-foreground">
+                    {a.brokerApp}
                   </span>
-                ))}
+                )}
               </div>
             </li>
           ))}

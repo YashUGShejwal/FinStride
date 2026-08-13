@@ -9,8 +9,9 @@
 
 import type { FinStrideClient } from "./client";
 import type {
+  AccountMode,
   BlueprintSettings,
-  CustomPartition,
+  BrokerPartition,
   GrindState,
   MonthlyPending,
   PortfolioSnapshot,
@@ -54,8 +55,8 @@ export type LocalDataSnapshot = {
   grind: GrindState;
   blueprint: BlueprintSettings;
   showPersonalQuotes: boolean;
-  customPaymentModes: string[];
-  customPartitions: CustomPartition[];
+  customAccountModes: AccountMode[];
+  customBrokerPartitions: BrokerPartition[];
   customIncomeCategories: string[];
   customExpenseCategories: string[];
   pending: MonthlyPending;
@@ -94,8 +95,8 @@ export async function migrateLocalDataToSupabase(
     await upsertSettings(client, userId, {
       blueprint: local.blueprint,
       showPersonalQuotes: local.showPersonalQuotes,
-      customPaymentModes: local.customPaymentModes,
-      customPartitions: local.customPartitions,
+      customAccountModes: local.customAccountModes,
+      customBrokerPartitions: local.customBrokerPartitions,
       customIncomeCategories: local.customIncomeCategories,
       customExpenseCategories: local.customExpenseCategories,
     }),

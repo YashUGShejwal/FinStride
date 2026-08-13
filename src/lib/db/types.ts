@@ -27,10 +27,13 @@ export type DbProfileInsert = {
 /**
  * Mirrors: user_settings — one row per user (user_id is both PK and FK).
  *
- * `investment_apps` and `portfolio_partitions` are both written from the app's
- * single `customPartitions` list (the app derives both views from one source).
- * `income_categories` / `expense_categories` are an addition beyond the original
- * column spec — without them the existing custom-category feature could not sync.
+ * `custom_account_modes` / `custom_broker_partitions` are jsonb columns holding
+ * the app's structured AccountMode[] / BrokerPartition[] custom-additions lists
+ * (see src/lib/store.tsx) — replacing the old flat-string payment_modes/
+ * investment_apps/portfolio_partitions columns from 0001, which could only ever
+ * carry plain names. `income_categories` / `expense_categories` are an addition
+ * beyond the original column spec — without them the existing custom-category
+ * feature could not sync.
  */
 export type DbUserSettings = {
   user_id: string;
@@ -42,12 +45,28 @@ export type DbUserSettings = {
   risk_cap_pct: number;
   risk_cap_partition: string;
   show_personal_quotes: boolean;
-  payment_modes: string[];
-  investment_apps: string[];
-  portfolio_partitions: string[];
+  custom_account_modes: DbAccountModeJson[];
+  custom_broker_partitions: DbBrokerPartitionJson[];
   income_categories: string[];
   expense_categories: string[];
   updated_at: string;
+};
+
+/** JSON shape stored in the custom_account_modes jsonb column — mirrors AccountMode. */
+export type DbAccountModeJson = {
+  id: string;
+  name: string;
+  type: string;
+  defaultChannel?: string | null;
+};
+
+/** JSON shape stored in the custom_broker_partitions jsonb column — mirrors BrokerPartition. */
+export type DbBrokerPartitionJson = {
+  id: string;
+  name: string;
+  category: string;
+  brokerApp?: string | null;
+  description?: string | null;
 };
 
 export type DbUserSettingsUpsert = Omit<DbUserSettings, "updated_at">;

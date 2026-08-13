@@ -11,7 +11,7 @@ import {
 import { toast } from "sonner";
 import {
   useStore,
-  type PortfolioPartitionKey,
+  type PartitionId,
   type PortfolioSnapshot,
 } from "@/lib/store";
 import { inr, fmtDate, todayLocalISO } from "@/lib/format";
@@ -63,7 +63,7 @@ function hexForPartition(key: string, index: number): string {
 
 // ─── Filter state ──────────────────────────────────────────────────────────
 type AnalyticsFilter = {
-  partitions: PortfolioPartitionKey[];
+  partitions: PartitionId[];
   dateFrom?: string;
   dateTo?: string;
 };
@@ -110,17 +110,17 @@ function PieTooltip({
 
 // ─── Main page ─────────────────────────────────────────────────────────────
 function AnalyticsPage() {
-  const { transactions, portfolioSnapshots, latestSnapshotValues, portfolioPartitions, isStealthMode } = useStore();
+  const { transactions, portfolioSnapshots, latestSnapshotValues, brokerPartitions, isStealthMode } = useStore();
   const ALL_PARTITIONS = useMemo(
-    () => portfolioPartitions.map((p) => p.key),
-    [portfolioPartitions],
+    () => brokerPartitions.map((p) => p.id),
+    [brokerPartitions],
   );
   // A partition's position in this canonical, unfiltered list — used as the seed
   // for fallback colors so the same custom partition gets the same color everywhere
   // on the page, regardless of which locally-filtered/reordered array (pieData,
   // the active partition filter, etc.) happens to be rendering it.
-  const canonicalPartitionIndex = (key: PortfolioPartitionKey) =>
-    Math.max(0, portfolioPartitions.findIndex((p) => p.key === key));
+  const canonicalPartitionIndex = (key: PartitionId) =>
+    Math.max(0, brokerPartitions.findIndex((p) => p.id === key));
   const [mounted, setMounted] = useState(false);
   const [filters, setFilters] = useState<AnalyticsFilter>(() => ({ partitions: [...ALL_PARTITIONS] }));
   const [addSnapshotOpen, setAddSnapshotOpen] = useState(false);
@@ -160,13 +160,13 @@ function AnalyticsPage() {
     const active = filters.partitions.length > 0 ? filters.partitions : ALL_PARTITIONS;
     const items = active
       .map((key) => {
-        const p = portfolioPartitions.find((x) => x.key === key);
-        return { name: p?.label ?? key, key, value: latestSnapshotValues[key] ?? 0 };
+        const p = brokerPartitions.find((x) => x.id === key);
+        return { name: p?.name ?? key, key, value: latestSnapshotValues[key] ?? 0 };
       })
       .filter((d) => d.value > 0);
     const total = items.reduce((s, d) => s + d.value, 0);
     return items.map((d) => ({ ...d, pct: total > 0 ? (d.value / total) * 100 : 0 }));
-  }, [latestSnapshotValues, filters.partitions, portfolioPartitions, ALL_PARTITIONS]);
+  }, [latestSnapshotValues, filters.partitions, brokerPartitions, ALL_PARTITIONS]);
 
   // ── Line chart data (filtered by partitions + date range, carry-forward) ──
   const lineData = useMemo(() => {
@@ -211,7 +211,7 @@ function AnalyticsPage() {
   }, [portfolioSnapshots, filters, ALL_PARTITIONS]);
 
   // ── Partition chip helpers ─────────────────────────────────────────────────
-  const togglePartition = (key: PortfolioPartitionKey) => {
+  const togglePartition = (key: PartitionId) => {
     setFilters((f) => {
       const already = f.partitions.includes(key);
       const next = already ? f.partitions.filter((p) => p !== key) : [...f.partitions, key];
@@ -219,7 +219,7 @@ function AnalyticsPage() {
     });
   };
 
-  const removePartitionChip = (key: PortfolioPartitionKey) => {
+  const removePartitionChip = (key: PartitionId) => {
     setFilters((f) => {
       const next = f.partitions.filter((p) => p !== key);
       return { ...f, partitions: next.length === 0 ? [...ALL_PARTITIONS] : next };
@@ -289,7 +289,7 @@ function AnalyticsPage() {
                 if (v === "__all__") {
                   setFilters((f) => ({ ...f, partitions: [...ALL_PARTITIONS] }));
                 } else {
-                  togglePartition(v as PortfolioPartitionKey);
+                  togglePartition(v as PartitionId);
                 }
               }}
             >
@@ -306,11 +306,11 @@ function AnalyticsPage() {
                 <SelectItem value="__all__" className={allSelected ? "font-semibold" : ""}>
                   All partitions
                 </SelectItem>
-                {portfolioPartitions.map((p) => {
-                  const sel = filters.partitions.includes(p.key);
+                {brokerPartitions.map((p) => {
+                  const sel = filters.partitions.includes(p.id);
                   return (
-                    <SelectItem key={p.key} value={p.key} className={sel ? "font-semibold" : "text-muted-foreground"}>
-                      {p.label}
+                    <SelectItem key={p.id} value={p.id} className={sel ? "font-semibold" : "text-muted-foreground"}>
+                      {p.name}
                     </SelectItem>
                   );
                 })}
@@ -508,17 +508,17 @@ function AddSnapshotDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const { addPortfolioSnapshots, portfolioPartitions, partitionLabel } = useStore();
+  const { addPortfolioSnapshots, brokerPartitions, partitionLabel } = useStore();
   const [date, setDate] = useState(todayLocalISO);
-  const [partition, setPartition] = useState<PortfolioPartitionKey>(
-    () => portfolioPartitions[0]?.key ?? "Cash",
+  const [partition, setPartition] = useState<PartitionId>(
+    () => brokerPartitions[0]?.id ?? "Cash",
   );
   const [value, setValue] = useState("");
   const [notes, setNotes] = useState("");
 
   const resetForm = () => {
     setDate(todayLocalISO());
-    setPartition(portfolioPartitions[0]?.key ?? "Cash");
+    setPartition(brokerPartitions[0]?.id ?? "Cash");
     setValue("");
     setNotes("");
   };
@@ -577,14 +577,14 @@ function AddSnapshotDialog({
               <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 Broker Partition
               </Label>
-              <Select value={partition} onValueChange={(v: PortfolioPartitionKey) => setPartition(v)}>
+              <Select value={partition} onValueChange={(v: PartitionId) => setPartition(v)}>
                 <SelectTrigger className="bg-input/40 border-glass-border mt-1.5">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {portfolioPartitions.map((p) => (
-                    <SelectItem key={p.key} value={p.key}>
-                      {p.label}
+                  {brokerPartitions.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -642,12 +642,12 @@ const UNDO_WINDOW_MS = 5000;
 
 // ─── Snapshot history (grouped by partition, delete-with-undo) ────────────
 function SnapshotHistorySection() {
-  const { portfolioSnapshots, deletePortfolioSnapshot, portfolioPartitions, partitionLabel, isStealthMode } = useStore();
-  const [expanded, setExpanded] = useState<Set<PortfolioPartitionKey>>(new Set());
+  const { portfolioSnapshots, deletePortfolioSnapshot, brokerPartitions, partitionLabel, isStealthMode } = useStore();
+  const [expanded, setExpanded] = useState<Set<PartitionId>>(new Set());
   const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set());
   const deleteTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
-  const togglePartition = (key: PortfolioPartitionKey) => {
+  const togglePartition = (key: PartitionId) => {
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
@@ -716,29 +716,29 @@ function SnapshotHistorySection() {
         <EmptyChart icon={<History className="size-10 opacity-30" />} text="No snapshots recorded yet" />
       ) : (
         <div className="space-y-3">
-          {portfolioPartitions.map((p, i) => {
+          {brokerPartitions.map((p, i) => {
             const rows = visibleSnapshots
-              .filter((s) => s.brokerPartition === p.key)
+              .filter((s) => s.brokerPartition === p.id)
               .sort((a, b) => b.snapshotDate.localeCompare(a.snapshotDate));
             if (rows.length === 0) return null;
 
-            const isOpen = expanded.has(p.key);
+            const isOpen = expanded.has(p.id);
             const latest = rows[0];
 
             return (
-              <div key={p.key} className="rounded-xl border border-glass-border overflow-hidden">
+              <div key={p.id} className="rounded-xl border border-glass-border overflow-hidden">
                 <button
                   type="button"
-                  onClick={() => togglePartition(p.key)}
+                  onClick={() => togglePartition(p.id)}
                   className="w-full flex items-center justify-between p-3.5 hover:bg-white/5 transition-colors"
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
                     <span
                       className="size-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: hexForPartition(p.key, i) }}
+                      style={{ backgroundColor: hexForPartition(p.id, i) }}
                     />
                     <div className="text-left min-w-0">
-                      <p className="text-sm font-medium">{p.label}</p>
+                      <p className="text-sm font-medium">{p.name}</p>
                       <p className="text-[11px] text-muted-foreground">
                         {rows.length} snapshot{rows.length !== 1 ? "s" : ""} • latest{" "}
                         <Sensitive>

@@ -1,16 +1,22 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useRef, useState, type FormEvent } from "react";
 import {
-  Settings, Lock, Trash2, Plus, RotateCcw, Save, Wallet, Sparkles,
+  Settings, Trash2, Plus, RotateCcw, Save, Wallet, Sparkles,
   Download, Upload, TriangleAlert, DatabaseZap, Monitor, CheckCircle2, CalendarClock,
+  Pencil, X, KeyRound,
 } from "lucide-react";
 import {
   useStore,
   DEFAULT_BLUEPRINT,
   DEFAULT_INCOME_CATEGORIES,
   DEFAULT_EXPENSE_CATEGORIES,
-  DEFAULT_PAYMENT_MODES,
-  DEFAULT_INVESTMENT_APPS,
+  DEFAULT_ACCOUNT_MODES,
+  DEFAULT_BROKER_PARTITIONS,
+  type AccountMode,
+  type AccountType,
+  type BrokerPartition,
+  type PartitionCategory,
+  type PaymentChannel,
   type CustomObligation,
 } from "@/lib/store";
 import { inr } from "@/lib/format";
@@ -25,9 +31,34 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/settings")({ component: SettingsPage });
+
+const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
+  bank: "Bank",
+  credit_card: "Credit Card",
+  cash: "Cash",
+  wallet: "Wallet",
+};
+const ACCOUNT_TYPES: readonly AccountType[] = ["bank", "credit_card", "cash", "wallet"];
+const PAYMENT_CHANNELS: readonly PaymentChannel[] = ["UPI", "Card", "NetBanking", "Cash"];
+
+const PARTITION_CATEGORY_LABELS: Record<PartitionCategory, string> = {
+  equity_swing: "Equity / Swing",
+  long_term_etf: "Long-Term / ETF",
+  mutual_funds: "Mutual Funds",
+  crypto: "Crypto",
+  liquid: "Liquid",
+};
+const PARTITION_CATEGORIES: readonly PartitionCategory[] = [
+  "equity_swing",
+  "long_term_etf",
+  "mutual_funds",
+  "crypto",
+  "liquid",
+];
 
 function SettingsPage() {
   const {
@@ -37,15 +68,20 @@ function SettingsPage() {
     expenseCategories,
     addCategory,
     deleteCategory,
-    paymentModes,
+    renameCategory,
+    accountModes,
     addAccountMode,
     deleteAccountMode,
-    investmentApps,
-    addPartition,
-    deletePartition,
-    portfolioPartitions,
+    updateAccountMode,
+    brokerPartitions,
+    addBrokerPartition,
+    deleteBrokerPartition,
+    updateBrokerPartition,
+    partitionLabel,
     showPersonalQuotes,
     setShowPersonalQuotes,
+    isOwnerUnlocked,
+    unlockOwnerReflections,
     exportData,
     importData,
     resetAllData,
@@ -58,10 +94,9 @@ function SettingsPage() {
   } = useStore();
   const nav = useNavigate();
   const importInputRef = useRef<HTMLInputElement>(null);
+  const [pinModalOpen, setPinModalOpen] = useState(false);
 
-  const riskCapPartitionLabel =
-    portfolioPartitions.find((p) => p.key === blueprintSettings.riskCapPartition)?.label ??
-    blueprintSettings.riskCapPartition;
+  const riskCapPartitionLabel = partitionLabel(blueprintSettings.riskCapPartition);
 
   const handleExport = () => {
     if (exportData()) toast.success("Backup downloaded");
@@ -92,6 +127,23 @@ function SettingsPage() {
   const handleInstall = async () => {
     const accepted = await installApp();
     if (accepted) toast.success("FinStride installed");
+  };
+
+  const handleToggleQuotes = (checked: boolean) => {
+    if (!checked) {
+      setShowPersonalQuotes(false);
+      return;
+    }
+    if (isOwnerUnlocked) {
+      setShowPersonalQuotes(true);
+      return;
+    }
+    setPinModalOpen(true);
+  };
+
+  const handleUnlocked = () => {
+    setShowPersonalQuotes(true);
+    setPinModalOpen(false);
   };
 
   // ── Blueprint form local state (controlled, saved on submit) ──────────────
@@ -210,16 +262,16 @@ function SettingsPage() {
                   value={blueprintSettings.riskCapPartition}
                   onValueChange={(v) => {
                     updateBlueprintSettings({ riskCapPartition: v });
-                    toast.success(`Risk cap partition set to "${v}"`);
+                    toast.success(`Risk cap partition set to "${partitionLabel(v)}"`);
                   }}
                 >
                   <SelectTrigger className="bg-input/40 border-glass-border">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {portfolioPartitions.map((p) => (
-                      <SelectItem key={p.key} value={p.key}>
-                        {p.label}
+                    {brokerPartitions.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -255,7 +307,7 @@ function SettingsPage() {
           <div>
             <h2 className="font-display font-semibold tracking-tight">Category Manager</h2>
             <p className="text-xs text-muted-foreground">
-              Add custom income / expense categories. Default categories cannot be removed.
+              Add, rename, or remove any income / expense category — including the built-in ones.
             </p>
           </div>
         </div>
@@ -267,6 +319,7 @@ function SettingsPage() {
             defaults={DEFAULT_INCOME_CATEGORIES}
             onAdd={(name) => addCategory("income", name)}
             onDelete={(name) => deleteCategory("income", name)}
+            onRename={(oldName, newName) => renameCategory("income", oldName, newName)}
           />
           <CategoryColumn
             title="Expense Categories"
@@ -274,6 +327,7 @@ function SettingsPage() {
             defaults={DEFAULT_EXPENSE_CATEGORIES}
             onAdd={(name) => addCategory("expense", name)}
             onDelete={(name) => deleteCategory("expense", name)}
+            onRename={(oldName, newName) => renameCategory("expense", oldName, newName)}
           />
         </div>
       </section>
@@ -295,36 +349,51 @@ function SettingsPage() {
         <ObligationColumn obligations={customObligations} onAdd={addObligation} onDelete={deleteObligation} />
       </section>
 
-      {/* Payment Modes & Broker Partitions */}
+      {/* Accounts & Cards */}
       <section className="glass rounded-2xl p-5 md:p-6">
         <div className="flex items-center gap-3 mb-5">
           <div className="size-9 rounded-xl gradient-success grid place-items-center shrink-0">
             <Wallet className="size-4 text-background" />
           </div>
           <div>
-            <h2 className="font-display font-semibold tracking-tight">Payment Modes & Broker Partitions</h2>
+            <h2 className="font-display font-semibold tracking-tight">Accounts & Cards</h2>
             <p className="text-xs text-muted-foreground">
-              Add custom payment modes or broker/investment partitions. Default entries cannot be removed.
+              Add, rename, or remove any account/card — including the built-in ones. Shown in the
+              Cash Flow ledger as "Name (Channel)".
             </p>
           </div>
         </div>
+        <AccountModeColumn
+          accountModes={accountModes}
+          defaultIds={DEFAULT_ACCOUNT_MODES.map((a) => a.id)}
+          onAdd={addAccountMode}
+          onDelete={deleteAccountMode}
+          onUpdate={updateAccountMode}
+        />
+      </section>
 
-        <div className="grid md:grid-cols-2 gap-6">
-          <CategoryColumn
-            title="Payment Modes"
-            allCategories={paymentModes}
-            defaults={DEFAULT_PAYMENT_MODES}
-            onAdd={(name) => addAccountMode(name)}
-            onDelete={(name) => deleteAccountMode(name)}
-          />
-          <CategoryColumn
-            title="Broker Partitions"
-            allCategories={investmentApps.map((a) => a.id)}
-            defaults={DEFAULT_INVESTMENT_APPS.map((a) => a.id)}
-            onAdd={(name) => addPartition(name)}
-            onDelete={(name) => deletePartition(name)}
-          />
+      {/* Broker Partitions */}
+      <section className="glass rounded-2xl p-5 md:p-6">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="size-9 rounded-xl gradient-success grid place-items-center shrink-0">
+            <Wallet className="size-4 text-background" />
+          </div>
+          <div>
+            <h2 className="font-display font-semibold tracking-tight">Broker Partitions</h2>
+            <p className="text-xs text-muted-foreground">
+              Add, rename, or remove any broker/investment partition — including the built-in
+              ones. Multiple partitions can share the same category (e.g. "Long-Term (Zerodha)"
+              and "Long-Term (Groww)").
+            </p>
+          </div>
         </div>
+        <BrokerPartitionColumn
+          brokerPartitions={brokerPartitions}
+          defaultIds={DEFAULT_BROKER_PARTITIONS.map((p) => p.id)}
+          onAdd={addBrokerPartition}
+          onDelete={deleteBrokerPartition}
+          onUpdate={updateBrokerPartition}
+        />
       </section>
 
       {/* Personalization */}
@@ -345,15 +414,19 @@ function SettingsPage() {
           <div>
             <Label className="text-sm">Show personal reflection quotes</Label>
             <p className="text-[11px] text-muted-foreground mt-1">
-              When off (default), only general motivational quotes are shown on the dashboard. Turn on to also see the app owner's personal reflections.
+              When off (default), only general motivational quotes are shown on the dashboard. Turn on to also see the app owner's personal reflections — protected by a passcode.
             </p>
           </div>
-          <Switch
-            checked={showPersonalQuotes}
-            onCheckedChange={(checked) => setShowPersonalQuotes(checked)}
-          />
+          <Switch checked={showPersonalQuotes} onCheckedChange={handleToggleQuotes} />
         </div>
       </section>
+
+      <OwnerPinModal
+        open={pinModalOpen}
+        onOpenChange={setPinModalOpen}
+        onUnlock={unlockOwnerReflections}
+        onUnlocked={handleUnlocked}
+      />
 
       {/* Progressive Web App — only shown when there's something actionable
           to say: either the browser has offered an install prompt, or the
@@ -469,6 +542,93 @@ function SettingsPage() {
   );
 }
 
+// ─── Owner passcode modal ───────────────────────────────────────────────────
+/**
+ * Glassmorphism PIN gate for showPersonalQuotes. This is a client-side speed
+ * bump, not real security — VITE_OWNER_PIN (or the "1234" fallback) ships
+ * inside the JS bundle like any other build-time env var, so it's visible to
+ * anyone who opens devtools. It only prevents a casual accidental toggle.
+ */
+function OwnerPinModal({
+  open,
+  onOpenChange,
+  onUnlock,
+  onUnlocked,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onUnlock: (pin: string) => boolean;
+  onUnlocked: () => void;
+}) {
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState(false);
+
+  const close = (v: boolean) => {
+    if (!v) {
+      setPin("");
+      setError(false);
+    }
+    onOpenChange(v);
+  };
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (onUnlock(pin)) {
+      setPin("");
+      setError(false);
+      onUnlocked();
+    } else {
+      setError(true);
+      setPin("");
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={close}>
+      <DialogContent className="glass-strong border-glass-border max-w-sm">
+        <div className="flex items-center gap-3 mb-1">
+          <div className="size-9 rounded-xl gradient-primary grid place-items-center shrink-0">
+            <KeyRound className="size-4 text-primary-foreground" />
+          </div>
+          <DialogTitle className="font-display font-semibold tracking-tight">
+            Owner passcode
+          </DialogTitle>
+        </div>
+        <DialogDescription className="text-xs text-muted-foreground">
+          Enter the owner passcode to unlock personal reflection quotes on this device.
+        </DialogDescription>
+        <form onSubmit={submit} className="space-y-3 mt-2">
+          <Input
+            type="password"
+            inputMode="numeric"
+            autoFocus
+            value={pin}
+            onChange={(e) => {
+              setPin(e.target.value);
+              setError(false);
+            }}
+            placeholder="Enter passcode"
+            className="bg-input/40 border-glass-border text-center tracking-widest"
+          />
+          {error && (
+            <p className="text-xs text-destructive flex items-center gap-1.5">
+              <TriangleAlert className="size-3.5" /> Invalid Passcode
+            </p>
+          )}
+          <div className="flex items-center gap-2 justify-end">
+            <Button type="button" variant="ghost" onClick={() => close(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" className="gradient-primary text-primary-foreground border-0">
+              Unlock
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Blueprint field ────────────────────────────────────────────────────────
 /** "Currently: ₹X" hint — the amount blurs in stealth mode like every other figure. */
 function CurrentAmount({ value }: { value: number }) {
@@ -525,23 +685,26 @@ function BpField({
   );
 }
 
-// ─── Category column ────────────────────────────────────────────────────────
+// ─── Category column (100% editable/deletable, defaults included) ─────────
 function CategoryColumn({
   title,
   allCategories,
   defaults,
   onAdd,
   onDelete,
+  onRename,
 }: {
   title: string;
   allCategories: string[];
   defaults: readonly string[];
   onAdd: (name: string) => void;
-  // Returning false signals the deletion was blocked (e.g. still referenced by
-  // existing records) — anything else (including void) is treated as success.
-  onDelete: (name: string) => void | boolean;
+  onDelete: (name: string) => void;
+  /** Custom entries only — returns false if oldName isn't custom or newName collides. */
+  onRename: (oldName: string, newName: string) => boolean;
 }) {
   const [input, setInput] = useState("");
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
 
   const handleAdd = () => {
     const trimmed = input.trim();
@@ -554,34 +717,80 @@ function CategoryColumn({
     toast.success(`"${trimmed}" added`);
   };
 
+  const startEdit = (cat: string) => {
+    setEditing(cat);
+    setEditValue(cat);
+  };
+
+  const saveEdit = () => {
+    if (!editing) return;
+    const trimmed = editValue.trim();
+    if (!trimmed) return;
+    if (trimmed === editing) {
+      setEditing(null);
+      return;
+    }
+    if (onRename(editing, trimmed)) {
+      toast.success(`Renamed to "${trimmed}"`);
+      setEditing(null);
+    } else {
+      toast.error("That name is already taken, or this isn't a custom category");
+    }
+  };
+
   return (
     <div className="space-y-3">
       <p className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">{title}</p>
       <ul className="space-y-1.5">
         {allCategories.map((cat) => {
-          const isDefault = defaults.includes(cat);
+          const isCustom = !defaults.includes(cat);
+          const isEditing = editing === cat;
           return (
             <li
               key={cat}
               className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border border-glass-border bg-white/3 text-sm"
             >
-              <span className={isDefault ? "text-muted-foreground" : ""}>{cat}</span>
-              {isDefault ? (
-                <Lock className="size-3.5 text-muted-foreground/50 shrink-0" />
+              {isEditing ? (
+                <>
+                  <Input
+                    autoFocus
+                    value={editValue}
+                    onChange={(e) => setEditValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") { e.preventDefault(); saveEdit(); }
+                      if (e.key === "Escape") setEditing(null);
+                    }}
+                    className="bg-input/40 border-glass-border h-8 text-sm"
+                  />
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button onClick={saveEdit} className="text-muted-foreground hover:text-foreground p-1">
+                      <Save className="size-3.5" />
+                    </button>
+                    <button onClick={() => setEditing(null)} className="text-muted-foreground hover:text-destructive p-1">
+                      <X className="size-3.5" />
+                    </button>
+                  </div>
+                </>
               ) : (
-                <button
-                  onClick={() => {
-                    const result = onDelete(cat);
-                    if (result === false) {
-                      toast.error(`"${cat}" is still in use — remove its records first`);
-                    } else {
-                      toast.success(`"${cat}" removed`);
-                    }
-                  }}
-                  className="text-muted-foreground hover:text-destructive shrink-0"
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
+                <>
+                  <span>{cat}</span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {isCustom && (
+                      <button onClick={() => startEdit(cat)} className="text-muted-foreground hover:text-foreground">
+                        <Pencil className="size-3.5" />
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        onDelete(cat);
+                        toast.success(`"${cat}" removed`);
+                      }}
+                      className="text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                </>
               )}
             </li>
           );
@@ -594,6 +803,345 @@ function CategoryColumn({
           onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleAdd())}
           placeholder="New category…"
           className="bg-input/40 border-glass-border text-sm h-9"
+        />
+        <Button
+          type="button"
+          onClick={handleAdd}
+          size="sm"
+          className="gradient-primary text-primary-foreground border-0 h-9 px-3 shrink-0"
+        >
+          <Plus className="size-4" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Account mode column ────────────────────────────────────────────────────
+function AccountModeColumn({
+  accountModes,
+  defaultIds,
+  onAdd,
+  onDelete,
+  onUpdate,
+}: {
+  accountModes: AccountMode[];
+  defaultIds: readonly string[];
+  onAdd: (name: string, type: AccountType, defaultChannel?: PaymentChannel) => void;
+  onDelete: (id: string) => boolean;
+  onUpdate: (id: string, patch: Partial<Omit<AccountMode, "id">>) => boolean;
+}) {
+  const [name, setName] = useState("");
+  const [type, setType] = useState<AccountType>("bank");
+  const [channel, setChannel] = useState<PaymentChannel | "none">("none");
+  const [editing, setEditing] = useState<AccountMode | null>(null);
+
+  const handleAdd = () => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (accountModes.some((a) => a.id.toLowerCase() === trimmed.toLowerCase())) {
+      return toast.error("An account with that name already exists");
+    }
+    onAdd(trimmed, type, channel === "none" ? undefined : channel);
+    setName("");
+    toast.success(`"${trimmed}" added`);
+  };
+
+  const saveEdit = () => {
+    if (!editing) return;
+    const trimmed = editing.name.trim();
+    if (!trimmed) return;
+    if (accountModes.some((a) => a.id !== editing.id && a.name.toLowerCase() === trimmed.toLowerCase())) {
+      return toast.error("Another account already has that name");
+    }
+    if (onUpdate(editing.id, { name: trimmed, type: editing.type, defaultChannel: editing.defaultChannel })) {
+      toast.success(`"${trimmed}" updated`);
+      setEditing(null);
+    } else {
+      toast.error("This account can't be edited in place");
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <ul className="space-y-1.5">
+        {accountModes.map((a) => {
+          const isCustom = !defaultIds.includes(a.id);
+          const isEditing = editing?.id === a.id;
+          return (
+            <li key={a.id} className="px-3 py-2.5 rounded-xl border border-glass-border bg-white/3 text-sm">
+              {isEditing ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    autoFocus
+                    value={editing.name}
+                    onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+                    className="bg-input/40 border-glass-border h-8 text-sm flex-1 min-w-[8rem]"
+                  />
+                  <Select value={editing.type} onValueChange={(v: AccountType) => setEditing({ ...editing, type: v })}>
+                    <SelectTrigger className="bg-input/40 border-glass-border h-8 text-xs w-28">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ACCOUNT_TYPES.map((t) => (
+                        <SelectItem key={t} value={t}>{ACCOUNT_TYPE_LABELS[t]}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select
+                    value={editing.defaultChannel ?? "none"}
+                    onValueChange={(v: PaymentChannel | "none") =>
+                      setEditing({ ...editing, defaultChannel: v === "none" ? undefined : v })
+                    }
+                  >
+                    <SelectTrigger className="bg-input/40 border-glass-border h-8 text-xs w-28">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No channel</SelectItem>
+                      {PAYMENT_CHANNELS.map((c) => (
+                        <SelectItem key={c} value={c}>{c}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button onClick={saveEdit} className="text-muted-foreground hover:text-foreground p-1">
+                      <Save className="size-3.5" />
+                    </button>
+                    <button onClick={() => setEditing(null)} className="text-muted-foreground hover:text-destructive p-1">
+                      <X className="size-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <span>{a.name}</span>
+                    <span className="ml-2 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/8 text-muted-foreground">
+                      {ACCOUNT_TYPE_LABELS[a.type]}
+                    </span>
+                    {a.defaultChannel && (
+                      <span className="ml-1.5 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/8 text-muted-foreground">
+                        {a.defaultChannel}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {isCustom && (
+                      <button onClick={() => setEditing(a)} className="text-muted-foreground hover:text-foreground">
+                        <Pencil className="size-3.5" />
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        if (onDelete(a.id)) toast.success(`"${a.name}" removed`);
+                        else toast.error(`"${a.name}" is still in use — remove its transactions first`);
+                      }}
+                      className="text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      <div className="flex flex-wrap gap-2">
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleAdd())}
+          placeholder="e.g. HDFC Bank, Amazon Pay ICICI…"
+          className="bg-input/40 border-glass-border text-sm h-9 flex-1 min-w-[10rem]"
+        />
+        <Select value={type} onValueChange={(v: AccountType) => setType(v)}>
+          <SelectTrigger className="bg-input/40 border-glass-border h-9 text-xs w-32">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {ACCOUNT_TYPES.map((t) => (
+              <SelectItem key={t} value={t}>{ACCOUNT_TYPE_LABELS[t]}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={channel} onValueChange={(v: PaymentChannel | "none") => setChannel(v)}>
+          <SelectTrigger className="bg-input/40 border-glass-border h-9 text-xs w-32">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">No channel</SelectItem>
+            {PAYMENT_CHANNELS.map((c) => (
+              <SelectItem key={c} value={c}>{c}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button
+          type="button"
+          onClick={handleAdd}
+          size="sm"
+          className="gradient-primary text-primary-foreground border-0 h-9 px-3 shrink-0"
+        >
+          <Plus className="size-4" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Broker partition column ────────────────────────────────────────────────
+function BrokerPartitionColumn({
+  brokerPartitions,
+  defaultIds,
+  onAdd,
+  onDelete,
+  onUpdate,
+}: {
+  brokerPartitions: BrokerPartition[];
+  defaultIds: readonly string[];
+  onAdd: (name: string, category: PartitionCategory, brokerApp?: string, description?: string) => void;
+  onDelete: (id: string) => boolean;
+  onUpdate: (id: string, patch: Partial<Omit<BrokerPartition, "id">>) => boolean;
+}) {
+  const [name, setName] = useState("");
+  const [category, setCategory] = useState<PartitionCategory>("equity_swing");
+  const [brokerApp, setBrokerApp] = useState("");
+  const [editing, setEditing] = useState<BrokerPartition | null>(null);
+
+  const handleAdd = () => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (brokerPartitions.some((p) => p.id.toLowerCase() === trimmed.toLowerCase())) {
+      return toast.error("A partition with that name already exists");
+    }
+    onAdd(trimmed, category, brokerApp.trim() || undefined);
+    setName("");
+    setBrokerApp("");
+    toast.success(`"${trimmed}" added`);
+  };
+
+  const saveEdit = () => {
+    if (!editing) return;
+    const trimmed = editing.name.trim();
+    if (!trimmed) return;
+    if (brokerPartitions.some((p) => p.id !== editing.id && p.name.toLowerCase() === trimmed.toLowerCase())) {
+      return toast.error("Another partition already has that name");
+    }
+    if (
+      onUpdate(editing.id, {
+        name: trimmed,
+        category: editing.category,
+        brokerApp: editing.brokerApp,
+        description: editing.description,
+      })
+    ) {
+      toast.success(`"${trimmed}" updated`);
+      setEditing(null);
+    } else {
+      toast.error("This partition can't be edited in place");
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <ul className="space-y-1.5">
+        {brokerPartitions.map((p) => {
+          const isCustom = !defaultIds.includes(p.id);
+          const isEditing = editing?.id === p.id;
+          return (
+            <li key={p.id} className="px-3 py-2.5 rounded-xl border border-glass-border bg-white/3 text-sm">
+              {isEditing ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    autoFocus
+                    value={editing.name}
+                    onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+                    className="bg-input/40 border-glass-border h-8 text-sm flex-1 min-w-[8rem]"
+                  />
+                  <Select value={editing.category} onValueChange={(v: PartitionCategory) => setEditing({ ...editing, category: v })}>
+                    <SelectTrigger className="bg-input/40 border-glass-border h-8 text-xs w-36">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PARTITION_CATEGORIES.map((c) => (
+                        <SelectItem key={c} value={c}>{PARTITION_CATEGORY_LABELS[c]}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    value={editing.brokerApp ?? ""}
+                    onChange={(e) => setEditing({ ...editing, brokerApp: e.target.value || undefined })}
+                    placeholder="Broker app (optional)"
+                    className="bg-input/40 border-glass-border h-8 text-sm w-40"
+                  />
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button onClick={saveEdit} className="text-muted-foreground hover:text-foreground p-1">
+                      <Save className="size-3.5" />
+                    </button>
+                    <button onClick={() => setEditing(null)} className="text-muted-foreground hover:text-destructive p-1">
+                      <X className="size-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <span>{p.name}</span>
+                    {p.brokerApp && <span className="text-muted-foreground"> · {p.brokerApp}</span>}
+                    <span className="ml-2 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/8 text-muted-foreground">
+                      {PARTITION_CATEGORY_LABELS[p.category]}
+                    </span>
+                    {p.description && (
+                      <p className="text-[11px] text-muted-foreground/70 mt-0.5">{p.description}</p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {isCustom && (
+                      <button onClick={() => setEditing(p)} className="text-muted-foreground hover:text-foreground">
+                        <Pencil className="size-3.5" />
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        if (onDelete(p.id)) toast.success(`"${p.name}" removed`);
+                        else toast.error(`"${p.name}" is still in use — remove its trades/snapshots first`);
+                      }}
+                      className="text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      <div className="flex flex-wrap gap-2">
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleAdd())}
+          placeholder="e.g. Swing Desk, MF Core…"
+          className="bg-input/40 border-glass-border text-sm h-9 flex-1 min-w-[10rem]"
+        />
+        <Select value={category} onValueChange={(v: PartitionCategory) => setCategory(v)}>
+          <SelectTrigger className="bg-input/40 border-glass-border h-9 text-xs w-36">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {PARTITION_CATEGORIES.map((c) => (
+              <SelectItem key={c} value={c}>{PARTITION_CATEGORY_LABELS[c]}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Input
+          value={brokerApp}
+          onChange={(e) => setBrokerApp(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleAdd())}
+          placeholder="Broker app (optional)"
+          className="bg-input/40 border-glass-border text-sm h-9 w-40"
         />
         <Button
           type="button"

@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import {
   useStore,
-  type BrokerPartition, type CloseReason, type PortfolioPartitionKey,
+  type CloseReason, type PartitionId,
 } from "@/lib/store";
 import { inr, fmtDate, todayLocalISO } from "@/lib/format";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
@@ -67,11 +67,11 @@ const CLOSE_REASONS: {
 function CapitalSnapshotPanel() {
   const {
     latestSnapshotValues, addPortfolioSnapshots, riskCapCapital,
-    portfolioPartitions, blueprintSettings, partitionLabel,
+    brokerPartitions, blueprintSettings, partitionLabel,
   } = useStore();
   const [open, setOpen] = useState(false);
   const [snapNotes, setSnapNotes] = useState("");
-  const [values, setValues] = useState<Partial<Record<PortfolioPartitionKey, string>>>({});
+  const [values, setValues] = useState<Partial<Record<PartitionId, string>>>({});
 
   const hasAnySnapshot = Object.keys(latestSnapshotValues).length > 0;
   // Specifically whether the CONFIGURED risk-cap partition has a snapshot — hasAnySnapshot
@@ -82,12 +82,12 @@ function CapitalSnapshotPanel() {
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    const entries: Array<{ brokerPartition: PortfolioPartitionKey; currentValue: number }> = [];
-    for (const p of portfolioPartitions) {
-      const raw = values[p.key];
+    const entries: Array<{ brokerPartition: PartitionId; currentValue: number }> = [];
+    for (const p of brokerPartitions) {
+      const raw = values[p.id];
       if (raw && raw.trim() !== "") {
         const n = Number(raw);
-        if (!isNaN(n) && n >= 0) entries.push({ brokerPartition: p.key, currentValue: n });
+        if (!isNaN(n) && n >= 0) entries.push({ brokerPartition: p.id, currentValue: n });
       }
     }
     if (entries.length === 0) {
@@ -137,12 +137,12 @@ function CapitalSnapshotPanel() {
       {/* Partition value tiles — always visible summary */}
       {hasAnySnapshot && !open && (
         <div className="px-4 pb-4 grid grid-cols-2 md:grid-cols-4 gap-2">
-          {portfolioPartitions.map((p) => {
-            const val = latestSnapshotValues[p.key];
+          {brokerPartitions.map((p) => {
+            const val = latestSnapshotValues[p.id];
             return (
-              <SpotlightCard key={p.key} className="rounded-xl p-3">
+              <SpotlightCard key={p.id} className="rounded-xl p-3">
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  {p.label}
+                  {p.name}
                 </p>
                 <p className="text-sm font-semibold tnum mt-1">
                   {val !== undefined ? (
@@ -169,10 +169,10 @@ function CapitalSnapshotPanel() {
             Enter current portfolio values (leave blank to skip a partition)
           </p>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {portfolioPartitions.map((p) => (
-              <div key={p.key}>
+            {brokerPartitions.map((p) => (
+              <div key={p.id}>
                 <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  {p.label}
+                  {p.name}
                 </Label>
                 <div className="mt-1.5 relative">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
@@ -182,12 +182,12 @@ function CapitalSnapshotPanel() {
                     type="number"
                     step="1"
                     min="0"
-                    value={values[p.key] ?? ""}
-                    onChange={(e) => setValues((v) => ({ ...v, [p.key]: e.target.value }))}
+                    value={values[p.id] ?? ""}
+                    onChange={(e) => setValues((v) => ({ ...v, [p.id]: e.target.value }))}
                     className="bg-input/40 border-glass-border tnum pl-7"
                     placeholder={
-                      latestSnapshotValues[p.key] !== undefined
-                        ? String(latestSnapshotValues[p.key])
+                      latestSnapshotValues[p.id] !== undefined
+                        ? String(latestSnapshotValues[p.id])
                         : "0"
                     }
                   />
@@ -225,12 +225,12 @@ function CapitalSnapshotPanel() {
 function SwingPage() {
   const {
     trades, addTrade, closeTrade, deleteTrade, riskCapCapital, blueprintSettings,
-    investmentApps, partitionLabel,
+    brokerPartitions, partitionLabel,
   } = useStore();
   const riskCapPartitionLabel = partitionLabel(blueprintSettings.riskCapPartition);
 
   // ── entry form state ──────────────────────────────────────────────────────
-  const [partition, setPartition] = useState<BrokerPartition>("Primary Broker");
+  const [partition, setPartition] = useState<PartitionId>("Primary Broker");
   const [ticker, setTicker] = useState("");
   const [fnoBlocked, setFnoBlocked] = useState(false);
   const [entryDate, setEntryDate] = useState(todayLocalISO);
@@ -417,14 +417,14 @@ function SwingPage() {
             />
           </Field>
           <Field className="col-span-1 md:col-span-1" label="Partition">
-            <Select value={partition} onValueChange={(v: BrokerPartition) => setPartition(v)}>
+            <Select value={partition} onValueChange={(v: PartitionId) => setPartition(v)}>
               <SelectTrigger className="bg-input/40 border-glass-border">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {investmentApps.map((a) => (
+                {brokerPartitions.map((a) => (
                   <SelectItem key={a.id} value={a.id}>
-                    {a.label}
+                    {a.name}
                   </SelectItem>
                 ))}
               </SelectContent>

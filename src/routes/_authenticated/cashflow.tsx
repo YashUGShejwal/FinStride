@@ -122,7 +122,7 @@ const TRANSFER_CATS = new Set(["Capital Transfer (In)", "Capital Transfer (Out)"
 
 // ─── Ledger segment ─────────────────────────────────────────────────────────
 function LedgerSection({ openFormSignal }: { openFormSignal: boolean }) {
-  const { transactions, addTransaction, deleteTransaction, incomeCategories, expenseCategories, paymentModes, blueprintSettings } = useStore();
+  const { transactions, addTransaction, deleteTransaction, incomeCategories, expenseCategories, accountModes, accountLabel, blueprintSettings } = useStore();
   const [q, setQ] = useState("");
   const [formOpen, setFormOpen] = useState(openFormSignal);
   const submitRef = useRef<HTMLButtonElement>(null);
@@ -318,9 +318,9 @@ function LedgerSection({ openFormSignal }: { openFormSignal: boolean }) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {paymentModes.map((m) => (
-                  <SelectItem key={m} value={m}>
-                    {m}
+                {accountModes.map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {accountLabel(m.id)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -450,7 +450,7 @@ function LedgerSection({ openFormSignal }: { openFormSignal: boolean }) {
                     </span>
                   </td>
                   <td>{t.category}</td>
-                  <td className="text-muted-foreground">{t.account}</td>
+                  <td className="text-muted-foreground">{accountLabel(t.account)}</td>
                   <td className="text-xs text-muted-foreground">{t.tags.join(", ") || "—"}</td>
                   <td
                     className={`text-right font-semibold tnum ${
@@ -507,7 +507,7 @@ function LedgerSection({ openFormSignal }: { openFormSignal: boolean }) {
                 <div className="min-w-0">
                   <p className="text-sm font-medium truncate">{t.category}</p>
                   <p className="text-[11px] text-muted-foreground truncate">
-                    {fmtDate(t.date)} • {t.account}
+                    {fmtDate(t.date)} • {accountLabel(t.account)}
                   </p>
                 </div>
               </div>

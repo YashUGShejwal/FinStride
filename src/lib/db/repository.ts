@@ -9,8 +9,9 @@
 
 import type { FinStrideClient } from "./client";
 import type {
+  AccountMode,
   BlueprintSettings,
-  CustomPartition,
+  BrokerPartition,
   GrindLogEntry,
   GrindMetricKey,
   GrindState,
@@ -290,8 +291,8 @@ export async function upsertSettings(
   bundle: {
     blueprint: BlueprintSettings;
     showPersonalQuotes: boolean;
-    customPaymentModes: string[];
-    customPartitions: CustomPartition[];
+    customAccountModes: AccountMode[];
+    customBrokerPartitions: BrokerPartition[];
     customIncomeCategories: string[];
     customExpenseCategories: string[];
   },

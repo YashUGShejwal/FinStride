@@ -15,18 +15,24 @@
 // close a require cycle (store -> db -> mappers -> store) and risk reading an
 // uninitialised binding at module-eval time. Type imports are erased entirely.
 import type {
+  AccountMode,
+  AccountType,
   BlueprintSettings,
-  CustomPartition,
+  BrokerPartition,
   GrindLogEntry,
   GrindMetricKey,
   HustleCategory,
   HustleEntry,
   MonthlyPending,
+  PartitionCategory,
+  PaymentChannel,
   PortfolioSnapshot,
   Trade,
   Transaction,
 } from "@/lib/store";
 import type {
+  DbAccountModeJson,
+  DbBrokerPartitionJson,
   DbCashflowInsert,
   DbCashflowRow,
   DbGrindLogInsert,
@@ -229,16 +235,66 @@ export function rowToHustle(r: DbHustleEntryRow): HustleEntry {
 export type SettingsBundle = {
   blueprint: BlueprintSettings;
   showPersonalQuotes: boolean;
-  customPaymentModes: string[];
-  customPartitions: CustomPartition[];
+  customAccountModes: AccountMode[];
+  customBrokerPartitions: BrokerPartition[];
   customIncomeCategories: string[];
   customExpenseCategories: string[];
 };
 
+const ACCOUNT_TYPES: readonly string[] = ["bank", "credit_card", "cash", "wallet"];
+const PARTITION_CATEGORIES: readonly string[] = [
+  "equity_swing",
+  "long_term_etf",
+  "mutual_funds",
+  "crypto",
+  "liquid",
+];
+const PAYMENT_CHANNELS: readonly string[] = ["UPI", "Card", "NetBanking", "Cash"];
+
+function accountModeToJson(a: AccountMode): DbAccountModeJson {
+  return { id: a.id, name: a.name, type: a.type, defaultChannel: a.defaultChannel ?? null };
+}
+
+function jsonToAccountMode(raw: unknown): AccountMode | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const id = typeof r.id === "string" ? r.id : "";
+  if (!id.trim()) return null;
+  const type = ACCOUNT_TYPES.includes(r.type as string) ? (r.type as AccountType) : "bank";
+  const defaultChannel = PAYMENT_CHANNELS.includes(r.defaultChannel as string)
+    ? (r.defaultChannel as PaymentChannel)
+    : undefined;
+  return { id, name: typeof r.name === "string" && r.name.trim() ? r.name : id, type, defaultChannel };
+}
+
+function brokerPartitionToJson(p: BrokerPartition): DbBrokerPartitionJson {
+  return {
+    id: p.id,
+    name: p.name,
+    category: p.category,
+    brokerApp: p.brokerApp ?? null,
+    description: p.description ?? null,
+  };
+}
+
+function jsonToBrokerPartition(raw: unknown): BrokerPartition | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const id = typeof r.id === "string" ? r.id : "";
+  if (!id.trim()) return null;
+  const category = PARTITION_CATEGORIES.includes(r.category as string)
+    ? (r.category as PartitionCategory)
+    : "equity_swing";
+  return {
+    id,
+    name: typeof r.name === "string" && r.name.trim() ? r.name : id,
+    category,
+    brokerApp: typeof r.brokerApp === "string" && r.brokerApp.trim() ? r.brokerApp : undefined,
+    description: typeof r.description === "string" ? r.description : undefined,
+  };
+}
+
 export function settingsToRow(b: SettingsBundle, userId: string): DbUserSettingsUpsert {
-  // investment_apps and portfolio_partitions are both written from the app's
-  // single customPartitions list — the app derives both views from one source.
-  const partitionIds = b.customPartitions.map((p) => p.id);
   return {
     user_id: userId,
     salary_baseline: b.blueprint.defaultSalary,
@@ -251,9 +307,8 @@ export function settingsToRow(b: SettingsBundle, userId: string): DbUserSettings
     risk_cap_pct: b.blueprint.defaultRiskCapPct,
     risk_cap_partition: b.blueprint.riskCapPartition,
     show_personal_quotes: b.showPersonalQuotes,
-    payment_modes: b.customPaymentModes,
-    investment_apps: partitionIds,
-    portfolio_partitions: partitionIds,
+    custom_account_modes: b.customAccountModes.map(accountModeToJson),
+    custom_broker_partitions: b.customBrokerPartitions.map(brokerPartitionToJson),
     income_categories: b.customIncomeCategories,
     expense_categories: b.customExpenseCategories,
   };
@@ -283,12 +338,6 @@ export function rowToSettings(r: DbUserSettings): SettingsBundle {
   const list = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
 
-  // portfolio_partitions is the primary source; investment_apps mirrors it, so
-  // fall back to it if an older row only populated one of the two columns.
-  const partitionIds = list(r.portfolio_partitions).length
-    ? list(r.portfolio_partitions)
-    : list(r.investment_apps);
-
   return {
     blueprint: {
       defaultSalary: num(r.salary_baseline, SETTINGS_FALLBACK.defaultSalary),
@@ -302,8 +351,14 @@ export function rowToSettings(r: DbUserSettings): SettingsBundle {
           : SETTINGS_FALLBACK.riskCapPartition,
     },
     showPersonalQuotes: r.show_personal_quotes === true,
-    customPaymentModes: list(r.payment_modes),
-    customPartitions: partitionIds.map((id) => ({ id, label: id, description: "" })),
+    customAccountModes: Array.isArray(r.custom_account_modes)
+      ? r.custom_account_modes.map(jsonToAccountMode).filter((a): a is AccountMode => a !== null)
+      : [],
+    customBrokerPartitions: Array.isArray(r.custom_broker_partitions)
+      ? r.custom_broker_partitions
+          .map(jsonToBrokerPartition)
+          .filter((p): p is BrokerPartition => p !== null)
+      : [],
     customIncomeCategories: list(r.income_categories),
     customExpenseCategories: list(r.expense_categories),
   };
