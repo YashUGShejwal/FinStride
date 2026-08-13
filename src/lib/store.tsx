@@ -1202,10 +1202,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const remote = await fetchAllUserData(client, userId, currentMonthKey());
+      const fetchResult = await fetchAllUserData(client, userId, currentMonthKey());
       if (cancelled) return;
 
-      if (!remote) {
+      if (!fetchResult.bundle) {
         // Read failed (network, RLS, expired token, Supabase outage).
         // Deliberately do NOT stamp the cache owner or touch the migration
         // flag here — both must only ever be set once we've gotten a real
@@ -1213,10 +1213,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // poisons the "empty cloud vs. real local data" migration gate and
         // the cross-tenant clear on every subsequent load. Keep running on
         // the local snapshot already applied above for this session.
-        toast.error("Couldn't reach the cloud — showing your last saved data.");
+        //
+        // authError (fetchAllUserData already attempted a silent
+        // refreshSession() and it didn't help) means this is an expected
+        // background condition — a session that quietly expired, or hasn't
+        // been established yet on this tab — not a surprising connectivity
+        // failure, so it's deliberately silent rather than alarming the user
+        // with a toast over something that just means "sign in again".
+        if (!fetchResult.authError) {
+          toast.error("Couldn't reach the cloud — showing your last saved data.");
+        }
         if (!cancelled) setHydratedOwner(identity);
         return;
       }
+      const remote = fetchResult.bundle;
 
       const firstLoginWithLocalData =
         isBundleEmpty(remote) &&

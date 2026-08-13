@@ -41,6 +41,7 @@ export {
   upsertSettings,
   upsertPendingObligations,
   type RemoteBundle,
+  type FetchAllUserDataResult,
 } from "./repository";
 
 export {

@@ -70,10 +70,87 @@ export function isBundleEmpty(b: RemoteBundle): boolean {
 }
 
 // ─── Reads ─────────────────────────────────────────────────────────────────
+/** Result of fetchAllUserData — see its doc comment for what `authError` means. */
+export type FetchAllUserDataResult = {
+  /** Null on any failure (network, RLS, unrecoverable auth). */
+  bundle: RemoteBundle | null;
+  /**
+   * True only when `bundle` is null AND the failure was specifically an
+   * unresolved 401 (a silent refreshSession() attempt was made and either it
+   * failed, or the retried queries 401'd again). Callers should treat this as
+   * an expected background condition — a session that quietly expired mid-app,
+   * not yet signed in on this tab, etc. — rather than surfacing the same
+   * "couldn't reach the cloud" messaging used for genuine connectivity/RLS
+   * failures, which would be alarming and misleading for what is really just
+   * "please sign in again."
+   */
+  authError: boolean;
+};
+
+async function fetchAllTables(client: FinStrideClient, userId: string, yearMonth: string) {
+  return Promise.all([
+    client
+      .from("cashflow_ledger")
+      .select("*")
+      .eq("user_id", userId)
+      .order("date", { ascending: false }),
+    client
+      .from("swing_trades")
+      .select("*")
+      .eq("user_id", userId)
+      .order("entry_date", { ascending: false }),
+    client
+      .from("portfolio_snapshots")
+      .select("*")
+      .eq("user_id", userId)
+      .order("snapshot_date", { ascending: false }),
+    client
+      .from("grind_logs")
+      .select("*")
+      .eq("user_id", userId)
+      .order("logged_at", { ascending: false }),
+    client
+      .from("hustle_entries")
+      .select("*")
+      .eq("user_id", userId)
+      .order("date", { ascending: false }),
+    client.from("user_settings").select("*").eq("user_id", userId).maybeSingle(),
+    client
+      .from("pending_obligations")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("year_month", yearMonth)
+      .maybeSingle(),
+  ]);
+}
+
+type TableResults = Awaited<ReturnType<typeof fetchAllTables>>;
+
+const TABLE_NAMES = [
+  "cashflow_ledger",
+  "swing_trades",
+  "portfolio_snapshots",
+  "grind_logs",
+  "hustle_entries",
+  "user_settings",
+  "pending_obligations",
+] as const;
+
+/** First table (in fetch order) whose response resolved with an error, if any. */
+function pickFailure(
+  results: TableResults,
+): { name: string; error: unknown; status: number } | undefined {
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (r.error) return { name: TABLE_NAMES[i], error: r.error, status: r.status };
+  }
+  return undefined;
+}
+
 /**
- * Load every table for one user in parallel. Returns null if ANY table read
- * fails — including a resolved-but-failed PostgREST response, not just a
- * thrown/rejected request.
+ * Load every table for one user in parallel. Returns a null bundle if ANY
+ * table read fails — including a resolved-but-failed PostgREST response, not
+ * just a thrown/rejected request.
  *
  * This must NOT degrade a failed read to an empty list. postgrest-js resolves
  * with `{ data: null, error }` on a non-2xx response or even a network
@@ -82,63 +159,46 @@ export function isBundleEmpty(b: RemoteBundle): boolean {
  * empty" — and the caller (src/lib/store.tsx) treats an empty remote bundle as
  * authoritative, replacing and then persisting local state with it. A single
  * transient error would silently blank the user's entire ledger.
+ *
+ * A 401 gets one recovery attempt before being treated as a failure: an
+ * access token can quietly expire between page load and this fetch firing
+ * (e.g. a long-idle tab), and the client-side auto-refresh timer doesn't
+ * always win that race. `client.auth.refreshSession()` re-derives a fresh
+ * access token from the still-valid refresh token and updates this SAME
+ * client's stored session in place, so simply re-running the identical
+ * queries afterward picks up the new token automatically — no need to thread
+ * a new client/token through by hand.
  */
 export async function fetchAllUserData(
   client: FinStrideClient,
   userId: string,
   yearMonth: string,
-): Promise<RemoteBundle | null> {
+): Promise<FetchAllUserDataResult> {
   try {
-    const [txRes, trRes, snapRes, grindRes, hustleRes, settingsRes, pendingRes] = await Promise.all(
-      [
-        client
-          .from("cashflow_ledger")
-          .select("*")
-          .eq("user_id", userId)
-          .order("date", { ascending: false }),
-        client
-          .from("swing_trades")
-          .select("*")
-          .eq("user_id", userId)
-          .order("entry_date", { ascending: false }),
-        client
-          .from("portfolio_snapshots")
-          .select("*")
-          .eq("user_id", userId)
-          .order("snapshot_date", { ascending: false }),
-        client
-          .from("grind_logs")
-          .select("*")
-          .eq("user_id", userId)
-          .order("logged_at", { ascending: false }),
-        client
-          .from("hustle_entries")
-          .select("*")
-          .eq("user_id", userId)
-          .order("date", { ascending: false }),
-        client.from("user_settings").select("*").eq("user_id", userId).maybeSingle(),
-        client
-          .from("pending_obligations")
-          .select("*")
-          .eq("user_id", userId)
-          .eq("year_month", yearMonth)
-          .maybeSingle(),
-      ],
-    );
+    let results = await fetchAllTables(client, userId, yearMonth);
+    let failed = pickFailure(results);
 
-    const failed = [
-      ["cashflow_ledger", txRes.error],
-      ["swing_trades", trRes.error],
-      ["portfolio_snapshots", snapRes.error],
-      ["grind_logs", grindRes.error],
-      ["hustle_entries", hustleRes.error],
-      ["user_settings", settingsRes.error],
-      ["pending_obligations", pendingRes.error],
-    ].find(([, error]) => error);
-    if (failed) {
-      logFailure(`fetchAllUserData (${failed[0]})`, failed[1]);
-      return null;
+    if (failed && failed.status === 401) {
+      const { error: refreshError } = await client.auth.refreshSession();
+      if (!refreshError) {
+        results = await fetchAllTables(client, userId, yearMonth);
+        failed = pickFailure(results);
+      }
+      if (failed) {
+        logFailure(`fetchAllUserData (${failed.name})`, failed.error);
+        // Still failing after a refresh attempt (or refreshSession() itself
+        // failed) is an auth problem ONLY if the (possibly retried) failure
+        // is itself still a 401 — if a *different* error surfaced after the
+        // token issue was resolved, that's a genuine, separate failure and
+        // deserves the normal "couldn't reach the cloud" treatment.
+        return { bundle: null, authError: failed.status === 401 };
+      }
+    } else if (failed) {
+      logFailure(`fetchAllUserData (${failed.name})`, failed.error);
+      return { bundle: null, authError: false };
     }
+
+    const [txRes, trRes, snapRes, grindRes, hustleRes, settingsRes, pendingRes] = results;
 
     const metrics: GrindState["metrics"] = {
       systemDesign: [],
@@ -151,16 +211,19 @@ export async function fetchAllUserData(
     }
 
     return {
-      transactions: (txRes.data ?? []).map(rowToTransaction),
-      trades: (trRes.data ?? []).map(rowToTrade),
-      portfolioSnapshots: (snapRes.data ?? []).map(rowToSnapshot),
-      grind: { metrics, hustle: (hustleRes.data ?? []).map(rowToHustle) },
-      settings: settingsRes.data ? rowToSettings(settingsRes.data) : null,
-      pending: pendingRes.data ? rowToPending(pendingRes.data) : null,
+      bundle: {
+        transactions: (txRes.data ?? []).map(rowToTransaction),
+        trades: (trRes.data ?? []).map(rowToTrade),
+        portfolioSnapshots: (snapRes.data ?? []).map(rowToSnapshot),
+        grind: { metrics, hustle: (hustleRes.data ?? []).map(rowToHustle) },
+        settings: settingsRes.data ? rowToSettings(settingsRes.data) : null,
+        pending: pendingRes.data ? rowToPending(pendingRes.data) : null,
+      },
+      authError: false,
     };
   } catch (error) {
     logFailure("fetchAllUserData", error);
-    return null;
+    return { bundle: null, authError: false };
   }
 }
 
