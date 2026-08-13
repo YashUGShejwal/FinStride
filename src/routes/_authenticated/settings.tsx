@@ -545,7 +545,7 @@ function SettingsPage() {
 // ─── Owner passcode modal ───────────────────────────────────────────────────
 /**
  * Glassmorphism PIN gate for showPersonalQuotes. This is a client-side speed
- * bump, not real security — VITE_OWNER_PIN (or the "1234" fallback) ships
+ * bump, not real security — VITE_OWNER_PIN (or the "hagemaru9966" fallback) ships
  * inside the JS bundle like any other build-time env var, so it's visible to
  * anyone who opens devtools. It only prevents a casual accidental toggle.
  */

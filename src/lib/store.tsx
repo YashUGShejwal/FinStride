@@ -339,7 +339,7 @@ const SHOW_PERSONAL_QUOTES_KEY = "finstride.quotes.showPersonal";
 // "Delete All Data" for the same reason isStealthMode is: it's a standing
 // device-trust flag, not user financial data, so wiping the ledger shouldn't
 // force re-entering the PIN.
-const OWNER_REFLECTIONS_PIN = String(import.meta.env.VITE_OWNER_PIN ?? "1234");
+const OWNER_REFLECTIONS_PIN = String(import.meta.env.VITE_OWNER_PIN ?? "hagemaru9966");
 const OWNER_UNLOCKED_KEY = "finstride.owner.unlocked";
 
 /**
