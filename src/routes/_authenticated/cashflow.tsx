@@ -147,11 +147,24 @@ function LedgerSection({ openFormSignal }: { openFormSignal: boolean }) {
     date: todayLocalISO(),
     type: "expense" as TxType,
     category: expenseCategories[0] ?? "Other",
-    account: "Bank Account" as PaymentMode,
+    // First AVAILABLE account, not the hardcoded "Bank Account" id — that
+    // built-in is deletable, and seeding a dangling id left the Select blank
+    // while still submitting an account nothing resolves.
+    account: (accountModes[0]?.id ?? "") as PaymentMode,
     amount: "",
     tags: "",
     notes: "",
   });
+
+  // The seed above runs once at mount, BEFORE the store finishes hydrating —
+  // at which point deleted accounts are still present. Once the real list
+  // settles, re-point the field if what it holds no longer exists, so the
+  // Select can never sit blank on an id that resolves to nothing.
+  useEffect(() => {
+    if (accountModes.length === 0) return;
+    if (accountModes.some((a) => a.id === form.account)) return;
+    setForm((s) => ({ ...s, account: accountModes[0].id }));
+  }, [accountModes, form.account]);
 
   // 1-click quick-log chips. All categories referenced here are built-in
   // defaults, so they always exist in the type-matched category list.

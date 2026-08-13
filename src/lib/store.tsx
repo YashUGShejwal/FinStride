@@ -33,29 +33,102 @@ import {
 // string referencing AccountMode.id), so renaming/removing an AccountMode
 // never breaks a historical row — it just falls back to rendering the raw id
 // if nothing in the current list matches it anymore.
-export type AccountType = "bank" | "credit_card" | "cash" | "wallet";
-export type PaymentChannel = "UPI" | "Card" | "NetBanking" | "Cash";
+export type AccountType = "bank" | "credit_card" | "upi" | "cash" | "wallet";
 
+/**
+ * Suggested channel labels offered in the pickers. `channelLabel` itself is a
+ * free string, not this union — a user's channel ("AutoPay", "IMPS", a card
+ * network) shouldn't be rejected just because it isn't one of the four we
+ * happen to suggest.
+ */
+export type PaymentChannel = "UPI" | "Card" | "NetBanking" | "Cash";
+export const PAYMENT_CHANNEL_SUGGESTIONS: readonly PaymentChannel[] = [
+  "UPI",
+  "Card",
+  "NetBanking",
+  "Cash",
+];
+
+/**
+ * A place money moves through. Relational: a credit card or UPI handle points
+ * at the bank account that actually funds it via `linkedBankId`, so the ledger
+ * can render "Amazon Pay (ICICI Credit Card)" instead of a bare "Amazon Pay"
+ * that tells you nothing about which account it settles against.
+ *
+ * `linkedBankId` is only meaningful for credit_card / upi (and is ignored for
+ * the rest). It's a soft reference by design — see deleteAccountMode, which
+ * clears dangling links, and formatAccountLabel, which degrades to the plain
+ * name if the target is missing.
+ */
 export type AccountMode = {
   id: string;
   name: string;
   type: AccountType;
-  defaultChannel?: PaymentChannel;
+  /** Bank AccountMode.id that funds this card / UPI handle. */
+  linkedBankId?: string;
+  /** Free-form channel shown in the label, e.g. "UPI", "Card", "NetBanking". */
+  channelLabel?: string;
 };
 
 /** Id reference into AccountMode[] — what Transaction.account actually stores. */
 export type PaymentMode = string;
 
 export const DEFAULT_ACCOUNT_MODES: readonly AccountMode[] = [
-  { id: "Bank Account", name: "Bank Account", type: "bank", defaultChannel: "NetBanking" },
-  { id: "Credit Card", name: "Credit Card", type: "credit_card", defaultChannel: "Card" },
-  { id: "UPI", name: "UPI", type: "wallet", defaultChannel: "UPI" },
-  { id: "Cash", name: "Cash", type: "cash", defaultChannel: "Cash" },
+  { id: "Bank Account", name: "Bank Account", type: "bank" },
+  { id: "Credit Card", name: "Credit Card", type: "credit_card" },
+  { id: "UPI", name: "UPI", type: "upi" },
+  { id: "Cash", name: "Cash", type: "cash" },
 ] as const;
 
-/** "HDFC Bank (NetBanking)", or just the name if there's no channel to show. */
-export function formatAccountLabel(a: AccountMode): string {
-  return a.defaultChannel ? `${a.name} (${a.defaultChannel})` : a.name;
+/** Channel shown when an account doesn't set its own `channelLabel`. */
+const CHANNEL_BY_TYPE: Record<AccountType, string | undefined> = {
+  bank: undefined, // a bank IS the account — "HDFC Bank (NetBanking)" adds nothing
+  credit_card: "Credit Card",
+  upi: "UPI",
+  cash: undefined,
+  wallet: "Wallet",
+};
+
+/**
+ * "ICICI Bank" -> "ICICI". Used only inside a parenthetical qualifier, where
+ * the account type already says "Credit Card"/"UPI" — so repeating the word
+ * "Bank" ("Amazon Pay (ICICI Bank Credit Card)") is pure noise.
+ */
+function bankShortName(name: string): string {
+  return name.replace(/\s+bank$/i, "").trim() || name;
+}
+
+/**
+ * Ledger-facing label for an account, showing its funding relationship:
+ *   bank         -> "HDFC Bank"
+ *   credit card  -> "Amazon Pay (ICICI Credit Card)"
+ *   UPI handle   -> "GPay (HDFC UPI)"
+ *
+ * `all` is needed to resolve `linkedBankId`; pass the full merged list. An
+ * unlinked account falls back to its own channel ("Amazon Pay (Credit Card)"),
+ * and an account whose channel would just restate its name renders bare, so
+ * the built-in "UPI"/"Credit Card" defaults never read as "UPI (UPI)".
+ */
+export function formatAccountLabel(a: AccountMode, all: readonly AccountMode[] = []): string {
+  const channel = a.channelLabel?.trim() || CHANNEL_BY_TYPE[a.type];
+  // A link only means "this is funded by that bank" when BOTH sides agree:
+  // this account is one of the two fundable types, and the target really is a
+  // bank. Anything else (a stale link left by a type change, a hand-edited
+  // import, a card pointing at another card) is not a funding relationship,
+  // so it degrades to the plain channel rather than asserting something false.
+  const bank =
+    isLinkableType(a.type) && a.linkedBankId
+      ? all.find((x) => x.id === a.linkedBankId && x.type === "bank")
+      : undefined;
+  const qualifier = [bank ? bankShortName(bank.name) : null, channel]
+    .filter((part): part is string => !!part && part !== a.name)
+    .join(" ");
+  return qualifier ? `${a.name} (${qualifier})` : a.name;
+}
+
+/** Only credit cards and UPI handles are funded by a bank — see AccountMode.linkedBankId. */
+export function isLinkableType(t: AccountType): boolean {
+  return t === "credit_card" || t === "upi";
 }
 
 // ─── Broker/investment partitions (Swing logger, Cashflow, Analytics) ──────
@@ -67,9 +140,23 @@ export function formatAccountLabel(a: AccountMode): string {
 // merging them removes that class of bug entirely.
 export type PartitionCategory = "equity_swing" | "long_term_etf" | "mutual_funds" | "crypto" | "liquid";
 
+/**
+ * WHY the partition owns money — the axis users actually organise by ("my
+ * long-term money", "my swing money"), independent of which app holds it or
+ * what instrument it's in. Several partitions can share one purpose, which is
+ * the whole point: "Long-Term (Zerodha)" and "Long-Term (Groww)" are one
+ * strategy split across two brokers, and the Settings/Onboarding UIs group by
+ * this field so they read that way.
+ *
+ * Distinct from `category` (WHAT the instrument is, which drives allocation
+ * analytics) — a long_term purpose can hold long_term_etf or mutual_funds.
+ */
+export type PartitionPurpose = "long_term" | "swing" | "international" | "crypto" | "custom";
+
 export type BrokerPartition = {
   id: string;
   name: string;
+  purpose: PartitionPurpose;
   brokerApp?: string;
   category: PartitionCategory;
   description?: string;
@@ -78,44 +165,79 @@ export type BrokerPartition = {
 /** Id reference into BrokerPartition[] — what Trade.partition and PortfolioSnapshot.brokerPartition store. */
 export type PartitionId = string;
 
+/**
+ * Purpose inferred from category, for legacy rows saved before `purpose`
+ * existed. Deliberately lossy in one direction only (many categories map onto
+ * long_term), which is fine — it's a starting classification the user can
+ * correct in Settings, never a value that overwrites an explicit choice.
+ */
+const PURPOSE_BY_CATEGORY: Record<PartitionCategory, PartitionPurpose> = {
+  equity_swing: "swing",
+  long_term_etf: "long_term",
+  mutual_funds: "long_term",
+  crypto: "crypto",
+  liquid: "custom",
+};
+
+/** Instrument type a purpose usually implies — the starting `category` when only a purpose is picked. */
+export const CATEGORY_BY_PURPOSE: Record<PartitionPurpose, PartitionCategory> = {
+  long_term: "long_term_etf",
+  swing: "equity_swing",
+  international: "equity_swing",
+  crypto: "crypto",
+  custom: "equity_swing",
+};
+
 export const DEFAULT_BROKER_PARTITIONS: readonly BrokerPartition[] = [
   {
     id: "Long-Term Portfolio",
     name: "Long-Term Portfolio",
+    purpose: "long_term",
     category: "long_term_etf",
     description: "Long-hold equity vault (delivery)",
   },
   {
     id: "Primary Broker",
     name: "Primary Broker",
+    purpose: "swing",
     category: "equity_swing",
     description: "Active swing book — equity only",
   },
   {
     id: "International Broker",
     name: "International Broker",
+    purpose: "international",
     category: "equity_swing",
     description: "International equities partition",
   },
   {
     id: "Crypto Wallet",
     name: "Crypto Wallet",
+    purpose: "crypto",
     category: "crypto",
     description: "Crypto holdings",
   },
   {
     id: "Mutual Funds",
     name: "Mutual Funds",
+    purpose: "long_term",
     category: "mutual_funds",
     description: "Mutual fund SIPs",
   },
   {
     id: "Cash",
     name: "Cash",
+    purpose: "custom",
     category: "liquid",
     description: "Physical cash & liquid reserves",
   },
 ] as const;
+
+// NOTE: there is deliberately no formatPartitionLabel() counterpart to
+// formatAccountLabel(). Settings renders a partition's name and brokerApp as
+// separately-styled elements, and every other surface wants the bare name, so
+// a combined-string helper had no caller — it was dead the moment it was
+// written. partitionLabel(id) in the store covers the id -> name lookup.
 
 // ─── Portfolio snapshots ───────────────────────────────────────────────────
 /**
@@ -258,8 +380,13 @@ const EMPTY_HIDDEN_CATEGORIES: CustomCategories = { income: [], expense: [] };
 
 // ─── Dynamic account modes ──────────────────────────────────────────────────
 const CUSTOM_ACCOUNT_MODES_KEY = "finstride.accountmodes.custom";
-const ACCOUNT_TYPES: readonly AccountType[] = ["bank", "credit_card", "cash", "wallet"];
-const PAYMENT_CHANNELS: readonly PaymentChannel[] = ["UPI", "Card", "NetBanking", "Cash"];
+export const ACCOUNT_TYPES: readonly AccountType[] = [
+  "bank",
+  "credit_card",
+  "upi",
+  "cash",
+  "wallet",
+];
 
 function normalizeCustomAccountModes(raw: unknown): AccountMode[] {
   if (!Array.isArray(raw)) return [];
@@ -267,15 +394,19 @@ function normalizeCustomAccountModes(raw: unknown): AccountMode[] {
     .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
     .map((r) => {
       const id = String(r.id ?? "");
+      // `defaultChannel` is the pre-relational field name — read it as a
+      // fallback so accounts saved before this model round-trip with their
+      // channel intact instead of silently losing it.
+      const channelRaw = r.channelLabel ?? r.defaultChannel;
+      const linked = typeof r.linkedBankId === "string" ? r.linkedBankId.trim() : "";
       return {
         id,
         name: r.name ? String(r.name) : id,
         type: (ACCOUNT_TYPES as readonly string[]).includes(r.type as string)
           ? (r.type as AccountType)
           : "bank",
-        defaultChannel: (PAYMENT_CHANNELS as readonly string[]).includes(r.defaultChannel as string)
-          ? (r.defaultChannel as PaymentChannel)
-          : undefined,
+        linkedBankId: linked || undefined,
+        channelLabel: typeof channelRaw === "string" && channelRaw.trim() ? channelRaw.trim() : undefined,
       };
     })
     .filter((a) => a.id.trim() !== "");
@@ -294,12 +425,20 @@ const HIDDEN_ACCOUNT_IDS_KEY = "finstride.accountmodes.hiddenDefaults";
 
 // ─── Dynamic broker/investment partitions ──────────────────────────────────
 const CUSTOM_BROKER_PARTITIONS_KEY = "finstride.partitions.custom";
-const PARTITION_CATEGORIES: readonly PartitionCategory[] = [
+export const PARTITION_CATEGORIES: readonly PartitionCategory[] = [
   "equity_swing",
   "long_term_etf",
   "mutual_funds",
   "crypto",
   "liquid",
+];
+
+export const PARTITION_PURPOSES: readonly PartitionPurpose[] = [
+  "long_term",
+  "swing",
+  "international",
+  "crypto",
+  "custom",
 ];
 
 function normalizeCustomBrokerPartitions(raw: unknown): BrokerPartition[] {
@@ -308,12 +447,19 @@ function normalizeCustomBrokerPartitions(raw: unknown): BrokerPartition[] {
     .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
     .map((r) => {
       const id = String(r.id ?? "");
+      const category = (PARTITION_CATEGORIES as readonly string[]).includes(r.category as string)
+        ? (r.category as PartitionCategory)
+        : "equity_swing";
       return {
         id,
         name: r.name ? String(r.name) : id,
-        category: (PARTITION_CATEGORIES as readonly string[]).includes(r.category as string)
-          ? (r.category as PartitionCategory)
-          : "equity_swing",
+        // Partitions saved before `purpose` existed have none — infer it from
+        // category rather than dropping them into a single bucket, so an
+        // existing user's list still groups sensibly on first load.
+        purpose: (PARTITION_PURPOSES as readonly string[]).includes(r.purpose as string)
+          ? (r.purpose as PartitionPurpose)
+          : PURPOSE_BY_CATEGORY[category],
+        category,
         brokerApp: r.brokerApp ? String(r.brokerApp) : undefined,
         description: r.description ? String(r.description) : undefined,
       };
@@ -680,15 +826,26 @@ type StoreCtx = {
   renameCategory: (type: "income" | "expense", oldName: string, newName: string) => boolean;
   // Dynamic account modes (payment modes / bank accounts / cards) — fully editable/deletable
   accountModes: AccountMode[];
-  addAccountMode: (name: string, type: AccountType, defaultChannel?: PaymentChannel) => void;
+  /** Only the bank-type accounts — the linkable targets for cards/UPI handles. */
+  bankAccounts: AccountMode[];
+  addAccountMode: (
+    name: string,
+    type: AccountType,
+    opts?: { linkedBankId?: string; channelLabel?: string },
+  ) => void;
   /** Returns false (and does not delete) if still referenced by existing transactions. */
   deleteAccountMode: (id: string) => boolean;
   /** Returns false if id isn't a CUSTOM account mode (defaults can't be edited in place). */
   updateAccountMode: (id: string, patch: Partial<Omit<AccountMode, "id">>) => boolean;
+  /** Relationship-aware label, e.g. "Amazon Pay (ICICI Credit Card)". */
   accountLabel: (id: string) => string;
   // Dynamic broker/investment partitions — fully editable/deletable
   brokerPartitions: BrokerPartition[];
-  addBrokerPartition: (name: string, category: PartitionCategory, brokerApp?: string, description?: string) => void;
+  addBrokerPartition: (
+    name: string,
+    purpose: PartitionPurpose,
+    opts?: { category?: PartitionCategory; brokerApp?: string; description?: string },
+  ) => void;
   /** Returns false (and does not delete) if the id is still referenced by trades/snapshots. */
   deleteBrokerPartition: (id: string) => boolean;
   /** Returns false if id isn't a CUSTOM partition (defaults can't be edited in place). */
@@ -1416,8 +1573,44 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [hydrated, userId, cloudEnabled, pendingChecklist]);
 
   // ── Derived values ───────────────────────────────────────────────────────
+  // Every merged list below EXCLUDES defaults the user has deleted (tracked in
+  // the hiddenDefault* tombstone lists) — without that filter, a "deleted"
+  // default just gets spliced right back in by DEFAULT_*, which is exactly the
+  // bug this exclusion exists to prevent (see addCategory/deleteCategory etc.).
+  // These are declared FIRST because the totals below resolve against them.
+  const incomeCategories = [
+    ...DEFAULT_INCOME_CATEGORIES.filter((c) => !hiddenDefaultCategories.income.includes(c)),
+    ...customCategories.income,
+  ];
+  const expenseCategories = [
+    ...DEFAULT_EXPENSE_CATEGORIES.filter((c) => !hiddenDefaultCategories.expense.includes(c)),
+    ...customCategories.expense,
+  ];
+
+  const accountModes: AccountMode[] = [
+    ...DEFAULT_ACCOUNT_MODES.filter((a) => !hiddenDefaultAccountIds.includes(a.id)),
+    ...customAccountModes,
+  ];
+  const brokerPartitions: BrokerPartition[] = [
+    ...DEFAULT_BROKER_PARTITIONS.filter((p) => !hiddenDefaultPartitionIds.includes(p.id)),
+    ...customBrokerPartitions,
+  ];
+
+  const bankAccounts = accountModes.filter((a) => a.type === "bank");
+
+  // Every account whose TYPE is a credit card, not the one built-in account
+  // that happens to be named "Credit Card". Matching that literal id was
+  // correct only while payment modes were flat strings — under the relational
+  // model the whole point is that users add their real cards ("Amazon Pay",
+  // "HDFC Regalia"), and an id-match silently excluded every one of them from
+  // the outstanding total while the tile still claimed to show "all logged
+  // card spends". The built-in "Credit Card" account is also deletable, which
+  // would have pinned this to 0 forever.
+  const creditCardAccountIds = new Set(
+    accountModes.filter((a) => a.type === "credit_card").map((a) => a.id),
+  );
   const creditCardDues = transactions
-    .filter((t) => t.type === "expense" && t.account === "Credit Card")
+    .filter((t) => t.type === "expense" && creditCardAccountIds.has(t.account))
     .reduce((sum, t) => sum + t.amount, 0);
 
   // Latest value per partition, derived straight from recorded snapshots — works
@@ -1441,34 +1634,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const riskCapCapital = latestSnapshotValues[blueprintSettings.riskCapPartition] ?? 0;
 
-  // Every merged list below EXCLUDES defaults the user has deleted (tracked in
-  // the hiddenDefault* tombstone lists) — without that filter, a "deleted"
-  // default just gets spliced right back in by DEFAULT_*, which is exactly the
-  // bug this exclusion exists to prevent (see addCategory/deleteCategory etc.).
-  const incomeCategories = [
-    ...DEFAULT_INCOME_CATEGORIES.filter((c) => !hiddenDefaultCategories.income.includes(c)),
-    ...customCategories.income,
-  ];
-  const expenseCategories = [
-    ...DEFAULT_EXPENSE_CATEGORIES.filter((c) => !hiddenDefaultCategories.expense.includes(c)),
-    ...customCategories.expense,
-  ];
-
-  const accountModes: AccountMode[] = [
-    ...DEFAULT_ACCOUNT_MODES.filter((a) => !hiddenDefaultAccountIds.includes(a.id)),
-    ...customAccountModes,
-  ];
-  const brokerPartitions: BrokerPartition[] = [
-    ...DEFAULT_BROKER_PARTITIONS.filter((p) => !hiddenDefaultPartitionIds.includes(p.id)),
-    ...customBrokerPartitions,
-  ];
-
   const partitionLabel = (id: string): string =>
     brokerPartitions.find((p) => p.id === id)?.name ?? id;
 
+  // Passes the full list so linkedBankId resolves — an unknown id (a deleted
+  // account still referenced by an old transaction) falls back to the raw id.
   const accountLabel = (id: string): string => {
     const a = accountModes.find((m) => m.id === id);
-    return a ? formatAccountLabel(a) : id;
+    return a ? formatAccountLabel(a, accountModes) : id;
   };
 
   const toggleObligation = (key: ObligationKey) => {
@@ -1552,7 +1725,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return true;
     },
     accountModes,
-    addAccountMode: (name, type, defaultChannel) => {
+    bankAccounts,
+    addAccountMode: (name, type, opts) => {
       const trimmed = name.trim();
       if (!trimmed) return;
       // Re-adding a name that matches a previously-deleted default restores
@@ -1563,17 +1737,59 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       );
       if (restoredDefault && hiddenDefaultAccountIds.includes(restoredDefault.id)) {
         markLocalWrite();
-        setHiddenDefaultAccountIds((prev) => prev.filter((id) => id !== restoredDefault.id));
+        const wantsOverride = !!(opts?.linkedBankId || opts?.channelLabel);
+        if (!wantsOverride) {
+          // Plain restore — un-hide the built-in and we're done.
+          setHiddenDefaultAccountIds((prev) => prev.filter((id) => id !== restoredDefault.id));
+          return;
+        }
+        // The caller supplied a link/channel, but the BUILT-IN definition has
+        // neither, so a plain un-hide would silently drop them. Instead leave
+        // the default tombstoned and add a custom entry under the SAME id
+        // carrying the extras. Exactly one entry with that id ends up in the
+        // merged list — un-hiding as well would produce a duplicate id.
+        const linkable = isLinkableType(restoredDefault.type);
+        setCustomAccountModes((prev) =>
+          prev.some((a) => a.id === restoredDefault.id)
+            ? prev
+            : [
+                ...prev,
+                {
+                  ...restoredDefault,
+                  linkedBankId:
+                    linkable &&
+                    opts?.linkedBankId &&
+                    bankAccounts.some((b) => b.id === opts.linkedBankId)
+                      ? opts.linkedBankId
+                      : undefined,
+                  channelLabel: opts?.channelLabel?.trim() || undefined,
+                },
+              ],
+        );
         return;
       }
       // Case-insensitive so a differently-cased retype of an existing entry
       // ("bank account" vs "Bank Account") is treated as the same account
       // instead of silently creating a near-duplicate.
       if (accountModes.some((a) => a.id.toLowerCase() === trimmed.toLowerCase())) return;
+      // Only cards and UPI handles are funded by a bank; silently ignore a
+      // link on anything else rather than persisting a field that would never
+      // be read but would show up in exports and confuse the next reader.
+      const linkable = type === "credit_card" || type === "upi";
+      const linkedBankId =
+        linkable && opts?.linkedBankId && bankAccounts.some((b) => b.id === opts.linkedBankId)
+          ? opts.linkedBankId
+          : undefined;
       markLocalWrite();
       setCustomAccountModes((prev) => [
         ...prev,
-        { id: trimmed, name: trimmed, type, defaultChannel },
+        {
+          id: trimmed,
+          name: trimmed,
+          type,
+          linkedBankId,
+          channelLabel: opts?.channelLabel?.trim() || undefined,
+        },
       ]);
     },
     deleteAccountMode: (id) => {
@@ -1594,17 +1810,51 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       } else {
         setCustomAccountModes((prev) => prev.filter((a) => a.id !== id));
       }
+      // Clear links pointing at the account just removed, in the same update.
+      // Ids are name-derived, so leaving them dangling would silently re-link
+      // these cards if an account with the same name were added again later —
+      // a "resurrected" relationship the user never asked for.
+      setCustomAccountModes((prev) =>
+        prev.some((a) => a.linkedBankId === id)
+          ? prev.map((a) => (a.linkedBankId === id ? { ...a, linkedBankId: undefined } : a))
+          : prev,
+      );
       return true;
     },
     updateAccountMode: (id, patch) => {
       if (!customAccountModes.some((a) => a.id === id)) return false; // defaults can't be edited in place
       markLocalWrite();
-      setCustomAccountModes((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
+      setCustomAccountModes((prev) => {
+        const next = prev.map((a) => {
+          if (a.id !== id) return a;
+          const merged = { ...a, ...patch };
+          // Same validation addAccountMode applies, enforced here too: a patch
+          // can change `type`, and a card that becomes a wallet must not keep
+          // claiming bank funding. Self-links are rejected outright.
+          const target = merged.linkedBankId
+            ? [...DEFAULT_ACCOUNT_MODES, ...prev].find((x) => x.id === merged.linkedBankId)
+            : undefined;
+          const linkValid =
+            isLinkableType(merged.type) &&
+            !!target &&
+            target.type === "bank" &&
+            merged.linkedBankId !== merged.id;
+          return { ...merged, linkedBankId: linkValid ? merged.linkedBankId : undefined };
+        });
+        // Cascade: if this edit stopped the account being a bank, every card /
+        // UPI handle still pointing at it is now claiming a funding source
+        // that isn't a bank. Clear those too, in the same update — otherwise
+        // the stale link survives, renders a false "via X" badge, and gets
+        // re-persisted on the next unrelated save.
+        const stillBank = next.some((a) => a.id === id && a.type === "bank");
+        if (stillBank) return next;
+        return next.map((a) => (a.linkedBankId === id ? { ...a, linkedBankId: undefined } : a));
+      });
       return true;
     },
     accountLabel,
     brokerPartitions,
-    addBrokerPartition: (name, category, brokerApp, description) => {
+    addBrokerPartition: (name, purpose, opts) => {
       const trimmed = name.trim();
       if (!trimmed) return;
       // Re-adding a name that matches a previously-deleted default restores
@@ -1625,7 +1875,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       markLocalWrite();
       setCustomBrokerPartitions((prev) => [
         ...prev,
-        { id: trimmed, name: trimmed, category, brokerApp: brokerApp?.trim() || undefined, description: description?.trim() || undefined },
+        {
+          id: trimmed,
+          name: trimmed,
+          purpose,
+          // Purpose is what the user picks; category (the analytics/allocation
+          // axis) defaults to the instrument type that purpose usually implies,
+          // and stays independently editable in Settings.
+          category: opts?.category ?? CATEGORY_BY_PURPOSE[purpose],
+          brokerApp: opts?.brokerApp?.trim() || undefined,
+          description: opts?.description?.trim() || undefined,
+        },
       ]);
     },
     deleteBrokerPartition: (id) => {
@@ -1647,6 +1907,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setHiddenDefaultPartitionIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
       } else {
         setCustomBrokerPartitions((prev) => prev.filter((p) => p.id !== id));
+      }
+      // The risk cap is sized against ONE partition's latest snapshot. If that
+      // partition just went away, riskCapCapital silently reads 0 forever and
+      // the Swing page shows a ₹0 cap with no hint why — repoint it at the
+      // first surviving partition instead of leaving a dangling reference.
+      if (blueprintSettings.riskCapPartition === id) {
+        const fallback = brokerPartitions.find((p) => p.id !== id);
+        if (fallback) setBlueprintSettings((prev) => ({ ...prev, riskCapPartition: fallback.id }));
       }
       return true;
     },

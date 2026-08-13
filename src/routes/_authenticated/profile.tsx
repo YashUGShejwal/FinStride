@@ -1,12 +1,25 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { LogOut, Mail, Shield, Wallet, TrendingUp } from "lucide-react";
 import { useAuth } from "@/lib/auth";
-import { useStore } from "@/lib/store";
+import { useStore, type PartitionPurpose } from "@/lib/store";
 import { Sensitive } from "@/components/Sensitive";
 import { Button } from "@/components/ui/button";
 import { inr } from "@/lib/format";
 
 export const Route = createFileRoute("/_authenticated/profile")({ component: ProfilePage });
+
+/**
+ * Human-readable form of BrokerPartition.purpose — the "why the money is here"
+ * axis users organise by, so it leads the badge row. `category` (what the
+ * instrument is) stays behind it as a muted qualifier.
+ */
+const PURPOSE_LABELS: Record<PartitionPurpose, string> = {
+  long_term: "Long-Term",
+  swing: "Swing",
+  international: "International",
+  crypto: "Crypto",
+  custom: "Custom",
+};
 
 function ProfilePage() {
   const { user, signOut } = useAuth();
@@ -57,7 +70,10 @@ function ProfilePage() {
                 <p className="text-xs text-muted-foreground mt-0.5">{a.description}</p>
               </div>
               <div className="flex gap-1 flex-wrap justify-end">
-                <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/8 text-muted-foreground">
+                <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border border-primary/40 bg-primary/10 text-primary">
+                  {PURPOSE_LABELS[a.purpose]}
+                </span>
+                <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/3 text-muted-foreground/70">
                   {a.category.replace(/_/g, " ")}
                 </span>
                 {a.brokerApp && (

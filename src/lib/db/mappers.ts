@@ -26,7 +26,7 @@ import type {
   HustleEntry,
   MonthlyPending,
   PartitionCategory,
-  PaymentChannel,
+  PartitionPurpose,
   PortfolioSnapshot,
   Trade,
   Transaction,
@@ -245,7 +245,7 @@ export type SettingsBundle = {
   hiddenDefaultPartitionIds: string[];
 };
 
-const ACCOUNT_TYPES: readonly string[] = ["bank", "credit_card", "cash", "wallet"];
+const ACCOUNT_TYPES: readonly string[] = ["bank", "credit_card", "upi", "cash", "wallet"];
 const PARTITION_CATEGORIES: readonly string[] = [
   "equity_swing",
   "long_term_etf",
@@ -253,10 +253,31 @@ const PARTITION_CATEGORIES: readonly string[] = [
   "crypto",
   "liquid",
 ];
-const PAYMENT_CHANNELS: readonly string[] = ["UPI", "Card", "NetBanking", "Cash"];
+const PARTITION_PURPOSES: readonly string[] = [
+  "long_term",
+  "swing",
+  "international",
+  "crypto",
+  "custom",
+];
+
+/** Mirrors PURPOSE_BY_CATEGORY in src/lib/store.tsx — duplicated to keep this module import-cycle-free. */
+const PURPOSE_FALLBACK: Record<string, PartitionPurpose> = {
+  equity_swing: "swing",
+  long_term_etf: "long_term",
+  mutual_funds: "long_term",
+  crypto: "crypto",
+  liquid: "custom",
+};
 
 function accountModeToJson(a: AccountMode): DbAccountModeJson {
-  return { id: a.id, name: a.name, type: a.type, defaultChannel: a.defaultChannel ?? null };
+  return {
+    id: a.id,
+    name: a.name,
+    type: a.type,
+    linkedBankId: a.linkedBankId ?? null,
+    channelLabel: a.channelLabel ?? null,
+  };
 }
 
 function jsonToAccountMode(raw: unknown): AccountMode | null {
@@ -265,16 +286,25 @@ function jsonToAccountMode(raw: unknown): AccountMode | null {
   const id = typeof r.id === "string" ? r.id : "";
   if (!id.trim()) return null;
   const type = ACCOUNT_TYPES.includes(r.type as string) ? (r.type as AccountType) : "bank";
-  const defaultChannel = PAYMENT_CHANNELS.includes(r.defaultChannel as string)
-    ? (r.defaultChannel as PaymentChannel)
-    : undefined;
-  return { id, name: typeof r.name === "string" && r.name.trim() ? r.name : id, type, defaultChannel };
+  // `defaultChannel` is the pre-relational column name — read it as a fallback
+  // so rows written before this model keep their channel.
+  const channelRaw = r.channelLabel ?? r.defaultChannel;
+  const linked = typeof r.linkedBankId === "string" ? r.linkedBankId.trim() : "";
+  return {
+    id,
+    name: typeof r.name === "string" && r.name.trim() ? r.name : id,
+    type,
+    linkedBankId: linked || undefined,
+    channelLabel:
+      typeof channelRaw === "string" && channelRaw.trim() ? channelRaw.trim() : undefined,
+  };
 }
 
 function brokerPartitionToJson(p: BrokerPartition): DbBrokerPartitionJson {
   return {
     id: p.id,
     name: p.name,
+    purpose: p.purpose,
     category: p.category,
     brokerApp: p.brokerApp ?? null,
     description: p.description ?? null,
@@ -292,6 +322,11 @@ function jsonToBrokerPartition(raw: unknown): BrokerPartition | null {
   return {
     id,
     name: typeof r.name === "string" && r.name.trim() ? r.name : id,
+    // Rows written before `purpose` existed get one inferred from category
+    // rather than all collapsing into a single bucket.
+    purpose: PARTITION_PURPOSES.includes(r.purpose as string)
+      ? (r.purpose as PartitionPurpose)
+      : (PURPOSE_FALLBACK[category] ?? "custom"),
     category,
     brokerApp: typeof r.brokerApp === "string" && r.brokerApp.trim() ? r.brokerApp : undefined,
     description: typeof r.description === "string" ? r.description : undefined,

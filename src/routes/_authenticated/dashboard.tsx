@@ -14,7 +14,7 @@ export const Route = createFileRoute("/_authenticated/dashboard")({ component: D
 const TRANSFER_CATS = new Set(["Capital Transfer (In)", "Capital Transfer (Out)"]);
 
 function Dashboard() {
-  const { transactions, trades, blueprintSettings } = useStore();
+  const { transactions, trades, blueprintSettings, accountLabel } = useStore();
 
   const stats = useMemo(() => {
     // Capital transfers are excluded from operational income/expense — they only move money
@@ -126,7 +126,7 @@ function Dashboard() {
                   </div>
                   <div className="min-w-0">
                     <p className="text-sm font-medium truncate">{t.category}</p>
-                    <p className="text-xs text-muted-foreground">{fmtDate(t.date)} • {t.account}</p>
+                    <p className="text-xs text-muted-foreground">{fmtDate(t.date)} • {accountLabel(t.account)}</p>
                   </div>
                 </div>
                 <p className={`font-semibold tnum ${t.type === "income" ? "text-[oklch(0.78_0.16_155)]" : "text-[oklch(0.75_0.18_25)]"}`}>

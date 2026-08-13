@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Settings, Trash2, Plus, RotateCcw, Save, Wallet, Sparkles,
   Download, Upload, TriangleAlert, DatabaseZap, Monitor, CheckCircle2, CalendarClock,
@@ -12,11 +12,16 @@ import {
   DEFAULT_EXPENSE_CATEGORIES,
   DEFAULT_ACCOUNT_MODES,
   DEFAULT_BROKER_PARTITIONS,
+  ACCOUNT_TYPES,
+  PAYMENT_CHANNEL_SUGGESTIONS,
+  PARTITION_CATEGORIES,
+  PARTITION_PURPOSES,
+  CATEGORY_BY_PURPOSE,
   type AccountMode,
   type AccountType,
   type BrokerPartition,
   type PartitionCategory,
-  type PaymentChannel,
+  type PartitionPurpose,
   type CustomObligation,
 } from "@/lib/store";
 import { inr } from "@/lib/format";
@@ -39,11 +44,27 @@ export const Route = createFileRoute("/_authenticated/settings")({ component: Se
 const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
   bank: "Bank",
   credit_card: "Credit Card",
+  upi: "UPI",
   cash: "Cash",
   wallet: "Wallet",
 };
-const ACCOUNT_TYPES: readonly AccountType[] = ["bank", "credit_card", "cash", "wallet"];
-const PAYMENT_CHANNELS: readonly PaymentChannel[] = ["UPI", "Card", "NetBanking", "Cash"];
+
+/**
+ * Sub-headings for the grouped account list. Banks lead because they're the
+ * linkable targets every card / UPI handle points at — the list reads
+ * top-down as "here are the accounts, here's what settles against them".
+ */
+const ACCOUNT_GROUP_LABELS: Record<AccountType, string> = {
+  bank: "Banks",
+  credit_card: "Credit Cards",
+  upi: "UPI Handles",
+  cash: "Cash",
+  wallet: "Wallets",
+};
+
+/** Only cards and UPI handles are funded by a bank — see AccountMode.linkedBankId. */
+const LINKABLE_TYPES: readonly AccountType[] = ["credit_card", "upi"];
+const isLinkable = (t: AccountType) => LINKABLE_TYPES.includes(t);
 
 const PARTITION_CATEGORY_LABELS: Record<PartitionCategory, string> = {
   equity_swing: "Equity / Swing",
@@ -52,13 +73,15 @@ const PARTITION_CATEGORY_LABELS: Record<PartitionCategory, string> = {
   crypto: "Crypto",
   liquid: "Liquid",
 };
-const PARTITION_CATEGORIES: readonly PartitionCategory[] = [
-  "equity_swing",
-  "long_term_etf",
-  "mutual_funds",
-  "crypto",
-  "liquid",
-];
+
+/** Sub-headings for the grouped partition list — WHY the money sits there. */
+const PARTITION_PURPOSE_LABELS: Record<PartitionPurpose, string> = {
+  long_term: "Long-Term",
+  swing: "Swing",
+  international: "International",
+  crypto: "Crypto",
+  custom: "Custom",
+};
 
 function SettingsPage() {
   const {
@@ -70,6 +93,7 @@ function SettingsPage() {
     deleteCategory,
     renameCategory,
     accountModes,
+    bankAccounts,
     addAccountMode,
     deleteAccountMode,
     updateAccountMode,
@@ -91,6 +115,7 @@ function SettingsPage() {
     customObligations,
     addObligation,
     deleteObligation,
+    hydrated,
   } = useStore();
   const nav = useNavigate();
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -147,13 +172,30 @@ function SettingsPage() {
   };
 
   // ── Blueprint form local state (controlled, saved on submit) ──────────────
-  const [bp, setBp] = useState({
+  const bpFromStore = () => ({
     defaultSalary:    String(blueprintSettings.defaultSalary),
     fixedRunrate:     String(blueprintSettings.fixedRunrate),
     scooterEmi:       String(blueprintSettings.scooterEmi),
     growwMfSip:       String(blueprintSettings.growwMfSip),
     riskCapPct:       String(Math.round(blueprintSettings.defaultRiskCapPct * 100)),
   });
+  const [bp, setBp] = useState(bpFromStore);
+
+  // Re-seed once the store finishes loading THIS identity's blueprint. The
+  // initializer above runs at mount, which for a cloud account is before the
+  // remote fetch resolves — so the inputs would sit on pre-hydration zeros,
+  // and hitting "Save changes" would write those zeros straight over the real
+  // saved blueprint. Keyed on `hydrated` (not the blueprint value) so it fires
+  // exactly once per identity and never fights the user mid-edit.
+  const [bpHydratedFor, setBpHydratedFor] = useState(false);
+  useEffect(() => {
+    if (hydrated && !bpHydratedFor) {
+      setBp(bpFromStore());
+      setBpHydratedFor(true);
+    }
+    if (!hydrated && bpHydratedFor) setBpHydratedFor(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, bpHydratedFor, blueprintSettings]);
 
   const handleBlueprintSave = (e: FormEvent) => {
     e.preventDefault();
@@ -358,13 +400,15 @@ function SettingsPage() {
           <div>
             <h2 className="font-display font-semibold tracking-tight">Accounts & Cards</h2>
             <p className="text-xs text-muted-foreground">
-              Add, rename, or remove any account/card — including the built-in ones. Shown in the
-              Cash Flow ledger as "Name (Channel)".
+              Add, rename, or remove any account/card — including the built-in ones. Link each card
+              or UPI handle to the bank that funds it, and the Cash Flow ledger reads
+              "Amazon Pay (ICICI Credit Card)" instead of a bare name.
             </p>
           </div>
         </div>
         <AccountModeColumn
           accountModes={accountModes}
+          bankAccounts={bankAccounts}
           defaultIds={DEFAULT_ACCOUNT_MODES.map((a) => a.id)}
           onAdd={addAccountMode}
           onDelete={deleteAccountMode}
@@ -382,8 +426,9 @@ function SettingsPage() {
             <h2 className="font-display font-semibold tracking-tight">Broker Partitions</h2>
             <p className="text-xs text-muted-foreground">
               Add, rename, or remove any broker/investment partition — including the built-in
-              ones. Multiple partitions can share the same category (e.g. "Long-Term (Zerodha)"
-              and "Long-Term (Groww)").
+              ones. Partitions are grouped by purpose, so one strategy split across brokers
+              (e.g. "Long-Term (Zerodha)" and "Long-Term (Groww)") reads as a single Long-Term
+              bucket.
             </p>
           </div>
         </div>
@@ -818,32 +863,63 @@ function CategoryColumn({
 }
 
 // ─── Account mode column ────────────────────────────────────────────────────
+// Grouped by type, banks first: a card/UPI handle is only half a story without
+// the bank funding it, so the accounts it can point at are listed above it.
+const CHANNEL_SUGGESTIONS_ID = "finstride-channel-suggestions";
+
 function AccountModeColumn({
   accountModes,
+  bankAccounts,
   defaultIds,
   onAdd,
   onDelete,
   onUpdate,
 }: {
   accountModes: AccountMode[];
+  /** Linkable targets — bank-type accounts only (see AccountMode.linkedBankId). */
+  bankAccounts: AccountMode[];
   defaultIds: readonly string[];
-  onAdd: (name: string, type: AccountType, defaultChannel?: PaymentChannel) => void;
+  onAdd: (
+    name: string,
+    type: AccountType,
+    opts?: { linkedBankId?: string; channelLabel?: string },
+  ) => void;
   onDelete: (id: string) => boolean;
   onUpdate: (id: string, patch: Partial<Omit<AccountMode, "id">>) => boolean;
 }) {
   const [name, setName] = useState("");
   const [type, setType] = useState<AccountType>("bank");
-  const [channel, setChannel] = useState<PaymentChannel | "none">("none");
+  const [linkedBankId, setLinkedBankId] = useState("none");
+  const [channel, setChannel] = useState("");
   const [editing, setEditing] = useState<AccountMode | null>(null);
+
+  // Resolved against the live list, so a link left dangling by a deleted bank
+  // renders as "unlinked" rather than a stale name.
+  const linkedBankName = (id?: string) =>
+    id ? accountModes.find((a) => a.id === id)?.name : undefined;
 
   const handleAdd = () => {
     const trimmed = name.trim();
     if (!trimmed) return;
-    if (accountModes.some((a) => a.id.toLowerCase() === trimmed.toLowerCase())) {
+    // Check BOTH id and name: a renamed custom account keeps its original id,
+    // so an id-only check would let a second account be created with a display
+    // name identical to an existing one — two indistinguishable rows.
+    if (
+      accountModes.some(
+        (a) =>
+          a.id.toLowerCase() === trimmed.toLowerCase() ||
+          a.name.toLowerCase() === trimmed.toLowerCase(),
+      )
+    ) {
       return toast.error("An account with that name already exists");
     }
-    onAdd(trimmed, type, channel === "none" ? undefined : channel);
+    onAdd(trimmed, type, {
+      linkedBankId: isLinkable(type) && linkedBankId !== "none" ? linkedBankId : undefined,
+      channelLabel: channel.trim() || undefined,
+    });
     setName("");
+    setChannel("");
+    setLinkedBankId("none");
     toast.success(`"${trimmed}" added`);
   };
 
@@ -854,7 +930,16 @@ function AccountModeColumn({
     if (accountModes.some((a) => a.id !== editing.id && a.name.toLowerCase() === trimmed.toLowerCase())) {
       return toast.error("Another account already has that name");
     }
-    if (onUpdate(editing.id, { name: trimmed, type: editing.type, defaultChannel: editing.defaultChannel })) {
+    if (
+      onUpdate(editing.id, {
+        name: trimmed,
+        type: editing.type,
+        // Retyping a card as a bank drops the link rather than leaving a field
+        // nothing reads — banks are the funding source, not the funded thing.
+        linkedBankId: isLinkable(editing.type) ? editing.linkedBankId : undefined,
+        channelLabel: editing.channelLabel?.trim() || undefined,
+      })
+    ) {
       toast.success(`"${trimmed}" updated`);
       setEditing(null);
     } else {
@@ -862,129 +947,194 @@ function AccountModeColumn({
     }
   };
 
-  return (
-    <div className="space-y-3">
-      <ul className="space-y-1.5">
-        {accountModes.map((a) => {
-          const isCustom = !defaultIds.includes(a.id);
-          const isEditing = editing?.id === a.id;
-          return (
-            <li key={a.id} className="px-3 py-2.5 rounded-xl border border-glass-border bg-white/3 text-sm">
-              {isEditing ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <Input
-                    autoFocus
-                    value={editing.name}
-                    onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-                    className="bg-input/40 border-glass-border h-8 text-sm flex-1 min-w-[8rem]"
-                  />
-                  <Select value={editing.type} onValueChange={(v: AccountType) => setEditing({ ...editing, type: v })}>
-                    <SelectTrigger className="bg-input/40 border-glass-border h-8 text-xs w-28">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {ACCOUNT_TYPES.map((t) => (
-                        <SelectItem key={t} value={t}>{ACCOUNT_TYPE_LABELS[t]}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Select
-                    value={editing.defaultChannel ?? "none"}
-                    onValueChange={(v: PaymentChannel | "none") =>
-                      setEditing({ ...editing, defaultChannel: v === "none" ? undefined : v })
-                    }
-                  >
-                    <SelectTrigger className="bg-input/40 border-glass-border h-8 text-xs w-28">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">No channel</SelectItem>
-                      {PAYMENT_CHANNELS.map((c) => (
-                        <SelectItem key={c} value={c}>{c}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button onClick={saveEdit} className="text-muted-foreground hover:text-foreground p-1">
-                      <Save className="size-3.5" />
-                    </button>
-                    <button onClick={() => setEditing(null)} className="text-muted-foreground hover:text-destructive p-1">
-                      <X className="size-3.5" />
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <span>{a.name}</span>
-                    <span className="ml-2 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/8 text-muted-foreground">
-                      {ACCOUNT_TYPE_LABELS[a.type]}
+  const renderRow = (a: AccountMode) => {
+    const isCustom = !defaultIds.includes(a.id);
+    const isEditing = editing?.id === a.id;
+    const bankName = linkedBankName(a.linkedBankId);
+    return (
+      <li key={a.id} className="px-3 py-2.5 rounded-xl border border-glass-border bg-white/3 text-sm">
+        {isEditing && editing ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              autoFocus
+              value={editing.name}
+              onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+              className="bg-input/40 border-glass-border h-8 text-sm flex-1 min-w-[8rem]"
+            />
+            <Select value={editing.type} onValueChange={(v: AccountType) => setEditing({ ...editing, type: v })}>
+              <SelectTrigger className="bg-input/40 border-glass-border h-8 text-xs w-28">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ACCOUNT_TYPES.map((t) => (
+                  <SelectItem key={t} value={t}>{ACCOUNT_TYPE_LABELS[t]}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {isLinkable(editing.type) && (
+              <Select
+                value={editing.linkedBankId ?? "none"}
+                onValueChange={(v) =>
+                  setEditing({ ...editing, linkedBankId: v === "none" ? undefined : v })
+                }
+              >
+                <SelectTrigger className="bg-input/40 border-glass-border h-8 text-xs w-36">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No linked bank</SelectItem>
+                  {/* An account can never fund itself, so it's never its own link option. */}
+                  {bankAccounts
+                    .filter((b) => b.id !== editing.id)
+                    .map((b) => (
+                      <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            )}
+            <Input
+              value={editing.channelLabel ?? ""}
+              onChange={(e) => setEditing({ ...editing, channelLabel: e.target.value || undefined })}
+              list={CHANNEL_SUGGESTIONS_ID}
+              placeholder="Channel (optional)"
+              className="bg-input/40 border-glass-border h-8 text-sm w-32"
+            />
+            <div className="flex items-center gap-1 shrink-0">
+              <button onClick={saveEdit} className="text-muted-foreground hover:text-foreground p-1">
+                <Save className="size-3.5" />
+              </button>
+              <button onClick={() => setEditing(null)} className="text-muted-foreground hover:text-destructive p-1">
+                <X className="size-3.5" />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <span>{a.name}</span>
+              <span className="ml-2 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/8 text-muted-foreground">
+                {ACCOUNT_TYPE_LABELS[a.type]}
+              </span>
+              {isLinkable(a.type) &&
+                (bankName ? (
+                  <span className="ml-1.5 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/8 text-muted-foreground">
+                    via {bankName}
+                  </span>
+                ) : (
+                  // Only worth flagging on rows the user can actually fix. The
+                  // built-in "Credit Card"/"UPI" accounts have no editor (the
+                  // pencil is gated on is-custom), so an "unlinked" nag there
+                  // is a permanent complaint about something unactionable.
+                  !defaultIds.includes(a.id) && (
+                    <span className="ml-1.5 text-[10px] uppercase tracking-wider text-muted-foreground/60">
+                      unlinked
                     </span>
-                    {a.defaultChannel && (
-                      <span className="ml-1.5 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/8 text-muted-foreground">
-                        {a.defaultChannel}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {isCustom && (
-                      <button onClick={() => setEditing(a)} className="text-muted-foreground hover:text-foreground">
-                        <Pencil className="size-3.5" />
-                      </button>
-                    )}
-                    <button
-                      onClick={() => {
-                        if (onDelete(a.id)) toast.success(`"${a.name}" removed`);
-                        else toast.error(`"${a.name}" is still in use — remove its transactions first`);
-                      }}
-                      className="text-muted-foreground hover:text-destructive"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
-                  </div>
-                </div>
+                  )
+                ))}
+              {a.channelLabel && (
+                <span className="ml-1.5 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/8 text-muted-foreground">
+                  {a.channelLabel}
+                </span>
               )}
-            </li>
-          );
-        })}
-      </ul>
-      <div className="flex flex-wrap gap-2">
-        <Input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleAdd())}
-          placeholder="e.g. HDFC Bank, Amazon Pay ICICI…"
-          className="bg-input/40 border-glass-border text-sm h-9 flex-1 min-w-[10rem]"
-        />
-        <Select value={type} onValueChange={(v: AccountType) => setType(v)}>
-          <SelectTrigger className="bg-input/40 border-glass-border h-9 text-xs w-32">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {ACCOUNT_TYPES.map((t) => (
-              <SelectItem key={t} value={t}>{ACCOUNT_TYPE_LABELS[t]}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={channel} onValueChange={(v: PaymentChannel | "none") => setChannel(v)}>
-          <SelectTrigger className="bg-input/40 border-glass-border h-9 text-xs w-32">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">No channel</SelectItem>
-            {PAYMENT_CHANNELS.map((c) => (
-              <SelectItem key={c} value={c}>{c}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button
-          type="button"
-          onClick={handleAdd}
-          size="sm"
-          className="gradient-primary text-primary-foreground border-0 h-9 px-3 shrink-0"
-        >
-          <Plus className="size-4" />
-        </Button>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {isCustom && (
+                <button onClick={() => setEditing(a)} className="text-muted-foreground hover:text-foreground">
+                  <Pencil className="size-3.5" />
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  if (onDelete(a.id)) toast.success(`"${a.name}" removed`);
+                  else toast.error(`"${a.name}" is still in use — remove its transactions first`);
+                }}
+                className="text-muted-foreground hover:text-destructive"
+              >
+                <Trash2 className="size-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+      </li>
+    );
+  };
+
+  return (
+    <div className="space-y-4">
+      <datalist id={CHANNEL_SUGGESTIONS_ID}>
+        {PAYMENT_CHANNEL_SUGGESTIONS.map((c) => (
+          <option key={c} value={c} />
+        ))}
+      </datalist>
+
+      {ACCOUNT_TYPES.map((groupType) => {
+        const rows = accountModes.filter((a) => a.type === groupType);
+        if (rows.length === 0) return null;
+        return (
+          <div key={groupType} className="space-y-1.5">
+            <p className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+              {ACCOUNT_GROUP_LABELS[groupType]}
+            </p>
+            <ul className="space-y-1.5">{rows.map(renderRow)}</ul>
+          </div>
+        );
+      })}
+
+      <div className="space-y-1.5">
+        <div className="flex flex-wrap gap-2">
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleAdd())}
+            placeholder="e.g. HDFC Bank, Amazon Pay ICICI…"
+            className="bg-input/40 border-glass-border text-sm h-9 flex-1 min-w-[10rem]"
+          />
+          <Select value={type} onValueChange={(v: AccountType) => setType(v)}>
+            <SelectTrigger className="bg-input/40 border-glass-border h-9 text-xs w-32">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {ACCOUNT_TYPES.map((t) => (
+                <SelectItem key={t} value={t}>{ACCOUNT_TYPE_LABELS[t]}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {isLinkable(type) && (
+            <Select value={linkedBankId} onValueChange={setLinkedBankId}>
+              <SelectTrigger className="bg-input/40 border-glass-border h-9 text-xs w-36">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No linked bank</SelectItem>
+                {bankAccounts.map((b) => (
+                  <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <Input
+            value={channel}
+            onChange={(e) => setChannel(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleAdd())}
+            list={CHANNEL_SUGGESTIONS_ID}
+            placeholder="Channel (optional)"
+            className="bg-input/40 border-glass-border text-sm h-9 w-32"
+          />
+          <Button
+            type="button"
+            onClick={handleAdd}
+            size="sm"
+            className="gradient-primary text-primary-foreground border-0 h-9 px-3 shrink-0"
+          >
+            <Plus className="size-4" />
+          </Button>
+        </div>
+        {isLinkable(type) && bankAccounts.length === 0 && (
+          <p className="text-[11px] text-muted-foreground">
+            No bank accounts yet — add one first to link this to it. You can still add it unlinked
+            and connect it later.
+          </p>
+        )}
       </div>
     </div>
   );
@@ -1000,24 +1150,42 @@ function BrokerPartitionColumn({
 }: {
   brokerPartitions: BrokerPartition[];
   defaultIds: readonly string[];
-  onAdd: (name: string, category: PartitionCategory, brokerApp?: string, description?: string) => void;
+  onAdd: (
+    name: string,
+    purpose: PartitionPurpose,
+    opts?: { category?: PartitionCategory; brokerApp?: string; description?: string },
+  ) => void;
   onDelete: (id: string) => boolean;
   onUpdate: (id: string, patch: Partial<Omit<BrokerPartition, "id">>) => boolean;
 }) {
   const [name, setName] = useState("");
-  const [category, setCategory] = useState<PartitionCategory>("equity_swing");
+  const [purpose, setPurpose] = useState<PartitionPurpose>("long_term");
+  // "auto" = let the store derive the instrument category from the purpose;
+  // an explicit pick is an override, which is why purpose is the primary control.
+  const [category, setCategory] = useState<PartitionCategory | "auto">("auto");
   const [brokerApp, setBrokerApp] = useState("");
   const [editing, setEditing] = useState<BrokerPartition | null>(null);
 
   const handleAdd = () => {
     const trimmed = name.trim();
     if (!trimmed) return;
-    if (brokerPartitions.some((p) => p.id.toLowerCase() === trimmed.toLowerCase())) {
+    // id OR name — same reasoning as the account add guard above.
+    if (
+      brokerPartitions.some(
+        (p) =>
+          p.id.toLowerCase() === trimmed.toLowerCase() ||
+          p.name.toLowerCase() === trimmed.toLowerCase(),
+      )
+    ) {
       return toast.error("A partition with that name already exists");
     }
-    onAdd(trimmed, category, brokerApp.trim() || undefined);
+    onAdd(trimmed, purpose, {
+      category: category === "auto" ? undefined : category,
+      brokerApp: brokerApp.trim() || undefined,
+    });
     setName("");
     setBrokerApp("");
+    setCategory("auto");
     toast.success(`"${trimmed}" added`);
   };
 
@@ -1031,6 +1199,7 @@ function BrokerPartitionColumn({
     if (
       onUpdate(editing.id, {
         name: trimmed,
+        purpose: editing.purpose,
         category: editing.category,
         brokerApp: editing.brokerApp,
         description: editing.description,
@@ -1043,81 +1212,112 @@ function BrokerPartitionColumn({
     }
   };
 
-  return (
-    <div className="space-y-3">
-      <ul className="space-y-1.5">
-        {brokerPartitions.map((p) => {
-          const isCustom = !defaultIds.includes(p.id);
-          const isEditing = editing?.id === p.id;
-          return (
-            <li key={p.id} className="px-3 py-2.5 rounded-xl border border-glass-border bg-white/3 text-sm">
-              {isEditing ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <Input
-                    autoFocus
-                    value={editing.name}
-                    onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-                    className="bg-input/40 border-glass-border h-8 text-sm flex-1 min-w-[8rem]"
-                  />
-                  <Select value={editing.category} onValueChange={(v: PartitionCategory) => setEditing({ ...editing, category: v })}>
-                    <SelectTrigger className="bg-input/40 border-glass-border h-8 text-xs w-36">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PARTITION_CATEGORIES.map((c) => (
-                        <SelectItem key={c} value={c}>{PARTITION_CATEGORY_LABELS[c]}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Input
-                    value={editing.brokerApp ?? ""}
-                    onChange={(e) => setEditing({ ...editing, brokerApp: e.target.value || undefined })}
-                    placeholder="Broker app (optional)"
-                    className="bg-input/40 border-glass-border h-8 text-sm w-40"
-                  />
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button onClick={saveEdit} className="text-muted-foreground hover:text-foreground p-1">
-                      <Save className="size-3.5" />
-                    </button>
-                    <button onClick={() => setEditing(null)} className="text-muted-foreground hover:text-destructive p-1">
-                      <X className="size-3.5" />
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <span>{p.name}</span>
-                    {p.brokerApp && <span className="text-muted-foreground"> · {p.brokerApp}</span>}
-                    <span className="ml-2 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/8 text-muted-foreground">
-                      {PARTITION_CATEGORY_LABELS[p.category]}
-                    </span>
-                    {p.description && (
-                      <p className="text-[11px] text-muted-foreground/70 mt-0.5">{p.description}</p>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {isCustom && (
-                      <button onClick={() => setEditing(p)} className="text-muted-foreground hover:text-foreground">
-                        <Pencil className="size-3.5" />
-                      </button>
-                    )}
-                    <button
-                      onClick={() => {
-                        if (onDelete(p.id)) toast.success(`"${p.name}" removed`);
-                        else toast.error(`"${p.name}" is still in use — remove its trades/snapshots first`);
-                      }}
-                      className="text-muted-foreground hover:text-destructive"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
-                  </div>
-                </div>
+  const renderRow = (p: BrokerPartition) => {
+    const isCustom = !defaultIds.includes(p.id);
+    const isEditing = editing?.id === p.id;
+    return (
+      <li key={p.id} className="px-3 py-2.5 rounded-xl border border-glass-border bg-white/3 text-sm">
+        {isEditing && editing ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              autoFocus
+              value={editing.name}
+              onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+              className="bg-input/40 border-glass-border h-8 text-sm flex-1 min-w-[8rem]"
+            />
+            <Select
+              value={editing.purpose}
+              onValueChange={(v: PartitionPurpose) => setEditing({ ...editing, purpose: v })}
+            >
+              <SelectTrigger className="bg-input/40 border-glass-border h-8 text-xs w-32">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PARTITION_PURPOSES.map((pp) => (
+                  <SelectItem key={pp} value={pp}>{PARTITION_PURPOSE_LABELS[pp]}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={editing.category} onValueChange={(v: PartitionCategory) => setEditing({ ...editing, category: v })}>
+              <SelectTrigger className="bg-input/40 border-glass-border h-8 text-xs w-36">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PARTITION_CATEGORIES.map((c) => (
+                  <SelectItem key={c} value={c}>{PARTITION_CATEGORY_LABELS[c]}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Input
+              value={editing.brokerApp ?? ""}
+              onChange={(e) => setEditing({ ...editing, brokerApp: e.target.value || undefined })}
+              placeholder="Broker app (optional)"
+              className="bg-input/40 border-glass-border h-8 text-sm w-40"
+            />
+            <div className="flex items-center gap-1 shrink-0">
+              <button onClick={saveEdit} className="text-muted-foreground hover:text-foreground p-1">
+                <Save className="size-3.5" />
+              </button>
+              <button onClick={() => setEditing(null)} className="text-muted-foreground hover:text-destructive p-1">
+                <X className="size-3.5" />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <span>{p.name}</span>
+              {/* Onboarding composes names like "Long-Term (Zerodha)" AND sets
+                  brokerApp to "Zerodha", so appending it unconditionally would
+                  read "Long-Term (Zerodha) · Zerodha". Only show the broker
+                  when the name doesn't already carry it. */}
+              {p.brokerApp && !p.name.toLowerCase().includes(p.brokerApp.toLowerCase()) && (
+                <span className="text-muted-foreground"> · {p.brokerApp}</span>
               )}
-            </li>
-          );
-        })}
-      </ul>
+              <span className="ml-2 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/8 text-muted-foreground">
+                {PARTITION_CATEGORY_LABELS[p.category]}
+              </span>
+              {p.description && (
+                <p className="text-[11px] text-muted-foreground/70 mt-0.5">{p.description}</p>
+              )}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {isCustom && (
+                <button onClick={() => setEditing(p)} className="text-muted-foreground hover:text-foreground">
+                  <Pencil className="size-3.5" />
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  if (onDelete(p.id)) toast.success(`"${p.name}" removed`);
+                  else toast.error(`"${p.name}" is still in use — remove its trades/snapshots first`);
+                }}
+                className="text-muted-foreground hover:text-destructive"
+              >
+                <Trash2 className="size-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+      </li>
+    );
+  };
+
+  return (
+    <div className="space-y-4">
+      {PARTITION_PURPOSES.map((groupPurpose) => {
+        const rows = brokerPartitions.filter((p) => p.purpose === groupPurpose);
+        if (rows.length === 0) return null;
+        return (
+          <div key={groupPurpose} className="space-y-1.5">
+            <p className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+              {PARTITION_PURPOSE_LABELS[groupPurpose]}
+            </p>
+            <ul className="space-y-1.5">{rows.map(renderRow)}</ul>
+          </div>
+        );
+      })}
+
       <div className="flex flex-wrap gap-2">
         <Input
           value={name}
@@ -1126,11 +1326,24 @@ function BrokerPartitionColumn({
           placeholder="e.g. Swing Desk, MF Core…"
           className="bg-input/40 border-glass-border text-sm h-9 flex-1 min-w-[10rem]"
         />
-        <Select value={category} onValueChange={(v: PartitionCategory) => setCategory(v)}>
-          <SelectTrigger className="bg-input/40 border-glass-border h-9 text-xs w-36">
+        <Select value={purpose} onValueChange={(v: PartitionPurpose) => setPurpose(v)}>
+          <SelectTrigger className="bg-input/40 border-glass-border h-9 text-xs w-32">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
+            {PARTITION_PURPOSES.map((pp) => (
+              <SelectItem key={pp} value={pp}>{PARTITION_PURPOSE_LABELS[pp]}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={category} onValueChange={(v: PartitionCategory | "auto") => setCategory(v)}>
+          <SelectTrigger className="bg-input/40 border-glass-border h-9 text-xs w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="auto">
+              Auto · {PARTITION_CATEGORY_LABELS[CATEGORY_BY_PURPOSE[purpose]]}
+            </SelectItem>
             {PARTITION_CATEGORIES.map((c) => (
               <SelectItem key={c} value={c}>{PARTITION_CATEGORY_LABELS[c]}</SelectItem>
             ))}

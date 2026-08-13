@@ -59,18 +59,25 @@ export type DbUserSettings = {
   updated_at: string;
 };
 
-/** JSON shape stored in the custom_account_modes jsonb column — mirrors AccountMode. */
+/**
+ * JSON shape stored in the custom_account_modes jsonb column — mirrors AccountMode.
+ * `linkedBankId` is a soft reference to another AccountMode.id in the same
+ * array (the funding bank for a credit card / UPI handle), not a DB foreign
+ * key: the whole list lives in one jsonb value, so there is no row to point at.
+ */
 export type DbAccountModeJson = {
   id: string;
   name: string;
   type: string;
-  defaultChannel?: string | null;
+  linkedBankId?: string | null;
+  channelLabel?: string | null;
 };
 
 /** JSON shape stored in the custom_broker_partitions jsonb column — mirrors BrokerPartition. */
 export type DbBrokerPartitionJson = {
   id: string;
   name: string;
+  purpose: string;
   category: string;
   brokerApp?: string | null;
   description?: string | null;

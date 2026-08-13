@@ -230,7 +230,10 @@ function SwingPage() {
   const riskCapPartitionLabel = partitionLabel(blueprintSettings.riskCapPartition);
 
   // ── entry form state ──────────────────────────────────────────────────────
-  const [partition, setPartition] = useState<PartitionId>("Primary Broker");
+  // Seeded from the live list rather than the hardcoded "Primary Broker" id:
+  // that built-in is deletable, and a dangling seed left the Select blank
+  // while still stamping trades with a partition nothing resolves.
+  const [partition, setPartition] = useState<PartitionId>(brokerPartitions[0]?.id ?? "");
   const [ticker, setTicker] = useState("");
   const [fnoBlocked, setFnoBlocked] = useState(false);
   const [entryDate, setEntryDate] = useState(todayLocalISO);
@@ -260,6 +263,15 @@ function SwingPage() {
       void nav({ search: {}, replace: true });
     }
   }, [action, nav]);
+
+  // The seed above runs before the store hydrates, so a partition the user
+  // deleted is still present at that moment. Once the real list settles,
+  // re-point the field if what it holds no longer exists.
+  useEffect(() => {
+    if (brokerPartitions.length === 0) return;
+    if (brokerPartitions.some((p) => p.id === partition)) return;
+    setPartition(brokerPartitions[0].id);
+  }, [brokerPartitions, partition]);
 
   const toggleForm = () => {
     // Closing the drawer unmounts the ticker input, which is the only thing
