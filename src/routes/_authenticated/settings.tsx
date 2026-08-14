@@ -901,22 +901,23 @@ function AccountModeColumn({
   const handleAdd = () => {
     const trimmed = name.trim();
     if (!trimmed) return;
-    // Check BOTH id and name: a renamed custom account keeps its original id,
-    // so an id-only check would let a second account be created with a display
-    // name identical to an existing one — two indistinguishable rows.
-    if (
-      accountModes.some(
-        (a) =>
-          a.id.toLowerCase() === trimmed.toLowerCase() ||
-          a.name.toLowerCase() === trimmed.toLowerCase(),
-      )
-    ) {
-      return toast.error("An account with that name already exists");
+    const resolvedBankId = isLinkable(type) && linkedBankId !== "none" ? linkedBankId : undefined;
+    // Same name is only a duplicate when it's paired with the SAME funding
+    // bank (or "no bank" on both sides) — two accounts can share a display
+    // name as long as they're funded by different banks, e.g. "GPay via HDFC"
+    // and "GPay via ICICI" are distinct real accounts, not the same one twice.
+    const duplicate = accountModes.some(
+      (a) =>
+        a.name.toLowerCase() === trimmed.toLowerCase() &&
+        (a.linkedBankId ?? "") === (resolvedBankId ?? ""),
+    );
+    if (duplicate) {
+      const bank = resolvedBankId ? linkedBankName(resolvedBankId) : undefined;
+      return toast.error(
+        bank ? `"${trimmed}" via ${bank} is already on the list` : `"${trimmed}" is already on the list`,
+      );
     }
-    onAdd(trimmed, type, {
-      linkedBankId: isLinkable(type) && linkedBankId !== "none" ? linkedBankId : undefined,
-      channelLabel: channel.trim() || undefined,
-    });
+    onAdd(trimmed, type, { linkedBankId: resolvedBankId, channelLabel: channel.trim() || undefined });
     setName("");
     setChannel("");
     setLinkedBankId("none");
@@ -927,8 +928,18 @@ function AccountModeColumn({
     if (!editing) return;
     const trimmed = editing.name.trim();
     if (!trimmed) return;
-    if (accountModes.some((a) => a.id !== editing.id && a.name.toLowerCase() === trimmed.toLowerCase())) {
-      return toast.error("Another account already has that name");
+    const resolvedBankId = isLinkable(editing.type) ? editing.linkedBankId : undefined;
+    const duplicate = accountModes.some(
+      (a) =>
+        a.id !== editing.id &&
+        a.name.toLowerCase() === trimmed.toLowerCase() &&
+        (a.linkedBankId ?? "") === (resolvedBankId ?? ""),
+    );
+    if (duplicate) {
+      const bank = resolvedBankId ? linkedBankName(resolvedBankId) : undefined;
+      return toast.error(
+        bank ? `"${trimmed}" via ${bank} is already on the list` : `"${trimmed}" is already on the list`,
+      );
     }
     if (
       onUpdate(editing.id, {
@@ -936,7 +947,7 @@ function AccountModeColumn({
         type: editing.type,
         // Retyping a card as a bank drops the link rather than leaving a field
         // nothing reads — banks are the funding source, not the funded thing.
-        linkedBankId: isLinkable(editing.type) ? editing.linkedBankId : undefined,
+        linkedBankId: resolvedBankId,
         channelLabel: editing.channelLabel?.trim() || undefined,
       })
     ) {

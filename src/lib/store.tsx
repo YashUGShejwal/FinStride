@@ -131,6 +131,23 @@ export function isLinkableType(t: AccountType): boolean {
   return t === "credit_card" || t === "upi";
 }
 
+/**
+ * First id not already taken. `base` is normally just the trimmed name — but
+ * `id` (not the display name) is what Transaction.account actually stores, so
+ * it's the one thing that MUST stay unique. Two accounts are allowed to share
+ * a display name when they're linked to different banks ("GPay" via HDFC and
+ * "GPay" via ICICI are two real, distinct accounts), which is exactly the case
+ * this exists for — `base` is bank-qualified by the caller before reaching
+ * here whenever that's the situation, so the counter fallback below only ever
+ * fires in the vanishingly unlikely event even a qualified id collides.
+ */
+function uniqueAccountId(base: string, existing: readonly AccountMode[]): string {
+  if (!existing.some((a) => a.id === base)) return base;
+  let n = 2;
+  while (existing.some((a) => a.id === `${base} (${n})`)) n++;
+  return `${base} (${n})`;
+}
+
 // ─── Broker/investment partitions (Swing logger, Cashflow, Analytics) ──────
 // Extensible and fully editable/deletable, same as account modes above. One
 // canonical list backs both the swing-trade partition selector AND the
@@ -1768,23 +1785,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         );
         return;
       }
-      // Case-insensitive so a differently-cased retype of an existing entry
-      // ("bank account" vs "Bank Account") is treated as the same account
-      // instead of silently creating a near-duplicate.
-      if (accountModes.some((a) => a.id.toLowerCase() === trimmed.toLowerCase())) return;
       // Only cards and UPI handles are funded by a bank; silently ignore a
       // link on anything else rather than persisting a field that would never
       // be read but would show up in exports and confuse the next reader.
-      const linkable = type === "credit_card" || type === "upi";
+      const linkable = isLinkableType(type);
       const linkedBankId =
         linkable && opts?.linkedBankId && bankAccounts.some((b) => b.id === opts.linkedBankId)
           ? opts.linkedBankId
           : undefined;
+      // A name is only a duplicate when it's paired with the SAME funding bank
+      // (or "no bank" on both sides) — "GPay via HDFC" and "GPay via ICICI" are
+      // two distinct real-world accounts that happen to share a display name,
+      // not the same account typed twice. Case-insensitive so a differently-
+      // cased retype ("bank account" vs "Bank Account") still counts as a match.
+      const isDuplicate = accountModes.some(
+        (a) =>
+          a.name.toLowerCase() === trimmed.toLowerCase() &&
+          (a.linkedBankId ?? "") === (linkedBankId ?? ""),
+      );
+      if (isDuplicate) return;
       markLocalWrite();
       setCustomAccountModes((prev) => [
         ...prev,
         {
-          id: trimmed,
+          id: uniqueAccountId(linkedBankId ? `${trimmed}::${linkedBankId}` : trimmed, accountModes),
           name: trimmed,
           type,
           linkedBankId,

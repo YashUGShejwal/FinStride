@@ -427,13 +427,21 @@ function AccountsStep() {
   const add = (name: string, type: AccountType, linkedBankId?: string) => {
     const trimmed = name.trim();
     if (!trimmed) return false;
-    if (taken.has(trimmed.toLowerCase())) {
-      toast.error(`"${trimmed}" is already on the list`);
+    const resolvedBankId = linkedBankId && linkedBankId !== "none" ? linkedBankId : undefined;
+    // Same name is only a duplicate when paired with the SAME funding bank (or
+    // "no bank" on both sides) — "GPay via HDFC" and "GPay via ICICI" are two
+    // distinct real accounts that happen to share a display name.
+    const duplicate = accountModes.some(
+      (a) =>
+        a.name.toLowerCase() === trimmed.toLowerCase() &&
+        (a.linkedBankId ?? "") === (resolvedBankId ?? ""),
+    );
+    if (duplicate) {
+      const bank = resolvedBankId ? bankName(resolvedBankId) : undefined;
+      toast.error(bank ? `"${trimmed}" via ${bank} is already on the list` : `"${trimmed}" is already on the list`);
       return false;
     }
-    addAccountMode(trimmed, type, {
-      linkedBankId: linkedBankId && linkedBankId !== "none" ? linkedBankId : undefined,
-    });
+    addAccountMode(trimmed, type, { linkedBankId: resolvedBankId });
     return true;
   };
 
