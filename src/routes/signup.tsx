@@ -1,21 +1,24 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
-import { Sparkles, Mail, Lock, User as UserIcon, ArrowRight } from "lucide-react";
+import { Mail, Lock, User as UserIcon, ArrowRight } from "lucide-react";
+import { LogoMark } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { GoogleIcon } from "@/components/GoogleIcon";
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/signup")({ component: SignupPage });
 
 function SignupPage() {
-  const { signUp } = useAuth();
+  const { signUp, signInWithGoogle } = useAuth();
   const nav = useNavigate();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -31,20 +34,46 @@ function SignupPage() {
     }
   };
 
+  const handleGoogleSignIn = async () => {
+    setGoogleLoading(true);
+    try {
+      await signInWithGoogle();
+    } catch (err: any) {
+      toast.error(err.message ?? "Google sign-in failed");
+      setGoogleLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center px-4 py-10">
       <div className="w-full max-w-md">
-        <div className="flex items-center gap-2 mb-8 justify-center">
-          <div className="size-11 rounded-2xl gradient-accent grid place-items-center glow">
-            <Sparkles className="size-5 text-accent-foreground" />
-          </div>
+        <div className="flex items-center gap-3 mb-8 justify-center">
+          <LogoMark className="size-11" />
           <div>
-            <h1 className="text-2xl font-semibold">Create account</h1>
+            <h1 className="text-2xl font-display font-semibold tracking-tight">Create account</h1>
             <p className="text-xs text-muted-foreground">Your money, your rules.</p>
           </div>
         </div>
 
         <div className="glass-strong rounded-2xl p-6 md:p-8">
+          <button
+            type="button"
+            onClick={handleGoogleSignIn}
+            disabled={googleLoading}
+            className="w-full h-11 rounded-xl border border-glass-border bg-white/5 hover:bg-white/10 transition-colors flex items-center justify-center gap-3 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <GoogleIcon className="size-4" />
+            {googleLoading ? "Redirecting…" : "Continue with Google"}
+          </button>
+
+          <div className="my-6 flex items-center gap-3">
+            <div className="h-px flex-1 bg-glass-border" />
+            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              or continue with email
+            </span>
+            <div className="h-px flex-1 bg-glass-border" />
+          </div>
+
           <form onSubmit={submit} className="space-y-4">
             <div>
               <Label htmlFor="name" className="text-xs uppercase tracking-wider text-muted-foreground">Name</Label>

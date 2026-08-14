@@ -1,15 +1,20 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState, type FormEvent } from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
-  Plus, Trash2, AlertTriangle, ShieldAlert, TrendingUp, Lock,
+  Plus, Trash2, AlertTriangle, ShieldAlert, Lock,
   CheckCircle2, XCircle, MinusCircle, ChevronDown, ChevronUp,
   Wallet, Pencil,
 } from "lucide-react";
 import {
-  useStore, BLUEPRINT, INVESTMENT_APPS, PORTFOLIO_PARTITIONS,
-  type BrokerPartition, type CloseReason, type PortfolioPartitionKey,
+  useStore,
+  type CloseReason, type PartitionId,
 } from "@/lib/store";
-import { inr, fmtDate } from "@/lib/format";
+import { inr, fmtDate, todayLocalISO } from "@/lib/format";
+import { AnimatedNumber } from "@/components/AnimatedNumber";
+import { Sensitive } from "@/components/Sensitive";
+import { useGlowRipple } from "@/hooks/useGlowRipple";
+import { QuickLogDrawer } from "@/components/ui/QuickLogDrawer";
+import { SpotlightCard } from "@/components/ui/SpotlightCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,7 +22,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/_authenticated/swing")({ component: SwingPage });
+type SwingSearch = { action?: "add" };
+
+export const Route = createFileRoute("/_authenticated/swing")({
+  validateSearch: (search: Record<string, unknown>): SwingSearch => ({
+    action: search.action === "add" ? "add" : undefined,
+  }),
+  component: SwingPage,
+});
 
 // Blueprint Rule 2 — F&O ban regex (always active)
 const FNO_REGEX =
@@ -53,21 +65,29 @@ const CLOSE_REASONS: {
 
 // ─── Capital Snapshot Panel ────────────────────────────────────────────────
 function CapitalSnapshotPanel() {
-  const { latestSnapshotValues, addPortfolioSnapshots, dhanSwingCapital } = useStore();
+  const {
+    latestSnapshotValues, addPortfolioSnapshots, riskCapCapital,
+    brokerPartitions, blueprintSettings, partitionLabel,
+  } = useStore();
   const [open, setOpen] = useState(false);
   const [snapNotes, setSnapNotes] = useState("");
-  const [values, setValues] = useState<Partial<Record<PortfolioPartitionKey, string>>>({});
+  const [values, setValues] = useState<Partial<Record<PartitionId, string>>>({});
 
   const hasAnySnapshot = Object.keys(latestSnapshotValues).length > 0;
+  // Specifically whether the CONFIGURED risk-cap partition has a snapshot — hasAnySnapshot
+  // (any partition at all) would otherwise hide this hint once the user has snapshotted a
+  // *different* partition, leaving "₹0 active capital" with no explanation for why it's 0.
+  const riskCapPartitionHasSnapshot =
+    latestSnapshotValues[blueprintSettings.riskCapPartition] !== undefined;
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    const entries: Array<{ brokerPartition: PortfolioPartitionKey; currentValue: number }> = [];
-    for (const p of PORTFOLIO_PARTITIONS) {
-      const raw = values[p.key];
+    const entries: Array<{ brokerPartition: PartitionId; currentValue: number }> = [];
+    for (const p of brokerPartitions) {
+      const raw = values[p.id];
       if (raw && raw.trim() !== "") {
         const n = Number(raw);
-        if (!isNaN(n) && n >= 0) entries.push({ brokerPartition: p.key, currentValue: n });
+        if (!isNaN(n) && n >= 0) entries.push({ brokerPartition: p.id, currentValue: n });
       }
     }
     if (entries.length === 0) {
@@ -94,12 +114,16 @@ function CapitalSnapshotPanel() {
             <Wallet className="size-4 text-primary-foreground" />
           </div>
           <div className="text-left">
-            <p className="text-sm font-semibold">Capital Snapshot</p>
+            <p className="text-sm font-display font-semibold tracking-tight">Capital Snapshot</p>
             <p className="text-xs text-muted-foreground">
-              Dhan Swing active capital:{" "}
-              <span className="text-foreground font-medium tabular-nums">{inr(dhanSwingCapital)}</span>
-              {!hasAnySnapshot && (
-                <span className="ml-1 text-[oklch(0.78_0.18_80)]">(using default)</span>
+              {partitionLabel(blueprintSettings.riskCapPartition)} active capital:{" "}
+              <Sensitive>
+                <span className="text-foreground font-medium tnum">
+                  <AnimatedNumber value={riskCapCapital} format={inr} />
+                </span>
+              </Sensitive>
+              {!riskCapPartitionHasSnapshot && (
+                <span className="ml-1 text-[oklch(0.78_0.18_80)]">(no snapshot yet)</span>
               )}
             </p>
           </div>
@@ -113,17 +137,23 @@ function CapitalSnapshotPanel() {
       {/* Partition value tiles — always visible summary */}
       {hasAnySnapshot && !open && (
         <div className="px-4 pb-4 grid grid-cols-2 md:grid-cols-4 gap-2">
-          {PORTFOLIO_PARTITIONS.map((p) => {
-            const val = latestSnapshotValues[p.key];
+          {brokerPartitions.map((p) => {
+            const val = latestSnapshotValues[p.id];
             return (
-              <div key={p.key} className="glass rounded-xl p-3">
+              <SpotlightCard key={p.id} className="rounded-xl p-3">
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  {p.label}
+                  {p.name}
                 </p>
-                <p className="text-sm font-semibold tabular-nums mt-1">
-                  {val !== undefined ? inr(val) : <span className="text-muted-foreground">—</span>}
+                <p className="text-sm font-semibold tnum mt-1">
+                  {val !== undefined ? (
+                    <Sensitive>
+                      <AnimatedNumber value={val} format={inr} />
+                    </Sensitive>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
                 </p>
-              </div>
+              </SpotlightCard>
             );
           })}
         </div>
@@ -139,10 +169,10 @@ function CapitalSnapshotPanel() {
             Enter current portfolio values (leave blank to skip a partition)
           </p>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {PORTFOLIO_PARTITIONS.map((p) => (
-              <div key={p.key}>
+            {brokerPartitions.map((p) => (
+              <div key={p.id}>
                 <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  {p.label}
+                  {p.name}
                 </Label>
                 <div className="mt-1.5 relative">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
@@ -152,12 +182,12 @@ function CapitalSnapshotPanel() {
                     type="number"
                     step="1"
                     min="0"
-                    value={values[p.key] ?? ""}
-                    onChange={(e) => setValues((v) => ({ ...v, [p.key]: e.target.value }))}
-                    className="bg-input/40 border-glass-border tabular-nums pl-7"
+                    value={values[p.id] ?? ""}
+                    onChange={(e) => setValues((v) => ({ ...v, [p.id]: e.target.value }))}
+                    className="bg-input/40 border-glass-border tnum pl-7"
                     placeholder={
-                      latestSnapshotValues[p.key] !== undefined
-                        ? String(latestSnapshotValues[p.key])
+                      latestSnapshotValues[p.id] !== undefined
+                        ? String(latestSnapshotValues[p.id])
                         : "0"
                     }
                   />
@@ -193,13 +223,20 @@ function CapitalSnapshotPanel() {
 
 // ─── Main page ─────────────────────────────────────────────────────────────
 function SwingPage() {
-  const { trades, addTrade, closeTrade, deleteTrade, dhanSwingCapital } = useStore();
+  const {
+    trades, addTrade, closeTrade, deleteTrade, riskCapCapital, blueprintSettings,
+    brokerPartitions, partitionLabel,
+  } = useStore();
+  const riskCapPartitionLabel = partitionLabel(blueprintSettings.riskCapPartition);
 
   // ── entry form state ──────────────────────────────────────────────────────
-  const [partition, setPartition] = useState<BrokerPartition>("Dhan Swing");
+  // Seeded from the live list rather than the hardcoded "Primary Broker" id:
+  // that built-in is deletable, and a dangling seed left the Select blank
+  // while still stamping trades with a partition nothing resolves.
+  const [partition, setPartition] = useState<PartitionId>(brokerPartitions[0]?.id ?? "");
   const [ticker, setTicker] = useState("");
   const [fnoBlocked, setFnoBlocked] = useState(false);
-  const [entryDate, setEntryDate] = useState(new Date().toISOString().slice(0, 10));
+  const [entryDate, setEntryDate] = useState(todayLocalISO);
   const [qty, setQty] = useState("");
   const [entry, setEntry] = useState("");
   const [target, setTarget] = useState("");
@@ -212,10 +249,42 @@ function SwingPage() {
   const [closeReason, setCloseReason] = useState<CloseReason | null>(null);
   const [closeNotes, setCloseNotes] = useState("");
 
-  // ── dynamic risk cap from latest Dhan Swing snapshot ─────────────────────
+  // ── quick-log drawer + logged-trade ripple ───────────────────────────────
+  const [formOpen, setFormOpen] = useState(false);
+  const positionsRipple = useGlowRipple();
+
+  // Deep-link intent (command palette "New Swing Trade", dashboard quick
+  // card): ?action=add expands the drawer, then the param self-clears.
+  const { action } = Route.useSearch();
+  const nav = useNavigate({ from: Route.fullPath });
+  useEffect(() => {
+    if (action === "add") {
+      setFormOpen(true);
+      void nav({ search: {}, replace: true });
+    }
+  }, [action, nav]);
+
+  // The seed above runs before the store hydrates, so a partition the user
+  // deleted is still present at that moment. Once the real list settles,
+  // re-point the field if what it holds no longer exists.
+  useEffect(() => {
+    if (brokerPartitions.length === 0) return;
+    if (brokerPartitions.some((p) => p.id === partition)) return;
+    setPartition(brokerPartitions[0].id);
+  }, [brokerPartitions, partition]);
+
+  const toggleForm = () => {
+    // Closing the drawer unmounts the ticker input, which is the only thing
+    // that can clear the F&O violation banner — reset it here so the banner
+    // can't be left orphaned above a collapsed drawer.
+    if (formOpen) setFnoBlocked(false);
+    setFormOpen((v) => !v);
+  };
+
+  // ── dynamic risk cap from latest snapshot of the configured risk-cap partition ──
   const cap = useMemo(
-    () => dhanSwingCapital * BLUEPRINT.riskCapPct,
-    [dhanSwingCapital],
+    () => riskCapCapital * blueprintSettings.defaultRiskCapPct,
+    [riskCapCapital, blueprintSettings.defaultRiskCapPct],
   );
   const exposure = useMemo(() => Number(qty) * Number(entry) || 0, [qty, entry]);
   const exceedsCap = exposure > cap;
@@ -266,6 +335,7 @@ function SwingPage() {
     setTarget("");
     setStop("");
     setEntryNotes("");
+    positionsRipple.trigger();
   };
 
   const handleClose = (id: string) => {
@@ -287,13 +357,16 @@ function SwingPage() {
     <div className="space-y-6">
       <header>
         <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Module</p>
-        <h1 className="text-3xl md:text-4xl font-semibold mt-1">
+        <h1 className="text-3xl md:text-4xl font-display font-semibold tracking-tight mt-1">
           <span className="text-gradient">Swing</span> trade logger
         </h1>
         <p className="text-sm text-muted-foreground mt-2">
           Rule-enforced. Equity only. 3% risk cap on{" "}
-          <span className="text-foreground font-medium">{inr(dhanSwingCapital)}</span> Dhan Swing
-          capital → max {inr(cap)} per position.
+          <Sensitive>
+            <span className="text-foreground font-medium tnum">{inr(riskCapCapital)}</span>
+          </Sensitive>{" "}
+          {riskCapPartitionLabel} capital → max <Sensitive><span className="tnum">{inr(cap)}</span></Sensitive> per
+          position.
         </p>
       </header>
 
@@ -316,11 +389,8 @@ function SwingPage() {
       {/* ── Capital snapshot panel ────────────────────────────────────────────── */}
       <CapitalSnapshotPanel />
 
-      {/* ── Entry form ───────────────────────────────────────────────────────── */}
-      <section className="glass-strong rounded-2xl p-5 md:p-6">
-        <h2 className="font-semibold mb-4 flex items-center gap-2">
-          <TrendingUp className="size-4 text-primary" /> New swing entry
-        </h2>
+      {/* ── Entry form — collapsed by default so open positions lead ─────────── */}
+      <QuickLogDrawer label="Quick Log Trade" open={formOpen} onToggle={toggleForm}>
         <form onSubmit={submit} className="grid grid-cols-2 md:grid-cols-6 gap-3">
           {/* Row 1 */}
           <Field className="col-span-2 md:col-span-2" label="Ticker">
@@ -354,19 +424,19 @@ function SwingPage() {
               min="1"
               value={qty}
               onChange={(e) => setQty(e.target.value)}
-              className="bg-input/40 border-glass-border tabular-nums"
+              className="bg-input/40 border-glass-border tnum"
               placeholder="0"
             />
           </Field>
           <Field className="col-span-1 md:col-span-1" label="Partition">
-            <Select value={partition} onValueChange={(v: BrokerPartition) => setPartition(v)}>
+            <Select value={partition} onValueChange={(v: PartitionId) => setPartition(v)}>
               <SelectTrigger className="bg-input/40 border-glass-border">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {INVESTMENT_APPS.map((a) => (
+                {brokerPartitions.map((a) => (
                   <SelectItem key={a.id} value={a.id}>
-                    {a.label}
+                    {a.name}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -394,7 +464,7 @@ function SwingPage() {
               step="0.05"
               value={entry}
               onChange={(e) => setEntry(e.target.value)}
-              className="bg-input/40 border-glass-border tabular-nums"
+              className="bg-input/40 border-glass-border tnum"
               placeholder="0.00"
             />
           </Field>
@@ -404,7 +474,7 @@ function SwingPage() {
               step="0.05"
               value={target}
               onChange={(e) => setTarget(e.target.value)}
-              className="bg-input/40 border-glass-border tabular-nums"
+              className="bg-input/40 border-glass-border tnum"
               placeholder="0.00"
             />
           </Field>
@@ -414,7 +484,7 @@ function SwingPage() {
               step="0.05"
               value={stop}
               onChange={(e) => setStop(e.target.value)}
-              className="bg-input/40 border-glass-border tabular-nums"
+              className="bg-input/40 border-glass-border tnum"
               placeholder="0.00"
             />
           </Field>
@@ -437,11 +507,14 @@ function SwingPage() {
                   Position exposure
                 </span>
                 <span className="ml-2 text-muted-foreground/60">
-                  (3% of {inr(dhanSwingCapital)} Dhan Swing)
+                  (3% of <Sensitive><span className="tnum">{inr(riskCapCapital)}</span></Sensitive>{" "}
+                  {riskCapPartitionLabel})
                 </span>
               </div>
-              <span className="tabular-nums font-medium">
-                {inr(exposure)} / {inr(cap)} cap
+              <span className="tnum font-medium">
+                <Sensitive>
+                  {inr(exposure)} / {inr(cap)} cap
+                </Sensitive>
               </span>
             </div>
             <div className="mt-2 h-2 rounded-full bg-white/5 overflow-hidden">
@@ -449,14 +522,14 @@ function SwingPage() {
                 className={`h-full transition-all duration-200 ${
                   exceedsCap ? "bg-destructive" : "gradient-primary"
                 }`}
-                style={{ width: `${Math.min(100, (exposure / cap) * 100)}%` }}
+                style={{ width: `${cap > 0 ? Math.min(100, (exposure / cap) * 100) : 0}%` }}
               />
             </div>
             {exceedsCap && (
               <p className="mt-2 text-xs text-destructive flex items-center gap-1.5 font-medium">
                 <AlertTriangle className="size-3.5" />
-                Risk Limit Exceeded: Position size is greater than 3% of active Dhan Swing
-                allocation.
+                Risk Limit Exceeded: Position size is greater than 3% of active{" "}
+                {riskCapPartitionLabel} allocation.
               </p>
             )}
           </div>
@@ -471,11 +544,11 @@ function SwingPage() {
             </Button>
           </div>
         </form>
-      </section>
+      </QuickLogDrawer>
 
       {/* ── Open positions ────────────────────────────────────────────────────── */}
-      <section className="glass rounded-2xl p-5">
-        <h2 className="font-semibold mb-4">
+      <section className={`glass rounded-2xl p-5 ${positionsRipple.className}`}>
+        <h2 className="font-display font-semibold tracking-tight mb-4">
           Open positions
           {openTrades.length > 0 && (
             <span className="ml-2 text-xs text-muted-foreground font-normal">
@@ -504,12 +577,17 @@ function SwingPage() {
                           {t.source}
                         </span>
                         <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                          {t.partition}
+                          {partitionLabel(t.partition)}
                         </span>
                       </div>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {fmtDate(t.entryDate)} • {t.qty} × {inr(t.entryPrice)} • Tgt{" "}
-                        {inr(t.targetPrice)} • SL {inr(t.stopLoss)}
+                        {fmtDate(t.entryDate)} •{" "}
+                        <Sensitive>
+                          <span className="tnum">
+                            {t.qty} × {inr(t.entryPrice)} • Tgt {inr(t.targetPrice)} • SL{" "}
+                            {inr(t.stopLoss)}
+                          </span>
+                        </Sensitive>
                       </p>
                       {t.notes && (
                         <p className="text-xs text-muted-foreground/70 mt-1 italic">{t.notes}</p>
@@ -520,7 +598,7 @@ function SwingPage() {
                         <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
                           R:R
                         </p>
-                        <p className="font-semibold tabular-nums text-sm">
+                        <p className="font-semibold tnum text-sm">
                           {isFinite(r) ? r.toFixed(2) : "—"}
                         </p>
                       </div>
@@ -605,7 +683,7 @@ function SwingPage() {
       {/* ── Closed positions ─────────────────────────────────────────────────── */}
       {closedTrades.length > 0 && (
         <section className="glass rounded-2xl p-5">
-          <h2 className="font-semibold mb-4">
+          <h2 className="font-display font-semibold tracking-tight mb-4">
             Closed positions
             <span className="ml-2 text-xs text-muted-foreground font-normal">
               ({closedTrades.length})
@@ -632,13 +710,18 @@ function SwingPage() {
                         </span>
                       )}
                       <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                        {t.partition}
+                        {partitionLabel(t.partition)}
                       </span>
                     </div>
                     <p className="text-xs text-muted-foreground mt-0.5">
                       Entry {fmtDate(t.entryDate)}
-                      {t.exitDate ? ` → Closed ${fmtDate(t.exitDate)}` : ""} • {t.qty} ×{" "}
-                      {inr(t.entryPrice)} • Tgt {inr(t.targetPrice)} • SL {inr(t.stopLoss)}
+                      {t.exitDate ? ` → Closed ${fmtDate(t.exitDate)}` : ""} •{" "}
+                      <Sensitive>
+                        <span className="tnum">
+                          {t.qty} × {inr(t.entryPrice)} • Tgt {inr(t.targetPrice)} • SL{" "}
+                          {inr(t.stopLoss)}
+                        </span>
+                      </Sensitive>
                     </p>
                     {t.notes && (
                       <p className="text-xs text-muted-foreground/60 mt-0.5 italic">{t.notes}</p>

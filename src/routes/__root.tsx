@@ -10,7 +10,7 @@ import {
 import { Toaster } from "@/components/ui/sonner";
 import { AuthProvider } from "@/lib/auth";
 import { StoreProvider } from "@/lib/store";
-import { PwaInstallBanner } from "@/lib/pwa";
+import { PwaInstallBanner, useServiceWorkerRegistration } from "@/lib/pwa";
 
 import appCss from "../styles.css?url";
 
@@ -52,7 +52,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" },
-      { name: "theme-color", content: "#0f1626" },
+      { name: "theme-color", content: "#05070a" },
       { title: "FinStride — Cashflow & Swing Trade Tracker" },
       { name: "description", content: "Mobile-first personal cashflow, runway and rule-enforced swing trade tracker." },
       { property: "og:title", content: "FinStride" },
@@ -65,6 +65,22 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "mobile-web-app-capable", content: "yes" },
     ],
     links: [
+      // Brand typography: Clash Display (Fontshare) for display headings,
+      // JetBrains Mono (Google Fonts) for financial figures. Both stacks
+      // declare local fallbacks in styles.css, so an offline/PWA session
+      // degrades gracefully instead of blocking on these.
+      { rel: "preconnect", href: "https://api.fontshare.com" },
+      { rel: "preconnect", href: "https://cdn.fontshare.com", crossOrigin: "anonymous" },
+      { rel: "preconnect", href: "https://fonts.googleapis.com" },
+      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
+      {
+        rel: "stylesheet",
+        href: "https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap",
+      },
+      {
+        rel: "stylesheet",
+        href: "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap",
+      },
       { rel: "stylesheet", href: appCss },
       { rel: "manifest", href: "/manifest.json" },
       { rel: "apple-touch-icon", sizes: "192x192", href: "/icons/icon-192.png" },
@@ -92,6 +108,7 @@ function RootShell({ children }: { children: React.ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  useServiceWorkerRegistration();
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>

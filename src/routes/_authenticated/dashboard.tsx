@@ -1,30 +1,38 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo } from "react";
 import { ArrowDownRight, ArrowUpRight, Wallet, TrendingUp, Shield, Activity } from "lucide-react";
-import { useStore, BLUEPRINT } from "@/lib/store";
+import { useStore } from "@/lib/store";
 import { inr, fmtDate } from "@/lib/format";
+import { AnimatedNumber } from "@/components/AnimatedNumber";
+import { Sensitive } from "@/components/Sensitive";
 import { DailyQuoteFooter } from "@/components/DailyQuoteFooter";
+import { SpotlightCard } from "@/components/ui/SpotlightCard";
+import { RunwayGauge } from "@/components/ui/RunwayGauge";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({ component: Dashboard });
 
+const TRANSFER_CATS = new Set(["Capital Transfer (In)", "Capital Transfer (Out)"]);
+
 function Dashboard() {
-  const { transactions, trades } = useStore();
+  const { transactions, trades, blueprintSettings, accountLabel } = useStore();
 
   const stats = useMemo(() => {
-    const income = transactions.filter((t) => t.type === "income").reduce((a, b) => a + b.amount, 0);
-    const expense = transactions.filter((t) => t.type === "expense").reduce((a, b) => a + b.amount, 0);
-    const commitments = BLUEPRINT.fixedRunrate + BLUEPRINT.scooterEmi;
-    const runway = (BLUEPRINT.salaryBaseline - commitments);
+    // Capital transfers are excluded from operational income/expense — they only move money
+    const operational = transactions.filter((t) => !TRANSFER_CATS.has(t.category));
+    const income  = operational.filter((t) => t.type === "income" ).reduce((a, b) => a + b.amount, 0);
+    const expense = operational.filter((t) => t.type === "expense").reduce((a, b) => a + b.amount, 0);
+    const commitments = blueprintSettings.fixedRunrate + blueprintSettings.scooterEmi;
+    const runway = blueprintSettings.defaultSalary - commitments;
     return { income, expense, commitments, runway, net: income - expense };
-  }, [transactions]);
+  }, [transactions, blueprintSettings]);
 
   const recent = transactions.slice(0, 5);
 
   return (
     <div className="space-y-6">
       <header>
-        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Command Deck</p>
-        <h1 className="text-3xl md:text-4xl font-semibold mt-1">
+        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Glance Hub</p>
+        <h1 className="text-3xl md:text-4xl font-display font-semibold tracking-tight mt-1">
           Your <span className="text-gradient">runway</span> at a glance
         </h1>
         <p className="text-sm text-muted-foreground mt-2">Blueprint-enforced cashflow + disciplined swing trading.</p>
@@ -36,38 +44,72 @@ function Dashboard() {
           tone="primary"
           icon={<Wallet className="size-5" />}
           label="Monthly Salary Baseline"
-          value={inr(BLUEPRINT.salaryBaseline)}
+          value={blueprintSettings.defaultSalary}
           hint="Fixed monthly income"
         />
         <KpiCard
           tone="success"
           icon={<Shield className="size-5" />}
           label="Fixed Operational Runway"
-          value={inr(stats.runway)}
-          hint={`After ${inr(stats.commitments)} commitments`}
+          value={stats.runway}
+          hint={
+            <>
+              After <Sensitive><span className="tnum">{inr(stats.commitments)}</span></Sensitive>{" "}
+              commitments
+            </>
+          }
         />
         <KpiCard
           tone="danger"
           icon={<Activity className="size-5" />}
           label="Active Commitments"
-          value={inr(stats.commitments)}
-          hint={`${inr(BLUEPRINT.fixedRunrate)} runrate + ${inr(BLUEPRINT.scooterEmi)} EMI`}
+          value={stats.commitments}
+          hint={
+            <>
+              <Sensitive><span className="tnum">{inr(blueprintSettings.fixedRunrate)}</span></Sensitive>{" "}
+              runrate +{" "}
+              <Sensitive><span className="tnum">{inr(blueprintSettings.scooterEmi)}</span></Sensitive>{" "}
+              EMI
+            </>
+          }
         />
       </section>
 
-      {/* Secondary stats */}
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <MiniStat label="Income (logged)" value={inr(stats.income)} icon={<ArrowUpRight className="size-4 text-[oklch(0.72_0.18_155)]" />} />
-        <MiniStat label="Expenses (logged)" value={inr(stats.expense)} icon={<ArrowDownRight className="size-4 text-[oklch(0.7_0.22_20)]" />} />
-        <MiniStat label="Net flow" value={inr(stats.net)} icon={<Wallet className="size-4 text-primary" />} />
-        <MiniStat label="Active trades" value={String(trades.length)} icon={<TrendingUp className="size-4 text-accent" />} />
+      {/* Runway gauge + secondary stats */}
+      <section className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-3">
+        <SpotlightCard className="rounded-2xl p-5">
+          <p className="text-xs uppercase tracking-wider text-muted-foreground mb-3">
+            Runway consumption
+          </p>
+          <RunwayGauge consumed={stats.commitments} total={blueprintSettings.defaultSalary} />
+        </SpotlightCard>
+        <div className="grid grid-cols-2 gap-3 content-start">
+          <MiniStat
+            label="Income (logged)"
+            icon={<ArrowUpRight className="size-4 text-[oklch(0.72_0.18_155)]" />}
+          >
+            <Sensitive><AnimatedNumber value={stats.income} format={inr} /></Sensitive>
+          </MiniStat>
+          <MiniStat
+            label="Expenses (logged)"
+            icon={<ArrowDownRight className="size-4 text-[oklch(0.7_0.22_20)]" />}
+          >
+            <Sensitive><AnimatedNumber value={stats.expense} format={inr} /></Sensitive>
+          </MiniStat>
+          <MiniStat label="Net flow" icon={<Wallet className="size-4 text-primary" />}>
+            <Sensitive><AnimatedNumber value={stats.net} format={inr} /></Sensitive>
+          </MiniStat>
+          <MiniStat label="Active trades" icon={<TrendingUp className="size-4 text-accent" />}>
+            {String(trades.length)}
+          </MiniStat>
+        </div>
       </section>
 
       {/* Recent ledger */}
       <section className="glass rounded-2xl p-5">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h2 className="font-semibold">Recent Transactions</h2>
+            <h2 className="font-display font-semibold tracking-tight">Recent Transactions</h2>
             <p className="text-xs text-muted-foreground">Latest 5 movements</p>
           </div>
           <Link to="/cashflow" className="text-xs text-primary hover:underline">Open ledger →</Link>
@@ -84,11 +126,13 @@ function Dashboard() {
                   </div>
                   <div className="min-w-0">
                     <p className="text-sm font-medium truncate">{t.category}</p>
-                    <p className="text-xs text-muted-foreground">{fmtDate(t.date)} • {t.account}</p>
+                    <p className="text-xs text-muted-foreground">{fmtDate(t.date)} • {accountLabel(t.account)}</p>
                   </div>
                 </div>
-                <p className={`font-semibold tabular-nums ${t.type === "income" ? "text-[oklch(0.78_0.16_155)]" : "text-[oklch(0.75_0.18_25)]"}`}>
-                  {t.type === "income" ? "+" : "−"}{inr(t.amount)}
+                <p className={`font-semibold tnum ${t.type === "income" ? "text-[oklch(0.78_0.16_155)]" : "text-[oklch(0.75_0.18_25)]"}`}>
+                  <Sensitive>
+                    {t.type === "income" ? "+" : "−"}{inr(t.amount)}
+                  </Sensitive>
                 </p>
               </li>
             ))}
@@ -97,12 +141,21 @@ function Dashboard() {
       </section>
 
       <section className="grid md:grid-cols-2 gap-4">
-        <Link to="/cashflow" className="glass rounded-2xl p-5 hover:glow transition-all group">
+        {/* action=add lands with the entry drawer already expanded */}
+        <Link
+          to="/cashflow"
+          search={{ tab: "ledger", action: "add" }}
+          className="glass rounded-2xl p-5 hover:glow transition-all group"
+        >
           <Wallet className="size-6 text-primary mb-3" />
           <p className="font-semibold">Log a transaction</p>
           <p className="text-sm text-muted-foreground mt-1">Add income or expense to the ledger.</p>
         </Link>
-        <Link to="/swing" className="glass rounded-2xl p-5 hover:glow transition-all group">
+        <Link
+          to="/swing"
+          search={{ action: "add" }}
+          className="glass rounded-2xl p-5 hover:glow transition-all group"
+        >
           <TrendingUp className="size-6 text-accent mb-3" />
           <p className="font-semibold">Log a swing trade</p>
           <p className="text-sm text-muted-foreground mt-1">Equity only. 3% risk cap. F&O blocked.</p>
@@ -114,29 +167,31 @@ function Dashboard() {
   );
 }
 
-function KpiCard({ tone, icon, label, value, hint }: { tone: "primary" | "success" | "danger"; icon: React.ReactNode; label: string; value: string; hint: string }) {
+function KpiCard({ tone, icon, label, value, hint }: { tone: "primary" | "success" | "danger"; icon: React.ReactNode; label: string; value: number; hint: React.ReactNode }) {
   const grad = tone === "primary" ? "gradient-primary" : tone === "success" ? "gradient-success" : "gradient-danger";
   return (
-    <div className="glass rounded-2xl p-5 relative overflow-hidden">
+    <SpotlightCard className="rounded-2xl p-5">
       <div className={`absolute -right-10 -top-10 size-32 ${grad} opacity-20 blur-2xl rounded-full`} />
       <div className="flex items-center justify-between">
         <p className="text-xs uppercase tracking-wider text-muted-foreground">{label}</p>
         <div className={`size-9 rounded-xl ${grad} grid place-items-center text-background`}>{icon}</div>
       </div>
-      <p className="text-3xl font-semibold mt-3 tabular-nums">{value}</p>
+      <p className="text-3xl font-semibold mt-3 tnum">
+        <Sensitive><AnimatedNumber value={value} format={inr} /></Sensitive>
+      </p>
       <p className="text-xs text-muted-foreground mt-1">{hint}</p>
-    </div>
+    </SpotlightCard>
   );
 }
 
-function MiniStat({ label, value, icon }: { label: string; value: string; icon: React.ReactNode }) {
+function MiniStat({ label, children, icon }: { label: string; children: React.ReactNode; icon: React.ReactNode }) {
   return (
-    <div className="glass rounded-xl p-4">
+    <SpotlightCard className="rounded-xl p-4">
       <div className="flex items-center justify-between">
         <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</p>
         {icon}
       </div>
-      <p className="text-lg font-semibold mt-2 tabular-nums">{value}</p>
-    </div>
+      <p className="text-lg font-semibold mt-2 tnum">{children}</p>
+    </SpotlightCard>
   );
 }

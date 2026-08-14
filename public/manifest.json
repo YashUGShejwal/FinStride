@@ -1,13 +1,13 @@
 {
-  "name": "FinStride",
+  "name": "FinStride — Obsidian Financial Workstation",
   "short_name": "FinStride",
   "description": "Mobile-first personal cashflow, runway and rule-enforced swing trade tracker.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#0f1626",
-  "theme_color": "#0f1626",
+  "background_color": "#05070a",
+  "theme_color": "#05070a",
   "categories": ["finance", "productivity"],
   "lang": "en",
   "icons": [
