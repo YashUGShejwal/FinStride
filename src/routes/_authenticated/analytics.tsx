@@ -6,8 +6,9 @@ import {
 } from "recharts";
 import {
   PieChart as PieChartIcon, TrendingUp, X, Filter,
-  Plus, History, ChevronDown, ChevronUp, Trash2, TriangleAlert,
+  Plus, History, ChevronDown, ChevronUp, Trash2, TriangleAlert, FileLock2,
 } from "lucide-react";
+import { EcasImportDialog } from "@/components/EcasImportDialog";
 import { toast } from "sonner";
 import {
   useStore,
@@ -17,7 +18,7 @@ import {
   type PortfolioSnapshot,
   type SnapshotTarget,
 } from "@/lib/store";
-import { inr, fmtDate, todayLocalISO } from "@/lib/format";
+import { inr, fmtDate, pinToNoonUTC, todayLocalISO } from "@/lib/format";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { Sensitive } from "@/components/Sensitive";
 import { SpotlightCard } from "@/components/ui/SpotlightCard";
@@ -212,6 +213,7 @@ function AnalyticsPage() {
   const [mounted, setMounted] = useState(false);
   const [filters, setFilters] = useState<AnalyticsFilter>(() => ({ partitions: [...ALL_PARTITIONS] }));
   const [addSnapshotOpen, setAddSnapshotOpen] = useState(false);
+  const [ecasOpen, setEcasOpen] = useState(false);
   // Set right before opening the dialog from a freshness chip so it opens
   // pre-selected to that target; cleared on close so a plain "+ Add Snapshot"
   // click afterwards falls back to the dialog's own default selection.
@@ -447,13 +449,24 @@ function AnalyticsPage() {
             Investment returns, allocation breakdown, and value trends over time.
           </p>
         </div>
-        <Button
-          onClick={() => setAddSnapshotOpen(true)}
-          className="gradient-primary text-primary-foreground border-0 gap-2 h-10 shrink-0"
-        >
-          <Plus className="size-4" /> Add Snapshot
-        </Button>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button
+            onClick={() => setEcasOpen(true)}
+            variant="outline"
+            className="border-glass-border gap-2 h-10 hover:border-primary/40"
+          >
+            <FileLock2 className="size-4" /> Import eCAS PDF
+          </Button>
+          <Button
+            onClick={() => setAddSnapshotOpen(true)}
+            className="gradient-primary text-primary-foreground border-0 gap-2 h-10"
+          >
+            <Plus className="size-4" /> Add Snapshot
+          </Button>
+        </div>
       </header>
+
+      <EcasImportDialog open={ecasOpen} onOpenChange={setEcasOpen} />
 
       <AddSnapshotDialog
         open={addSnapshotOpen}
@@ -828,10 +841,6 @@ function AnalyticsPage() {
 }
 
 // ─── Add Snapshot dialog ───────────────────────────────────────────────────
-function pinToNoonUTC(dateOnly: string): string {
-  return `${dateOnly}T12:00:00.000Z`;
-}
-
 function AddSnapshotDialog({
   open,
   onOpenChange,

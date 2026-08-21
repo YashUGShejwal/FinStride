@@ -28,3 +28,14 @@ export const todayLocalISO = (): string => {
   const d = String(now.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
 };
+
+/**
+ * "YYYY-MM-DD" -> a fixed noon-UTC instant for that calendar day. Portfolio
+ * snapshots dedupe/upsert on (snapshotDate, brokerPartition) — pinning every
+ * date-only entry to the SAME time-of-day means two snapshots for "the same
+ * day" (one added manually, one imported) always land on the identical
+ * instant and correctly overwrite each other instead of becoming near-duplicate
+ * rows a few hours apart. Shared by every snapshot-creating UI (Analytics'
+ * AddSnapshotDialog, the eCAS importer) for exactly that reason.
+ */
+export const pinToNoonUTC = (dateOnly: string): string => `${dateOnly}T12:00:00.000Z`;
