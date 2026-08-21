@@ -12,18 +12,18 @@
  * app's own ledger sync, same as manual entry).
  */
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  CheckSquare, FileSpreadsheet, Loader2, Search, Square, TriangleAlert, UploadCloud,
+  CheckSquare, Columns3, FileSpreadsheet, Loader2, Search, Square, TriangleAlert, UploadCloud,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useStore, type PaymentMode, type Transaction, type TxType } from "@/lib/store";
 import {
   applyMapping,
+  categorizeNarration,
   parseStatementCsv,
   type ColumnMapping,
   type ParsedStatementRow,
-  type ParseNeedsMapping,
 } from "@/lib/parsers/csvStatementParser";
 import { inr, fmtDate } from "@/lib/format";
 import { Sensitive } from "@/components/Sensitive";
@@ -51,14 +51,28 @@ type StagedRow = {
   type: TxType;
   category: string;
   selected: boolean;
+  isDuplicate: boolean;
 };
 
 type Step = "drop" | "map" | "review";
 type DupFilter = "all" | "new" | "dup";
 
-/** Duplicate identity versus the existing ledger: same day + amount + account. */
-const dupKey = (dayISO: string, amount: number, account: string) =>
-  `${dayISO.slice(0, 10)}|${amount}|${account}`;
+/** What the manual mapper (and the review step's "re-map") works from. */
+type MapContext = {
+  headers: string[];
+  headerRowIndex: number;
+  grid: string[][];
+  reason: string;
+};
+
+/**
+ * Duplicate identity versus the existing ledger: same day + amount + account
+ * + TYPE. Type matters: amounts are positive magnitudes on both sides, so
+ * without it an existing ₹5,000 expense would falsely flag a same-day ₹5,000
+ * CREDIT as its duplicate and silently deselect a legitimate inflow.
+ */
+const dupKey = (dayISO: string, amount: number, account: string, type: TxType) =>
+  `${dayISO.slice(0, 10)}|${amount}|${account}|${type}`;
 
 /** Rendering cap — selection/bulk actions still cover the FULL filtered set. */
 const ROW_RENDER_CAP = 200;
@@ -89,16 +103,29 @@ export function CsvImportDrawer({
   );
   const [staged, setStaged] = useState<StagedRow[]>([]);
   const [skippedRows, setSkippedRows] = useState(0);
-  const [pendingMap, setPendingMap] = useState<ParseNeedsMapping | null>(null);
+  const [mapCtx, setMapCtx] = useState<MapContext | null>(null);
   const [mapDate, setMapDate] = useState("");
   const [mapNarration, setMapNarration] = useState("");
   const [mapAmount, setMapAmount] = useState("");
   const [mapCredit, setMapCredit] = useState("none");
+  const [mapDrCr, setMapDrCr] = useState("none");
+  const [noHeader, setNoHeader] = useState(false);
   const [q, setQ] = useState("");
   const [dupFilter, setDupFilter] = useState<DupFilter>("all");
   const [dragging, setDragging] = useState(false);
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // The initializer above runs once at page mount, BEFORE the store finishes
+  // hydrating — deleted accounts are still present then. Re-point once the
+  // real list settles so the Select never sits blank on a dangling id and an
+  // import can never target an account nothing resolves (same pattern as the
+  // ledger form's account field in cashflow.tsx).
+  useEffect(() => {
+    if (accountModes.length === 0) return;
+    if (accountModes.some((a) => a.id === accountId)) return;
+    setAccountId((accountModes.find((a) => a.type === "bank") ?? accountModes[0]).id);
+  }, [accountModes, accountId]);
 
   // A suggested category can name a default the user has deleted (they're
   // tombstonable) — clamp to the live list so no row Select ever sits blank.
@@ -112,33 +139,47 @@ export function CsvImportDrawer({
     setFileName("");
     setStaged([]);
     setSkippedRows(0);
-    setPendingMap(null);
+    setMapCtx(null);
     setMapDate("");
     setMapNarration("");
     setMapAmount("");
     setMapCredit("none");
+    setMapDrCr("none");
+    setNoHeader(false);
     setQ("");
     setDupFilter("all");
     setDragging(false);
     setImporting(false);
   };
 
-  // ── Existing-ledger duplicate keys for the chosen account ─────────────────
-  const existingKeys = useMemo(() => {
+  // Membership set for POST-staging duplicate rechecks (direction flips).
+  // Initial staging uses a count-aware pass instead — see stageRows.
+  const existingKeySet = useMemo(() => {
     const set = new Set<string>();
     for (const t of transactions) {
-      if (t.account === accountId) set.add(dupKey(t.date, t.amount, t.account));
+      if (t.account === accountId) set.add(dupKey(t.date, t.amount, t.account, t.type));
     }
     return set;
   }, [transactions, accountId]);
 
-  const isDuplicate = (r: StagedRow) => existingKeys.has(dupKey(r.dateISO, r.amount, accountId));
-
   // ── Staging from parsed rows ───────────────────────────────────────────────
   const stageRows = (rows: ParsedStatementRow[], skipped: number) => {
+    // COUNT-AWARE duplicate matching: N existing ledger rows flag at most N
+    // staged rows. A plain membership check would flag BOTH of two distinct
+    // ₹500 spends on one day because a single ₹500 entry already exists —
+    // silently dropping the second, real transaction.
+    const counts = new Map<string, number>();
+    for (const t of transactions) {
+      if (t.account !== accountId) continue;
+      const k = dupKey(t.date, t.amount, t.account, t.type);
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
     const next: StagedRow[] = rows.map((r) => {
       const category = clampCategory(r.suggestedCategory, r.suggestedType);
-      const dup = existingKeys.has(dupKey(r.dateISO, r.amount, accountId));
+      const k = dupKey(r.dateISO, r.amount, accountId, r.suggestedType);
+      const remaining = counts.get(k) ?? 0;
+      if (remaining > 0) counts.set(k, remaining - 1);
+      const dup = remaining > 0;
       return {
         key: r.sourceIndex,
         dateISO: r.dateISO,
@@ -150,6 +191,7 @@ export function CsvImportDrawer({
         refNo: r.refNo,
         type: r.suggestedType,
         category,
+        isDuplicate: dup,
         // Likely-duplicates start unticked so a re-uploaded statement can't
         // silently double the ledger; one click re-includes any of them.
         selected: !dup,
@@ -181,15 +223,25 @@ export function CsvImportDrawer({
       return;
     }
     if (result.status === "needs-mapping") {
-      setPendingMap(result);
+      setMapCtx(result);
       setStep("map");
       return;
     }
+    // Keep the grid around so "Re-map columns" stays available from the
+    // review step — auto-detection can succeed while still picking a wrong
+    // column (or dropping one side of a split), and the user needs a way
+    // back that isn't abandoning the whole import.
+    setMapCtx({
+      headers: result.headers.map((h, i) => h || `Column ${i + 1}`),
+      headerRowIndex: result.headerRowIndex,
+      grid: result.grid,
+      reason: "Re-map the columns if auto-detection got something wrong, then re-stage the file.",
+    });
     stageRows(result.rows, result.skippedRows);
   };
 
   const applyManualMapping = () => {
-    if (!pendingMap) return;
+    if (!mapCtx) return;
     if (!mapDate || !mapNarration || !mapAmount) {
       toast.error("Map the Date, Description and Amount columns first");
       return;
@@ -202,10 +254,18 @@ export function CsvImportDrawer({
             debit: Number(mapAmount),
             credit: Number(mapCredit),
           }
-        : { date: Number(mapDate), narration: Number(mapNarration), amount: Number(mapAmount) };
+        : {
+            date: Number(mapDate),
+            narration: Number(mapNarration),
+            amount: Number(mapAmount),
+            drcr: mapDrCr !== "none" ? Number(mapDrCr) : undefined,
+          };
+    // "No header row": extraction starts at row 0 instead of headerRowIndex+1
+    // — otherwise the guessed "header" (a real transaction) and everything
+    // above it would silently never import.
     const { rows, skippedRows: skipped } = applyMapping(
-      pendingMap.grid,
-      pendingMap.headerRowIndex,
+      mapCtx.grid,
+      noHeader ? -1 : mapCtx.headerRowIndex,
       mapping,
     );
     if (rows.length === 0) {
@@ -222,21 +282,40 @@ export function CsvImportDrawer({
       if (s && !r.cleanedNarration.toLowerCase().includes(s) && !r.narration.toLowerCase().includes(s)) {
         return false;
       }
-      if (dupFilter === "new") return !isDuplicate(r);
-      if (dupFilter === "dup") return isDuplicate(r);
+      if (dupFilter === "new") return !r.isDuplicate;
+      if (dupFilter === "dup") return r.isDuplicate;
       return true;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [staged, q, dupFilter, existingKeys, accountId]);
+  }, [staged, q, dupFilter]);
 
   const selectedRows = useMemo(() => staged.filter((r) => r.selected), [staged]);
-  const dupCount = useMemo(() => staged.filter((r) => isDuplicate(r)).length, [staged, existingKeys]); // eslint-disable-line react-hooks/exhaustive-deps
+  const dupCount = useMemo(() => staged.filter((r) => r.isDuplicate).length, [staged]);
   const outflowTotal = selectedRows.filter((r) => r.direction === "debit").reduce((s, r) => s + r.amount, 0);
   const inflowTotal = selectedRows.filter((r) => r.direction === "credit").reduce((s, r) => s + r.amount, 0);
   const allFilteredSelected = filtered.length > 0 && filtered.every((r) => r.selected);
+  // Single-signed-amount statements with no Dr/Cr info parse every unsigned
+  // row as credit — a card export full of charges would import as all-income.
+  // Can't be fixed blind, but it CAN be surfaced.
+  const allOneDirection =
+    staged.length >= 5 && staged.every((r) => r.direction === staged[0].direction);
 
   const patchRow = (key: number, patch: Partial<StagedRow>) =>
     setStaged((s) => s.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+
+  // Flip a mis-detected row's direction in place: type follows direction, the
+  // category suggestion re-runs for the new side, and the duplicate flag is
+  // rechecked (dup identity includes type).
+  const flipDirection = (row: StagedRow) => {
+    const direction = row.direction === "debit" ? "credit" : "debit";
+    const type: TxType = direction === "debit" ? "expense" : "income";
+    const { category } = categorizeNarration(row.narration, direction);
+    patchRow(row.key, {
+      direction,
+      type,
+      category: clampCategory(category, type),
+      isDuplicate: existingKeySet.has(dupKey(row.dateISO, row.amount, accountId, type)),
+    });
+  };
 
   const toggleAllFiltered = () => {
     const target = !allFilteredSelected;
@@ -245,19 +324,28 @@ export function CsvImportDrawer({
   };
 
   const deselectDuplicates = () =>
-    setStaged((s) => s.map((r) => (isDuplicate(r) ? { ...r, selected: false } : r)));
+    setStaged((s) => s.map((r) => (r.isDuplicate ? { ...r, selected: false } : r)));
 
   // Bulk category values are group-prefixed ("expense:Dining" / "income:Salary")
-  // because "Other" exists on both sides — the bare string is ambiguous. The
-  // pick applies only to selected rows whose type matches the group.
+  // because "Other" exists on both sides — the bare string is ambiguous. Scope:
+  // selected rows WITHIN THE CURRENT FILTER whose type matches the group —
+  // the user is looking at the filtered grid, so acting on hidden rows (the
+  // whole file starts selected) would rewrite hundreds of categories unseen.
   const applyBulkCategory = (value: string) => {
     const [type, ...rest] = value.split(":");
     const category = rest.join(":");
     if (type !== "income" && type !== "expense") return;
-    setStaged((s) =>
-      s.map((r) => (r.selected && r.type === type ? { ...r, category } : r)),
+    // Resolve the target set BEFORE setState — the updater runs at render
+    // time, so counting inside it would report 0 to the toast.
+    const targets = new Set(
+      filtered.filter((r) => r.selected && r.type === type).map((r) => r.key),
     );
-    toast.success(`Category "${category}" applied to selected ${type} rows`);
+    if (targets.size === 0) {
+      toast.error(`No selected ${type} rows in the current view`);
+      return;
+    }
+    setStaged((s) => s.map((r) => (targets.has(r.key) ? { ...r, category } : r)));
+    toast.success(`Category "${category}" applied to ${targets.size} ${type} row${targets.size !== 1 ? "s" : ""} in view`);
   };
 
   // ── Import ─────────────────────────────────────────────────────────────────
@@ -274,15 +362,21 @@ export function CsvImportDrawer({
     // Yield one frame so the spinner paints before the (synchronous) batch
     // state update lands.
     await new Promise((r) => setTimeout(r, 60));
-    const txs: Omit<Transaction, "id">[] = selectedRows.map((r) => ({
-      date: r.dateISO,
-      type: r.type,
-      category: r.category,
-      account: accountId,
-      amount: r.amount,
-      tags: ["imported"],
-      notes: `${r.cleanedNarration}${r.refNo ? ` · Ref ${r.refNo}` : ""}`.slice(0, NOTES_MAX),
-    }));
+    const txs: Omit<Transaction, "id">[] = selectedRows.map((r) => {
+      // Truncate the narration, never the ref — appending before slicing
+      // would drop the reference number exactly on the long UPI/NEFT
+      // narrations where it matters most.
+      const refSuffix = r.refNo ? ` · Ref ${r.refNo}` : "";
+      return {
+        date: r.dateISO,
+        type: r.type,
+        category: r.category,
+        account: accountId,
+        amount: r.amount,
+        tags: ["imported"],
+        notes: `${r.cleanedNarration.slice(0, Math.max(0, NOTES_MAX - refSuffix.length))}${refSuffix}`,
+      };
+    });
     addTransactions(txs);
     setImporting(false);
     toast.success(`Imported ${txs.length} transaction${txs.length !== 1 ? "s" : ""} into ${accountLabel(accountId)}`);
@@ -306,9 +400,15 @@ export function CsvImportDrawer({
             <FileSpreadsheet className="size-4 text-primary" /> Import bank statement
           </DialogTitle>
           <DialogDescription className="flex items-center gap-2 flex-wrap">
-            <span>Stage, review and tag transactions from a CSV export.</span>
+            <span>
+              Stage, review and tag transactions from a CSV export. Imported rows sync to your
+              ledger exactly like manual entries.
+            </span>
+            {/* Scoped to what's true: PARSING is fully local — the file never
+                uploads anywhere. Rows the user imports sync like any manual
+                entry, so "zero data sent to servers" would be a false promise. */}
             <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border border-[oklch(0.72_0.18_155_/_0.35)] text-[oklch(0.78_0.16_155)]">
-              🛡️ 100% Client-Side — processed in RAM, zero data sent to servers
+              🛡️ Parsed 100% on-device — your file never leaves this browser
             </span>
           </DialogDescription>
         </DialogHeader>
@@ -383,39 +483,83 @@ export function CsvImportDrawer({
         )}
 
         {/* ── Step B: manual column mapper ─────────────────────────────────── */}
-        {step === "map" && pendingMap && (
+        {step === "map" && mapCtx && (
           <div className="px-6 py-6 space-y-4 overflow-y-auto">
-            <p className="text-sm text-muted-foreground">{pendingMap.reason}</p>
-            <div className="grid sm:grid-cols-2 gap-3">
-              <MapField label="Date column" value={mapDate} onChange={setMapDate} headers={pendingMap.headers} />
-              <MapField label="Description column" value={mapNarration} onChange={setMapNarration} headers={pendingMap.headers} />
-              <MapField
-                label="Amount column (signed, or Debit)"
-                value={mapAmount}
-                onChange={setMapAmount}
-                headers={pendingMap.headers}
+            <p className="text-sm text-muted-foreground">{mapCtx.reason}</p>
+            {(() => {
+              // With "no header" the labels ARE data — show samples instead
+              // of pretending a transaction row is a set of column names.
+              const columnLabels = mapCtx.headers.map((h, i) =>
+                noHeader
+                  ? `Column ${i + 1} · "${(mapCtx.grid[0]?.[i] ?? "").trim().slice(0, 18)}"`
+                  : h,
+              );
+              return (
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <MapField label="Date column" value={mapDate} onChange={setMapDate} headers={columnLabels} />
+                  <MapField label="Description column" value={mapNarration} onChange={setMapNarration} headers={columnLabels} />
+                  <MapField
+                    label="Amount column (signed, or Debit)"
+                    value={mapAmount}
+                    onChange={setMapAmount}
+                    headers={columnLabels}
+                  />
+                  <div>
+                    <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Credit column (only if separate)
+                    </Label>
+                    <Select value={mapCredit} onValueChange={setMapCredit}>
+                      <SelectTrigger className="bg-input/40 border-glass-border mt-1.5">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">— single amount column —</SelectItem>
+                        {columnLabels.map((h, i) => (
+                          <SelectItem key={i} value={String(i)}>
+                            {h}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {mapCredit === "none" && (
+                    <div>
+                      <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        Dr/Cr type column (optional)
+                      </Label>
+                      <Select value={mapDrCr} onValueChange={setMapDrCr}>
+                        <SelectTrigger className="bg-input/40 border-glass-border mt-1.5">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">— amounts carry their own sign —</SelectItem>
+                          {columnLabels.map((h, i) => (
+                            <SelectItem key={i} value={String(i)}>
+                              {h}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+            <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={noHeader}
+                onChange={(e) => setNoHeader(e.target.checked)}
+                className="accent-[oklch(0.72_0.18_155)]"
               />
-              <div>
-                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Credit column (only if separate)
-                </Label>
-                <Select value={mapCredit} onValueChange={setMapCredit}>
-                  <SelectTrigger className="bg-input/40 border-glass-border mt-1.5">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">— single amount column —</SelectItem>
-                    {pendingMap.headers.map((h, i) => (
-                      <SelectItem key={i} value={String(i)}>
-                        {h}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
+              This file has no header row (the first line is already a transaction)
+            </label>
             <div className="flex justify-between pt-2">
-              <Button variant="outline" className="border-glass-border" onClick={resetAll}>
+              <Button
+                variant="outline"
+                className="border-glass-border"
+                onClick={() => (staged.length > 0 ? setStep("review") : resetAll())}
+              >
                 Back
               </Button>
               <Button
@@ -455,6 +599,15 @@ export function CsvImportDrawer({
                   {fileName} → {accountLabel(accountId)}
                 </span>
               </div>
+
+              {allOneDirection && (
+                <p className={`flex items-start gap-1.5 text-[11px] ${AMBER}`}>
+                  <TriangleAlert className="size-3.5 shrink-0 mt-0.5" />
+                  Every row parsed as {staged[0].direction === "credit" ? "an inflow" : "an outflow"}.
+                  Card statements often list charges unsigned — if directions look wrong, click any
+                  amount to flip that row, or use "Re-map columns" to pick a Dr/Cr column.
+                </p>
+              )}
 
               {/* Search / filter / bulk actions */}
               <div className="flex flex-wrap items-center gap-2">
@@ -510,6 +663,18 @@ export function CsvImportDrawer({
                     Deselect duplicates
                   </Button>
                 )}
+                {mapCtx && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 border-glass-border gap-1.5"
+                    onClick={() => setStep("map")}
+                    title="Go back and pick the columns by hand — re-staging replaces this grid"
+                  >
+                    <Columns3 className="size-3.5" /> Re-map columns
+                  </Button>
+                )}
                 <Select value="" onValueChange={applyBulkCategory}>
                   <SelectTrigger className="h-8 w-40 text-xs bg-input/40 border-glass-border">
                     <SelectValue placeholder="Bulk set category" />
@@ -549,7 +714,7 @@ export function CsvImportDrawer({
               ) : (
                 <ul className="space-y-1.5">
                   {rendered.map((r) => {
-                    const dup = isDuplicate(r);
+                    const dup = r.isDuplicate;
                     const rowCategories = r.type === "income" ? incomeCategories : expenseCategories;
                     return (
                       <li
@@ -597,8 +762,11 @@ export function CsvImportDrawer({
                             ))}
                           </SelectContent>
                         </Select>
-                        <span
-                          className={`tnum text-sm font-semibold shrink-0 w-24 text-right ${
+                        <button
+                          type="button"
+                          onClick={() => flipDirection(r)}
+                          title="Click to flip between inflow and outflow"
+                          className={`tnum text-sm font-semibold shrink-0 w-24 text-right rounded-md px-1 -mx-1 hover:bg-white/[0.06] transition-colors ${
                             r.direction === "credit" ? EMERALD : ROSE
                           }`}
                         >
@@ -606,7 +774,7 @@ export function CsvImportDrawer({
                             {r.direction === "credit" ? "+" : "−"}
                             {inr(r.amount)}
                           </Sensitive>
-                        </span>
+                        </button>
                       </li>
                     );
                   })}
