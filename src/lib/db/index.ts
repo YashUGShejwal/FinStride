@@ -29,6 +29,7 @@ export {
   fetchAllUserData,
   isBundleEmpty,
   upsertTransaction,
+  upsertTransactions,
   deleteTransactionRow,
   upsertTrade,
   deleteTradeRow,

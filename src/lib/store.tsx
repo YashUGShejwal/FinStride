@@ -23,6 +23,7 @@ import {
   upsertSnapshots as dbUpsertSnapshots,
   upsertTrade as dbUpsertTrade,
   upsertTransaction as dbUpsertTransaction,
+  upsertTransactions as dbUpsertTransactions,
   type FinStrideClient,
 } from "@/lib/db";
 
@@ -945,6 +946,13 @@ type StoreCtx = {
   installApp: () => Promise<boolean>;
   // Transactions
   addTransaction: (t: Omit<Transaction, "id">) => void;
+  /**
+   * Batch insert (CSV statement imports): one optimistic state update, one
+   * tracked remote batch upsert. Synchronous like every other mutator here —
+   * the local commit IS the source of truth (offline-first), so callers never
+   * await the remote write; the pending-write safety net covers failures.
+   */
+  addTransactions: (txs: Omit<Transaction, "id">[]) => void;
   deleteTransaction: (id: string) => void;
   // Trades
   addTrade: (t: Omit<Trade, "id" | "status">) => void;
@@ -2120,6 +2128,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setTransactions((s) => [row, ...s]);
       const sync = getSync();
       if (sync) trackedWrite(dbUpsertTransaction(sync.client, sync.userId, row));
+    },
+    addTransactions: (txs) => {
+      if (txs.length === 0) return;
+      markLocalWrite();
+      const rows: Transaction[] = txs.map((t) => ({ ...t, id: crypto.randomUUID() }));
+      // Single state update (not N addTransaction calls): one render, and one
+      // localStorage persist once the effect runs — a 1000-row import must not
+      // serialize the whole ledger 1000 times.
+      setTransactions((s) => [...rows, ...s]);
+      const sync = getSync();
+      if (sync) trackedWrite(dbUpsertTransactions(sync.client, sync.userId, rows));
     },
     deleteTransaction: (id) => {
       markLocalWrite();

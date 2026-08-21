@@ -238,6 +238,34 @@ export async function upsertTransaction(
   return !error;
 }
 
+/**
+ * Batch upsert for CSV statement imports. Chunked so a 2000-row statement
+ * doesn't ride on one oversized PostgREST payload; the result is the AND of
+ * every chunk, so a single failed chunk keeps the pending-write safety net in
+ * src/lib/store.tsx engaged (localStorage still holds every row either way).
+ */
+const TX_BATCH_CHUNK = 500;
+
+export async function upsertTransactions(
+  client: FinStrideClient,
+  userId: string,
+  txs: Transaction[],
+): Promise<boolean> {
+  if (txs.length === 0) return true;
+  let ok = true;
+  for (let i = 0; i < txs.length; i += TX_BATCH_CHUNK) {
+    const chunk = txs.slice(i, i + TX_BATCH_CHUNK);
+    const { error } = await client
+      .from("cashflow_ledger")
+      .upsert(chunk.map((t) => transactionToRow(t, userId)));
+    if (error) {
+      logFailure(`upsertTransactions (rows ${i}–${i + chunk.length - 1})`, error);
+      ok = false;
+    }
+  }
+  return ok;
+}
+
 export async function deleteTransactionRow(
   client: FinStrideClient,
   userId: string,

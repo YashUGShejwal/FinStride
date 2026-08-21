@@ -2,9 +2,10 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { motion } from "framer-motion";
 import {
-  Search, Plus, Trash2, ArrowUpRight, ArrowDownRight,
+  Search, Plus, Trash2, ArrowUpRight, ArrowDownRight, FileSpreadsheet,
   CheckSquare, Square, CreditCard, CalendarCheck, ListChecks, BookOpenText,
 } from "lucide-react";
+import { CsvImportDrawer } from "@/components/CsvImportDrawer";
 import { useStore, type PaymentMode, type TxType } from "@/lib/store";
 import { inr, fmtDate, todayLocalISO } from "@/lib/format";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
@@ -40,6 +41,7 @@ function CashflowPage() {
   const { tab, action } = Route.useSearch();
   const nav = useNavigate({ from: Route.fullPath });
   const activeTab: CashflowTab = tab ?? "ledger";
+  const [importOpen, setImportOpen] = useState(false);
 
   // The URL is the tab state: the command palette and the notifications bell
   // both deep-link straight into a specific segment.
@@ -55,15 +57,26 @@ function CashflowPage() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Cash Flow Hub</p>
-        <h1 className="text-3xl md:text-4xl font-display font-semibold tracking-tight mt-1">
-          <span className="text-gradient">Cash flow</span> command
-        </h1>
-        <p className="text-sm text-muted-foreground mt-2">
-          Ledger and monthly obligations in one place. Every rupee accounted for.
-        </p>
+      <header className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Cash Flow Hub</p>
+          <h1 className="text-3xl md:text-4xl font-display font-semibold tracking-tight mt-1">
+            <span className="text-gradient">Cash flow</span> command
+          </h1>
+          <p className="text-sm text-muted-foreground mt-2">
+            Ledger and monthly obligations in one place. Every rupee accounted for.
+          </p>
+        </div>
+        <Button
+          onClick={() => setImportOpen(true)}
+          variant="outline"
+          className="border-glass-border gap-2 h-10 shrink-0 hover:border-primary/40"
+        >
+          <FileSpreadsheet className="size-4" /> Import Statement
+        </Button>
       </header>
+
+      <CsvImportDrawer open={importOpen} onOpenChange={setImportOpen} />
 
       {/* Segmented control */}
       <div className="inline-flex items-center gap-1 p-1 rounded-xl glass">
