@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import {
   useStore,
   getSnapshotTargets,
+  type PartitionCategory,
   type PartitionId,
   type PortfolioSnapshot,
   type SnapshotTarget,
@@ -44,31 +45,33 @@ export const Route = createFileRoute("/_authenticated/analytics")({
   component: AnalyticsPage,
 });
 
-// ─── Dark theme colours per snapshot target ────────────────────────────────
-// Hand-picked for the 4 built-in defaults; any custom partition or bank
-// account falls back to a hue cycled by its position in the target list.
-const PARTITION_COLORS: Partial<Record<string, string>> = {
-  "Long-Term Portfolio":  "oklch(0.72 0.18 250)", // blue
-  "Primary Broker":       "oklch(0.72 0.18 155)", // green
-  "International Broker": "oklch(0.72 0.15 290)", // purple
-  "Cash":                 "oklch(0.78 0.14 80)",  // amber
-};
-const FALLBACK_HUES = [20, 340, 200, 60, 130, 280] as const;
-function colorForPartition(key: string, index: number): string {
-  return PARTITION_COLORS[key] ?? `oklch(0.72 0.16 ${FALLBACK_HUES[index % FALLBACK_HUES.length]})`;
+// ─── Colour palette per snapshot target ─────────────────────────────────────
+// One ordered palette, cycled by a target's canonical position (see
+// canonicalPartitionIndex below) — shared by the donut, the breakdown dots,
+// the line-chart series, and the history swatches, so the same target reads
+// as the same color everywhere on this page instead of each chart picking
+// independently and disagreeing with its neighbour.
+const TARGET_PALETTE = [
+  "#10B981", "#06B6D4", "#6366F1", "#8B5CF6",
+  "#F59E0B", "#EC4899", "#3B82F6", "#14B8A6",
+] as const;
+function colorForIndex(index: number): string {
+  return TARGET_PALETTE[index % TARGET_PALETTE.length];
 }
 
-// Recharts needs hex/rgb for the legend dot; provide a parallel hex map + fallback
-const PARTITION_HEX: Partial<Record<string, string>> = {
-  "Long-Term Portfolio":  "#4f8ef7",
-  "Primary Broker":       "#3ecf75",
-  "International Broker": "#a78bfa",
-  "Cash":                 "#f59e0b",
+/** Short badge label for a target's instrument category — used in the donut tooltip. */
+const CATEGORY_BADGE_LABELS: Record<PartitionCategory, string> = {
+  equity_swing: "Equity/Swing",
+  long_term_etf: "Long-Term ETF",
+  mutual_funds: "Mutual Funds",
+  crypto: "Crypto",
+  liquid: "Liquid",
 };
-const FALLBACK_HEX = ["#fb7185", "#f472b6", "#38bdf8", "#facc15", "#34d399", "#c084fc"] as const;
-function hexForPartition(key: string, index: number): string {
-  return PARTITION_HEX[key] ?? FALLBACK_HEX[index % FALLBACK_HEX.length];
-}
+
+// ─── Snapshot freshness ─────────────────────────────────────────────────────
+const STALE_THRESHOLD_DAYS = 14;
+type FreshnessStatus = "fresh" | "stale" | "missing";
+type FreshnessRow = { id: PartitionId; name: string; status: FreshnessStatus; daysAgo: number | null };
 
 // ─── Filter state ──────────────────────────────────────────────────────────
 type AnalyticsFilter = {
@@ -121,13 +124,23 @@ function PieTooltip({
   active, payload,
 }: {
   active?: boolean;
-  payload?: Array<{ payload: { name: string; value: number; pct: number }; color: string }>;
+  payload?: Array<{
+    payload: { name: string; value: number; pct: number; category?: PartitionCategory };
+    color: string;
+  }>;
 }) {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
   return (
-    <div className="glass-strong rounded-xl border border-glass-border p-3 text-xs shadow-xl space-y-0.5">
-      <p className="font-semibold text-foreground">{d.name}</p>
+    <div className="glass-strong rounded-xl border border-glass-border p-3 text-xs shadow-xl space-y-1 min-w-[9rem]">
+      <div className="flex items-center justify-between gap-3">
+        <p className="font-semibold text-foreground">{d.name}</p>
+        {d.category && (
+          <span className="shrink-0 text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-md border border-glass-border text-muted-foreground">
+            {CATEGORY_BADGE_LABELS[d.category]}
+          </span>
+        )}
+      </div>
       <p className="tnum text-muted-foreground">
         <Sensitive>{inr(d.value)}</Sensitive>
       </p>
@@ -199,8 +212,49 @@ function AnalyticsPage() {
   const [mounted, setMounted] = useState(false);
   const [filters, setFilters] = useState<AnalyticsFilter>(() => ({ partitions: [...ALL_PARTITIONS] }));
   const [addSnapshotOpen, setAddSnapshotOpen] = useState(false);
+  // Set right before opening the dialog from a freshness chip so it opens
+  // pre-selected to that target; cleared on close so a plain "+ Add Snapshot"
+  // click afterwards falls back to the dialog's own default selection.
+  const [presetTargetId, setPresetTargetId] = useState<PartitionId | undefined>(undefined);
 
   useEffect(() => { setMounted(true); }, []);
+
+  // ── Snapshot freshness (all canonical targets, independent of view mode —
+  // a reminder to update a liquid/bank balance is just as relevant whether
+  // "Investments Only" happens to be selected or not) ────────────────────────
+  const lastSnapshotDateByTarget = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const s of portfolioSnapshots) {
+      const existing = map.get(s.brokerPartition);
+      if (!existing || s.snapshotDate > existing) map.set(s.brokerPartition, s.snapshotDate);
+    }
+    return map;
+  }, [portfolioSnapshots]);
+
+  const freshnessRows: FreshnessRow[] = useMemo(() => {
+    const now = Date.now();
+    return snapshotTargets.map((t) => {
+      const last = lastSnapshotDateByTarget.get(t.id);
+      if (!last) return { id: t.id, name: t.name, status: "missing", daysAgo: null };
+      const daysAgo = Math.max(0, Math.floor((now - new Date(last).getTime()) / 86_400_000));
+      return {
+        id: t.id,
+        name: t.name,
+        status: daysAgo >= STALE_THRESHOLD_DAYS ? "stale" : "fresh",
+        daysAgo,
+      };
+    });
+  }, [snapshotTargets, lastSnapshotDateByTarget]);
+  const staleOrMissing = useMemo(
+    () => freshnessRows.filter((r) => r.status !== "fresh"),
+    [freshnessRows],
+  );
+  const allFresh = staleOrMissing.length === 0;
+
+  const openSnapshotDialogFor = (targetId: PartitionId) => {
+    setPresetTargetId(targetId);
+    setAddSnapshotOpen(true);
+  };
 
   // Deep-link intent from the command palette: ?action=add-snapshot opens the
   // dialog, then the param is cleared so refresh/back doesn't re-trigger it.
@@ -285,7 +339,12 @@ function AnalyticsPage() {
     const items = activePartitionIds
       .map((key) => {
         const t = targetById.get(key);
-        return { name: t?.name ?? key, key, value: latestSnapshotValues[key] ?? 0 };
+        return {
+          name: t?.name ?? key,
+          key,
+          value: latestSnapshotValues[key] ?? 0,
+          category: t?.category,
+        };
       })
       .filter((d) => d.value > 0);
     const total = items.reduce((s, d) => s + d.value, 0);
@@ -396,7 +455,57 @@ function AnalyticsPage() {
         </Button>
       </header>
 
-      <AddSnapshotDialog open={addSnapshotOpen} onOpenChange={setAddSnapshotOpen} />
+      <AddSnapshotDialog
+        open={addSnapshotOpen}
+        onOpenChange={(v) => {
+          setAddSnapshotOpen(v);
+          if (!v) setPresetTargetId(undefined);
+        }}
+        initialTargetId={presetTargetId}
+      />
+
+      {/* ── Snapshot freshness banner ────────────────────────────────────── */}
+      {mounted && (
+        <section className="glass rounded-2xl p-4 space-y-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="relative flex size-2.5 shrink-0">
+              <span
+                className={`absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping ${
+                  allFresh ? "bg-[oklch(0.72_0.18_155)]" : "bg-[oklch(0.78_0.14_80)]"
+                }`}
+              />
+              <span
+                className={`relative inline-flex size-2.5 rounded-full ${
+                  allFresh ? "bg-[oklch(0.72_0.18_155)]" : "bg-[oklch(0.78_0.14_80)]"
+                }`}
+              />
+            </span>
+            <p className="text-sm font-medium">
+              {allFresh
+                ? "All holdings up to date"
+                : `${staleOrMissing.length} holding${staleOrMissing.length !== 1 ? "s" : ""} need updating`}
+            </p>
+            <span className="text-[11px] text-muted-foreground">
+              Snapshots older than {STALE_THRESHOLD_DAYS} days are flagged stale.
+            </span>
+          </div>
+          {!allFresh && (
+            <div className="flex flex-wrap gap-1.5">
+              {staleOrMissing.map((row) => (
+                <button
+                  key={row.id}
+                  type="button"
+                  onClick={() => openSnapshotDialogFor(row.id)}
+                  className="flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-full border border-[oklch(0.78_0.14_80_/_0.35)] bg-[oklch(0.78_0.14_80_/_0.08)] text-[oklch(0.82_0.13_80)] hover:bg-[oklch(0.78_0.14_80_/_0.15)] transition-colors"
+                >
+                  <TriangleAlert className="size-3" />
+                  {row.name} · {row.status === "missing" ? "No snapshot" : `${row.daysAgo}d ago`}
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       {/* ── Global KPI tiles ─────────────────────────────────────────────── */}
       <section className="grid grid-cols-2 md:grid-cols-3 gap-3">
@@ -552,31 +661,38 @@ function AnalyticsPage() {
             <h2 className="font-display font-semibold tracking-tight">Portfolio allocation</h2>
           </div>
           {mounted && pieData.length > 0 ? (
-            <div className="h-64">
+            <div className="relative h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
                     data={pieData}
                     cx="50%"
                     cy="50%"
-                    outerRadius={80}
+                    innerRadius={65}
+                    outerRadius={95}
+                    paddingAngle={4}
+                    cornerRadius={6}
                     dataKey="value"
-                    labelLine={false}
-                    label={({ name, pct }: { name: string; pct: number }) =>
-                      `${name}: ${pct.toFixed(0)}%`
-                    }
+                    stroke="transparent"
                   >
                     {pieData.map((d) => (
-                      <Cell
-                        key={d.key}
-                        fill={colorForPartition(d.key, canonicalPartitionIndex(d.key))}
-                        stroke="transparent"
-                      />
+                      <Cell key={d.key} fill={colorForIndex(canonicalPartitionIndex(d.key))} />
                     ))}
                   </Pie>
                   <Tooltip content={<PieTooltip />} />
                 </PieChart>
               </ResponsiveContainer>
+              {/* Centered readout inside the donut hole */}
+              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-0.5 px-4 text-center">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {viewMode === "investments" ? "Invested" : "Total Assets"}
+                </p>
+                <p className="text-lg font-semibold tnum">
+                  <Sensitive>
+                    <AnimatedNumber value={displaySummary.currentValue} format={inr} />
+                  </Sensitive>
+                </p>
+              </div>
             </div>
           ) : (
             <EmptyChart icon={<PieChartIcon className="size-10 opacity-30" />} text="No snapshot data" />
@@ -607,7 +723,7 @@ function AnalyticsPage() {
                         <div className="flex items-center gap-2.5 min-w-0">
                           <span
                             className={`size-3 rounded-full shrink-0${d.hasData ? "" : " opacity-40"}`}
-                            style={{ backgroundColor: hexForPartition(d.key, canonicalPartitionIndex(d.key)) }}
+                            style={{ backgroundColor: colorForIndex(canonicalPartitionIndex(d.key)) }}
                           />
                           <div className="min-w-0">
                             <p className={`text-sm font-medium truncate${d.hasData ? "" : " text-muted-foreground"}`}>
@@ -687,9 +803,9 @@ function AnalyticsPage() {
                     type="monotone"
                     dataKey={key}
                     name={targetLabel(key)}
-                    stroke={hexForPartition(key, canonicalPartitionIndex(key))}
+                    stroke={colorForIndex(canonicalPartitionIndex(key))}
                     strokeWidth={2.5}
-                    dot={{ r: 4, fill: hexForPartition(key, canonicalPartitionIndex(key)), strokeWidth: 0 }}
+                    dot={{ r: 4, fill: colorForIndex(canonicalPartitionIndex(key)), strokeWidth: 0 }}
                     activeDot={{ r: 6 }}
                     connectNulls={false}
                   />
@@ -719,9 +835,12 @@ function pinToNoonUTC(dateOnly: string): string {
 function AddSnapshotDialog({
   open,
   onOpenChange,
+  initialTargetId,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Pre-select this target when the dialog opens — e.g. from a freshness-banner chip. */
+  initialTargetId?: PartitionId;
 }) {
   const { addPortfolioSnapshots, brokerPartitions, accountModes } = useStore();
   // The unified target list: investment partitions first, then bank/cash
@@ -751,6 +870,15 @@ function AddSnapshotDialog({
     if (snapshotTargets.some((t) => t.id === partition)) return;
     setPartition(snapshotTargets[0].id);
   }, [snapshotTargets, partition]);
+
+  // Honors a caller-supplied preselection each time the dialog transitions to
+  // open. Declared AFTER the clamp effect above so its setPartition call is
+  // the one that wins if both fire in the same commit (e.g. the leftover
+  // `partition` from a previous open happens to also be invalid).
+  useEffect(() => {
+    if (!open || !initialTargetId) return;
+    if (snapshotTargets.some((t) => t.id === initialTargetId)) setPartition(initialTargetId);
+  }, [open, initialTargetId, snapshotTargets]);
 
   const resetForm = () => {
     setDate(todayLocalISO());
@@ -1082,7 +1210,7 @@ function SnapshotHistorySection() {
                   <div className="flex items-center gap-2.5 min-w-0">
                     <span
                       className="size-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: hexForPartition(id, colorIndexFor(id)) }}
+                      style={{ backgroundColor: colorForIndex(colorIndexFor(id)) }}
                     />
                     <div className="text-left min-w-0">
                       <p className="text-sm font-medium">
