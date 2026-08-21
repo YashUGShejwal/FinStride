@@ -73,7 +73,11 @@ function CapitalSnapshotPanel() {
   const [snapNotes, setSnapNotes] = useState("");
   const [values, setValues] = useState<Partial<Record<PartitionId, string>>>({});
 
-  const hasAnySnapshot = Object.keys(latestSnapshotValues).length > 0;
+  // Partition ids only — latestSnapshotValues can also carry bank/cash ACCOUNT
+  // ids (recorded via the Analytics snapshot dialog), which this panel's grid
+  // iterates brokerPartitions and therefore can't display. Counting them here
+  // would flip the panel out of its empty state to a grid of all-"—" rows.
+  const hasAnySnapshot = brokerPartitions.some((p) => latestSnapshotValues[p.id] !== undefined);
   // Specifically whether the CONFIGURED risk-cap partition has a snapshot — hasAnySnapshot
   // (any partition at all) would otherwise hide this hint once the user has snapshotted a
   // *different* partition, leaving "₹0 active capital" with no explanation for why it's 0.

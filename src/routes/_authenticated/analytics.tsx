@@ -11,8 +11,10 @@ import {
 import { toast } from "sonner";
 import {
   useStore,
+  getSnapshotTargets,
   type PartitionId,
   type PortfolioSnapshot,
+  type SnapshotTarget,
 } from "@/lib/store";
 import { inr, fmtDate, todayLocalISO } from "@/lib/format";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
@@ -21,7 +23,9 @@ import { SpotlightCard } from "@/components/ui/SpotlightCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -40,9 +44,9 @@ export const Route = createFileRoute("/_authenticated/analytics")({
   component: AnalyticsPage,
 });
 
-// ─── Dark theme colours per partition ─────────────────────────────────────
-// Hand-picked for the 4 built-in defaults; any custom partition a user adds
-// via Settings falls back to a hue cycled by its position in the list.
+// ─── Dark theme colours per snapshot target ────────────────────────────────
+// Hand-picked for the 4 built-in defaults; any custom partition or bank
+// account falls back to a hue cycled by its position in the target list.
 const PARTITION_COLORS: Partial<Record<string, string>> = {
   "Long-Term Portfolio":  "oklch(0.72 0.18 250)", // blue
   "Primary Broker":       "oklch(0.72 0.18 155)", // green
@@ -72,6 +76,25 @@ type AnalyticsFilter = {
   dateFrom?: string;
   dateTo?: string;
 };
+
+// ─── Total Capital vs Investments Only ─────────────────────────────────────
+type ViewMode = "total" | "investments";
+const VIEW_MODE_KEY = "finstride_analytics_view_mode";
+const VIEW_MODES: readonly { key: ViewMode; label: string }[] = [
+  { key: "total", label: "Total Capital" },
+  { key: "investments", label: "Investments Only" },
+];
+
+/**
+ * Liquid ids in the unified snapshot-target list: liquid broker partitions
+ * (category or purpose "liquid" — the built-in "Cash" bucket) AND every
+ * bank/cash account mode. getSnapshotTargets() already classifies both sides
+ * into SnapshotTarget.group, so this just projects the liquid ids into a Set;
+ * the components below wrap it in an id-based isLiquidPartition(id) check.
+ */
+function liquidTargetIds(targets: readonly SnapshotTarget[]): Set<string> {
+  return new Set(targets.filter((t) => t.group === "liquid").map((t) => t.id));
+}
 
 // ─── Recharts custom tooltips ──────────────────────────────────────────────
 function DarkTooltip({
@@ -115,17 +138,64 @@ function PieTooltip({
 
 // ─── Main page ─────────────────────────────────────────────────────────────
 function AnalyticsPage() {
-  const { transactions, portfolioSnapshots, latestSnapshotValues, brokerPartitions, partitionLabel, isStealthMode } = useStore();
-  const ALL_PARTITIONS = useMemo(
-    () => brokerPartitions.map((p) => p.id),
-    [brokerPartitions],
+  const {
+    transactions, portfolioSnapshots, latestSnapshotValues,
+    brokerPartitions, accountModes, partitionLabel, isStealthMode,
+  } = useStore();
+
+  // Starts on "Total Capital" (SSR has no localStorage) and corrects after
+  // mount if "Investments Only" was persisted — same one-tick-correction
+  // tradeoff this file already accepts for `mounted` below and that
+  // isStealthMode uses elsewhere in this app.
+  const [viewMode, setViewMode] = useState<ViewMode>("total");
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(VIEW_MODE_KEY) === "investments") setViewMode("investments");
+    } catch {
+      // Ignore — stays on the default "Total Capital" view this session.
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem(VIEW_MODE_KEY, viewMode);
+    } catch {
+      // Ignore — the in-memory choice still applies for this session.
+    }
+  }, [viewMode]);
+
+  // The unified snapshot-target list: broker partitions PLUS bank/cash
+  // accounts. Everything below derives from this (not brokerPartitions
+  // directly), so bank accounts participate in every chart/tile/dropdown and
+  // "Investments Only" propagates to every consumer of ALL_PARTITIONS /
+  // activePartitionIds without each needing its own view-mode check.
+  const snapshotTargets = useMemo(
+    () => getSnapshotTargets(brokerPartitions, accountModes),
+    [brokerPartitions, accountModes],
   );
-  // A partition's position in this canonical, unfiltered list — used as the seed
-  // for fallback colors so the same custom partition gets the same color everywhere
-  // on the page, regardless of which locally-filtered/reordered array (pieData,
-  // the active partition filter, etc.) happens to be rendering it.
+  const targetById = useMemo(
+    () => new Map(snapshotTargets.map((t) => [t.id, t])),
+    [snapshotTargets],
+  );
+  const resolveSnapshotTarget = (id: PartitionId): SnapshotTarget | undefined => targetById.get(id);
+  // Falls back to partitionLabel (which itself falls back to the raw id) for
+  // orphaned/legacy ids that no current target claims.
+  const targetLabel = (id: PartitionId): string => resolveSnapshotTarget(id)?.name ?? partitionLabel(id);
+
+  const liquidIds = useMemo(() => liquidTargetIds(snapshotTargets), [snapshotTargets]);
+  /** True if `id` belongs to a liquid broker partition OR any bank/cash account mode. */
+  const isLiquidPartition = (id: string): boolean => liquidIds.has(id);
+
+  const viewTargets = useMemo(
+    () => (viewMode === "investments" ? snapshotTargets.filter((t) => t.group === "investment") : snapshotTargets),
+    [snapshotTargets, viewMode],
+  );
+  const ALL_PARTITIONS = useMemo(() => viewTargets.map((t) => t.id), [viewTargets]);
+  // A target's position in the canonical, UNFILTERED list (not viewTargets) —
+  // used as the seed for fallback colors so the same target keeps the same
+  // color regardless of view mode or which locally-filtered/reordered array
+  // (pieData, the active partition filter, etc.) happens to be rendering it.
   const canonicalPartitionIndex = (key: PartitionId) =>
-    Math.max(0, brokerPartitions.findIndex((p) => p.id === key));
+    Math.max(0, snapshotTargets.findIndex((t) => t.id === key));
   const [mounted, setMounted] = useState(false);
   const [filters, setFilters] = useState<AnalyticsFilter>(() => ({ partitions: [...ALL_PARTITIONS] }));
   const [addSnapshotOpen, setAddSnapshotOpen] = useState(false);
@@ -142,6 +212,17 @@ function AnalyticsPage() {
       void nav({ search: {}, replace: true });
     }
   }, [action, nav]);
+
+  // Resets the fine-grained partition selection to "everything in the new
+  // scope" whenever the view toggle flips. Deliberately scoped to viewMode
+  // alone (not brokerPartitions) — switching Total Capital <-> Investments
+  // Only should reset the selection, but an unrelated partition added/removed
+  // in Settings while this page is open should NOT silently blow away a
+  // selection the user already narrowed by hand.
+  useEffect(() => {
+    setFilters((f) => ({ ...f, partitions: [...ALL_PARTITIONS] }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode]);
 
   // ── Global KPI math (unfiltered — transfers are portfolio-wide) ────────────
   const summary = useMemo(() => {
@@ -160,22 +241,60 @@ function AnalyticsPage() {
     return { totalDeposits, totalWithdrawals, netInvestment, currentValue, absoluteReturn, percentageReturn };
   }, [transactions, latestSnapshotValues]);
 
-  // ── Pie chart data (filtered by selected partitions) ──────────────────────
+  // ── View-scoped current value (excludes liquid partitions AND bank/cash
+  // accounts when the toggle above is set to "Investments Only") ─────────────
+  // Unknown/legacy ids (not in the snapshot-target list — see the Snapshot
+  // History fix elsewhere on this page) default to INCLUDED here: we can't
+  // prove they're liquid, and treating unclassifiable money as investment
+  // capital is safer than silently dropping it from the total.
+  const investmentValue = useMemo(
+    () =>
+      Object.entries(latestSnapshotValues).reduce(
+        (sum, [key, v]) => (liquidIds.has(key) ? sum : sum + (v ?? 0)),
+        0,
+      ),
+    [latestSnapshotValues, liquidIds],
+  );
+  const hasInvestmentSnapshot = useMemo(
+    () => portfolioSnapshots.some((s) => !liquidIds.has(s.brokerPartition)),
+    [portfolioSnapshots, liquidIds],
+  );
+  // Absolute/percentage return recomputed against the view-scoped current
+  // value too — leaving them pinned to the all-partition total while Current
+  // Value visibly changes next to them would make the KPI row self-contradict.
+  const displaySummary = useMemo(() => {
+    const currentValue = viewMode === "investments" ? investmentValue : summary.currentValue;
+    const absoluteReturn = currentValue - summary.netInvestment;
+    const percentageReturn =
+      summary.netInvestment > 0 ? (absoluteReturn / summary.netInvestment) * 100 : 0;
+    return { currentValue, absoluteReturn, percentageReturn };
+  }, [summary, investmentValue, viewMode]);
+
+  // Manual multi-select on top of the current view scope — falls back to
+  // "everything the view mode allows" when nothing's been narrowed by hand.
+  // Shared by the pie/line charts, the Line-chart render below, and the
+  // broker-breakdown empty-state, which all previously repeated this exact
+  // ternary independently.
+  const activePartitionIds = useMemo(
+    () => (filters.partitions.length > 0 ? filters.partitions : ALL_PARTITIONS),
+    [filters.partitions, ALL_PARTITIONS],
+  );
+
+  // ── Pie chart data (filtered by selected targets) ─────────────────────────
   const pieData = useMemo(() => {
-    const active = filters.partitions.length > 0 ? filters.partitions : ALL_PARTITIONS;
-    const items = active
+    const items = activePartitionIds
       .map((key) => {
-        const p = brokerPartitions.find((x) => x.id === key);
-        return { name: p?.name ?? key, key, value: latestSnapshotValues[key] ?? 0 };
+        const t = targetById.get(key);
+        return { name: t?.name ?? key, key, value: latestSnapshotValues[key] ?? 0 };
       })
       .filter((d) => d.value > 0);
     const total = items.reduce((s, d) => s + d.value, 0);
     return items.map((d) => ({ ...d, pct: total > 0 ? (d.value / total) * 100 : 0 }));
-  }, [latestSnapshotValues, filters.partitions, brokerPartitions, ALL_PARTITIONS]);
+  }, [latestSnapshotValues, activePartitionIds, targetById]);
 
   // ── Line chart data (filtered by partitions + date range, carry-forward) ──
   const lineData = useMemo(() => {
-    const activePartitions = filters.partitions.length > 0 ? filters.partitions : ALL_PARTITIONS;
+    const activePartitions = activePartitionIds;
 
     // All dates in range that have at least one snapshot
     const allDates = [
@@ -213,7 +332,7 @@ function AnalyticsPage() {
         return point;
       })
       .filter((pt) => activePartitions.some((p) => pt[p] !== undefined));
-  }, [portfolioSnapshots, filters, ALL_PARTITIONS]);
+  }, [portfolioSnapshots, filters, activePartitionIds]);
 
   // ── Partition chip helpers ─────────────────────────────────────────────────
   const togglePartition = (key: PartitionId) => {
@@ -232,6 +351,30 @@ function AnalyticsPage() {
   };
 
   const allSelected = filters.partitions.length === ALL_PARTITIONS.length;
+
+  // ── Breakdown card rows ────────────────────────────────────────────────────
+  // Real value rows from pieData when anything in scope has a positive value;
+  // otherwise explicit ₹0 rows for every target the scope covers — more
+  // informative than collapsing the card to one generic placeholder, whether
+  // nothing's ever been recorded or "Investments Only" is active and every
+  // snapshot so far happens to be liquid.
+  const breakdownRows =
+    pieData.length > 0
+      ? pieData.map((d) => ({ key: d.key, name: d.name, value: d.value, pct: d.pct, hasData: true }))
+      : activePartitionIds.map((key) => ({
+          key, name: targetLabel(key), value: 0, pct: 0, hasData: false,
+        }));
+  // "Total Capital" splits the rows into Investments vs a distinct
+  // "Bank / Liquid" section; "Investments Only" already excludes every liquid
+  // target from scope, so it stays a single flat (untitled) section.
+  const breakdownSections: { title: string | null; rows: typeof breakdownRows }[] = (
+    viewMode === "total"
+      ? [
+          { title: "Investments", rows: breakdownRows.filter((r) => !isLiquidPartition(r.key)) },
+          { title: "Bank / Liquid", rows: breakdownRows.filter((r) => isLiquidPartition(r.key)) },
+        ]
+      : [{ title: null, rows: breakdownRows }]
+  ).filter((s) => s.rows.length > 0);
 
   return (
     <div className="space-y-6">
@@ -262,32 +405,63 @@ function AnalyticsPage() {
         <KpiTile label="Net Investment" value={summary.netInvestment} format={inr} tone="neutral" />
         <KpiTile
           label="Current Value"
-          value={summary.currentValue}
+          value={displaySummary.currentValue}
           format={inr}
           tone="primary"
-          subtext={portfolioSnapshots.length === 0 ? "(no snapshot yet)" : undefined}
+          subtext={
+            viewMode === "investments"
+              ? hasInvestmentSnapshot
+                ? "Active market assets"
+                : "(no snapshot yet)"
+              : portfolioSnapshots.length === 0
+                ? "(no snapshot yet)"
+                : undefined
+          }
         />
         <KpiTile
           label="Absolute Return"
-          value={summary.absoluteReturn}
+          value={displaySummary.absoluteReturn}
           format={(n) => (n >= 0 ? "+" : "−") + inr(Math.abs(n))}
-          tone={summary.absoluteReturn >= 0 ? "success" : "danger"}
+          tone={displaySummary.absoluteReturn >= 0 ? "success" : "danger"}
         />
         <KpiTile
           label="Return %"
-          value={summary.percentageReturn}
+          value={displaySummary.percentageReturn}
           format={(n) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`}
-          tone={summary.percentageReturn >= 0 ? "success" : "danger"}
-          subtext="Returns computed against all partitions"
+          tone={displaySummary.percentageReturn >= 0 ? "success" : "danger"}
+          subtext={
+            viewMode === "investments"
+              ? "Returns computed against investment partitions only"
+              : "Returns computed against all partitions"
+          }
         />
       </section>
 
       {/* ── Filter bar ───────────────────────────────────────────────────── */}
       <section className="glass rounded-2xl p-4 space-y-3">
-        <div className="flex items-center gap-2">
-          <Filter className="size-4 text-muted-foreground" />
-          <span className="text-sm font-semibold">Chart filters</span>
-          <span className="text-xs text-muted-foreground ml-1">(applies to charts below only)</span>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Filter className="size-4 text-muted-foreground" />
+            <span className="text-sm font-semibold">Chart filters</span>
+            <span className="text-xs text-muted-foreground ml-1">(applies to charts below only)</span>
+          </div>
+          <div className="inline-flex items-center gap-1 p-1 rounded-xl glass shrink-0">
+            {VIEW_MODES.map((m) => (
+              <button
+                key={m.key}
+                type="button"
+                onClick={() => setViewMode(m.key)}
+                aria-pressed={viewMode === m.key}
+                className={`px-3.5 py-1.5 rounded-lg text-sm transition-colors ${
+                  viewMode === m.key
+                    ? "bg-white/[0.08] text-foreground font-medium"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -317,11 +491,15 @@ function AnalyticsPage() {
                 <SelectItem value="__all__" className={allSelected ? "font-semibold" : ""}>
                   All partitions
                 </SelectItem>
-                {brokerPartitions.map((p) => {
-                  const sel = filters.partitions.includes(p.id);
+                {/* viewTargets, not snapshotTargets — a liquid target (Cash, a bank
+                    account) must not be manually re-selectable while "Investments
+                    Only" is active, or picking it here would silently undo what the
+                    view toggle just excluded. */}
+                {viewTargets.map((t) => {
+                  const sel = filters.partitions.includes(t.id);
                   return (
-                    <SelectItem key={p.id} value={p.id} className={sel ? "font-semibold" : "text-muted-foreground"}>
-                      {p.name}
+                    <SelectItem key={t.id} value={t.id} className={sel ? "font-semibold" : "text-muted-foreground"}>
+                      {t.name}
                     </SelectItem>
                   );
                 })}
@@ -358,7 +536,7 @@ function AnalyticsPage() {
                 onClick={() => removePartitionChip(key)}
                 className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border border-glass-border bg-white/8 text-muted-foreground hover:text-foreground transition-colors"
               >
-                {partitionLabel(key)} <X className="size-3" />
+                {targetLabel(key)} <X className="size-3" />
               </button>
             ))}
           </div>
@@ -405,65 +583,65 @@ function AnalyticsPage() {
           )}
         </div>
 
-        {/* Broker list */}
+        {/* Breakdown list — grouped into Investments vs Bank / Liquid in Total Capital view */}
         <div className="glass rounded-2xl p-5">
           <div className="flex items-center gap-2 mb-4">
             <PieChartIcon className="size-4 text-[oklch(0.72_0.18_155)]" />
-            <h2 className="font-display font-semibold tracking-tight">Breakdown by broker</h2>
+            <h2 className="font-display font-semibold tracking-tight">Breakdown by holding</h2>
           </div>
-          {pieData.length > 0 ? (
-            <ul className="space-y-2">
-              {pieData.map((d) => (
-                <li
-                  key={d.key}
-                  className="flex items-center justify-between gap-3 p-3 rounded-xl border border-glass-border bg-white/3"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <span
-                      className="size-3 rounded-full shrink-0"
-                      style={{ backgroundColor: hexForPartition(d.key, canonicalPartitionIndex(d.key)) }}
-                    />
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">{d.name}</p>
-                      <p className="text-[11px] text-muted-foreground">
-                        <span className="tnum">{d.pct.toFixed(1)}%</span> of portfolio
-                      </p>
-                    </div>
-                  </div>
-                  <p className="font-semibold tnum text-sm shrink-0">
-                    <Sensitive>
-                      <AnimatedNumber value={d.value} format={inr} />
-                    </Sensitive>
-                  </p>
-                </li>
+          {breakdownSections.length > 0 ? (
+            <div className="space-y-4">
+              {breakdownSections.map((section) => (
+                <div key={section.title ?? "all"} className="space-y-1.5">
+                  {section.title && (
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
+                      {section.title}
+                    </p>
+                  )}
+                  <ul className="space-y-2">
+                    {section.rows.map((d) => (
+                      <li
+                        key={d.key}
+                        className="flex items-center justify-between gap-3 p-3 rounded-xl border border-glass-border bg-white/3"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span
+                            className={`size-3 rounded-full shrink-0${d.hasData ? "" : " opacity-40"}`}
+                            style={{ backgroundColor: hexForPartition(d.key, canonicalPartitionIndex(d.key)) }}
+                          />
+                          <div className="min-w-0">
+                            <p className={`text-sm font-medium truncate${d.hasData ? "" : " text-muted-foreground"}`}>
+                              {d.name}
+                            </p>
+                            {d.hasData ? (
+                              <p className="text-[11px] text-muted-foreground">
+                                <span className="tnum">{d.pct.toFixed(1)}%</span> of portfolio
+                              </p>
+                            ) : (
+                              <p className="text-[11px] text-muted-foreground/70">(no snapshot yet)</p>
+                            )}
+                          </div>
+                        </div>
+                        {d.hasData ? (
+                          <p className="font-semibold tnum text-sm shrink-0">
+                            <Sensitive>
+                              <AnimatedNumber value={d.value} format={inr} />
+                            </Sensitive>
+                          </p>
+                        ) : (
+                          <p className="font-semibold tnum text-sm text-muted-foreground shrink-0">{inr(0)}</p>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ))}
-            </ul>
-          ) : portfolioSnapshots.length === 0 ? (
-            // No snapshot has EVER been recorded — list every active partition
-            // explicitly at ₹0 rather than collapsing the whole card to one
-            // generic placeholder, so it's clear these are real, trackable
-            // partitions that simply have no data yet, not a broken chart.
-            <ul className="space-y-2">
-              {(filters.partitions.length > 0 ? filters.partitions : ALL_PARTITIONS).map((key) => (
-                <li
-                  key={key}
-                  className="flex items-center justify-between gap-3 p-3 rounded-xl border border-glass-border bg-white/3"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <span
-                      className="size-3 rounded-full shrink-0 opacity-40"
-                      style={{ backgroundColor: hexForPartition(key, canonicalPartitionIndex(key)) }}
-                    />
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate text-muted-foreground">{partitionLabel(key)}</p>
-                      <p className="text-[11px] text-muted-foreground/70">(no snapshot yet)</p>
-                    </div>
-                  </div>
-                  <p className="font-semibold tnum text-sm text-muted-foreground shrink-0">{inr(0)}</p>
-                </li>
-              ))}
-            </ul>
+            </div>
           ) : (
+            // Degenerate case: the current view mode excludes every target that
+            // exists (e.g. "Investments Only" with nothing but liquid targets
+            // defined at all) — there's nothing to list a zero row for, so fall
+            // back to the plain placeholder instead of an empty list.
             <EmptyChart icon={<PieChartIcon className="size-10 opacity-30" />} text="No data for selected partitions" />
           )}
         </div>
@@ -503,12 +681,12 @@ function AnalyticsPage() {
                 <Legend
                   wrapperStyle={{ fontSize: 11, paddingTop: 12 }}
                 />
-                {(filters.partitions.length > 0 ? filters.partitions : ALL_PARTITIONS).map((key) => (
+                {activePartitionIds.map((key) => (
                   <Line
                     key={key}
                     type="monotone"
                     dataKey={key}
-                    name={partitionLabel(key)}
+                    name={targetLabel(key)}
                     stroke={hexForPartition(key, canonicalPartitionIndex(key))}
                     strokeWidth={2.5}
                     dot={{ r: 4, fill: hexForPartition(key, canonicalPartitionIndex(key)), strokeWidth: 0 }}
@@ -545,17 +723,38 @@ function AddSnapshotDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const { addPortfolioSnapshots, brokerPartitions, partitionLabel } = useStore();
+  const { addPortfolioSnapshots, brokerPartitions, accountModes } = useStore();
+  // The unified target list: investment partitions first, then bank/cash
+  // accounts — the same two groups the dropdown below renders under headings.
+  const snapshotTargets = useMemo(
+    () => getSnapshotTargets(brokerPartitions, accountModes),
+    [brokerPartitions, accountModes],
+  );
+  const investmentTargets = snapshotTargets.filter((t) => t.group === "investment");
+  const liquidTargets = snapshotTargets.filter((t) => t.group === "liquid");
+  const targetName = (id: PartitionId) => snapshotTargets.find((t) => t.id === id)?.name ?? id;
+
   const [date, setDate] = useState(todayLocalISO);
   const [partition, setPartition] = useState<PartitionId>(
-    () => brokerPartitions[0]?.id ?? "Cash",
+    () => snapshotTargets[0]?.id ?? "Cash",
   );
   const [value, setValue] = useState("");
   const [notes, setNotes] = useState("");
 
+  // Keeps the selection valid when the target list changes under the mounted
+  // dialog — remote settings arriving after mount (the initializer above runs
+  // against the pre-hydration default list), or a target deleted in Settings.
+  // Same clamp pattern the cashflow account picker and swing partition picker
+  // use; without it a stale selection submits an orphaned snapshot id.
+  useEffect(() => {
+    if (snapshotTargets.length === 0) return;
+    if (snapshotTargets.some((t) => t.id === partition)) return;
+    setPartition(snapshotTargets[0].id);
+  }, [snapshotTargets, partition]);
+
   const resetForm = () => {
     setDate(todayLocalISO());
-    setPartition(brokerPartitions[0]?.id ?? "Cash");
+    setPartition(snapshotTargets[0]?.id ?? "Cash");
     setValue("");
     setNotes("");
   };
@@ -576,7 +775,7 @@ function AddSnapshotDialog({
       notes.trim() || undefined,
       pinToNoonUTC(date),
     );
-    toast.success(`Snapshot saved for ${partitionLabel(partition)}`);
+    toast.success(`Snapshot saved for ${targetName(partition)}`);
     resetForm();
     onOpenChange(false);
   };
@@ -593,7 +792,7 @@ function AddSnapshotDialog({
         <DialogHeader>
           <DialogTitle>Add portfolio snapshot</DialogTitle>
           <DialogDescription>
-            Record a point-in-time value for one broker partition.
+            Record a point-in-time value for one investment partition or bank account.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -612,18 +811,37 @@ function AddSnapshotDialog({
             </div>
             <div>
               <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Broker Partition
+                Snapshot Target
               </Label>
               <Select value={partition} onValueChange={(v: PartitionId) => setPartition(v)}>
                 <SelectTrigger className="bg-input/40 border-glass-border mt-1.5">
-                  <SelectValue />
+                  <SelectValue placeholder="Select target" />
                 </SelectTrigger>
                 <SelectContent>
-                  {brokerPartitions.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.name}
-                    </SelectItem>
-                  ))}
+                  {investmentTargets.length > 0 && (
+                    <SelectGroup>
+                      <SelectLabel className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                        Investment Partitions
+                      </SelectLabel>
+                      {investmentTargets.map((t) => (
+                        <SelectItem key={t.id} value={t.id}>
+                          {t.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  )}
+                  {liquidTargets.length > 0 && (
+                    <SelectGroup>
+                      <SelectLabel className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                        Bank Accounts &amp; Liquid Reserves
+                      </SelectLabel>
+                      {liquidTargets.map((t) => (
+                        <SelectItem key={t.id} value={t.id}>
+                          {t.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -681,16 +899,28 @@ const UNDO_WINDOW_MS = 5000;
 function SnapshotHistorySection() {
   const {
     portfolioSnapshots, deletePortfolioSnapshot, clearAllSnapshots,
-    brokerPartitions, isStealthMode,
+    brokerPartitions, accountModes, isStealthMode,
   } = useStore();
+  // History rows can name any target in the unified list — a broker partition
+  // OR a bank/cash account (see getSnapshotTargets) — so labels resolve
+  // against that list, not brokerPartitions alone.
+  const snapshotTargets = useMemo(
+    () => getSnapshotTargets(brokerPartitions, accountModes),
+    [brokerPartitions, accountModes],
+  );
+  const targetById = useMemo(
+    () => new Map(snapshotTargets.map((t) => [t.id, t])),
+    [snapshotTargets],
+  );
+  const resolveSnapshotTarget = (id: PartitionId): SnapshotTarget | undefined => targetById.get(id);
   const [expanded, setExpanded] = useState<Set<PartitionId>>(new Set());
   const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set());
   const deleteTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   // Same fallback used for the group headers below — a plain partitionLabel()
   // lookup falls back to the raw id, which would make this toast (and the
-  // group header) disagree on what to call an unmapped/legacy partition.
-  const groupLabel = (id: PartitionId) => brokerPartitions.find((p) => p.id === id)?.name ?? "Legacy Partition";
+  // group header) disagree on what to call an unmapped/legacy target.
+  const groupLabel = (id: PartitionId) => resolveSnapshotTarget(id)?.name ?? "Legacy Partition";
 
   const togglePartition = (key: PartitionId) => {
     setExpanded((prev) => {
@@ -761,26 +991,26 @@ function SnapshotHistorySection() {
 
   const visibleSnapshots = portfolioSnapshots.filter((s) => !pendingDeleteIds.has(s.id));
 
-  // Grouped by whatever partition ids are ACTUALLY PRESENT in the data, not
-  // by iterating the current brokerPartitions list. A snapshot can outlive
-  // the partition it names — an imported backup naming one that was never
+  // Grouped by whatever target ids are ACTUALLY PRESENT in the data, not by
+  // iterating the current snapshot-target list. A snapshot can outlive the
+  // partition/account it names — an imported backup naming one that was never
   // re-created locally, or data from before an earlier renaming pass — and
-  // iterating brokerPartitions instead would make such a row silently
+  // iterating the target list instead would make such a row silently
   // disappear from this page with no way to see or delete it.
   const presentIds = [...new Set(visibleSnapshots.map((s) => s.brokerPartition))];
-  const knownIds = new Set(brokerPartitions.map((p) => p.id));
+  const knownIds = new Set(snapshotTargets.map((t) => t.id));
   const unmappedIds = presentIds.filter((id) => !knownIds.has(id));
   const orderedIds = [
-    ...brokerPartitions.map((p) => p.id).filter((id) => presentIds.includes(id)),
+    ...snapshotTargets.map((t) => t.id).filter((id) => presentIds.includes(id)),
     ...unmappedIds,
   ];
-  // Known partitions keep the SAME color index used everywhere else on this
-  // page (their position in brokerPartitions); legacy ones get a stable index
+  // Known targets keep the SAME color index used everywhere else on this
+  // page (their position in snapshotTargets); legacy ones get a stable index
   // past the end of that list so they never coincidentally reuse a real
-  // partition's color.
+  // target's color.
   const colorIndexFor = (id: PartitionId) => {
-    const known = brokerPartitions.findIndex((p) => p.id === id);
-    return known >= 0 ? known : brokerPartitions.length + unmappedIds.indexOf(id);
+    const known = snapshotTargets.findIndex((t) => t.id === id);
+    return known >= 0 ? known : snapshotTargets.length + unmappedIds.indexOf(id);
   };
 
   return (
@@ -838,7 +1068,7 @@ function SnapshotHistorySection() {
               .sort((a, b) => b.snapshotDate.localeCompare(a.snapshotDate));
             if (rows.length === 0) return null;
 
-            const known = brokerPartitions.find((p) => p.id === id);
+            const known = resolveSnapshotTarget(id);
             const isOpen = expanded.has(id);
             const latest = rows[0];
 
@@ -857,6 +1087,22 @@ function SnapshotHistorySection() {
                     <div className="text-left min-w-0">
                       <p className="text-sm font-medium">
                         {known?.name ?? "Legacy Partition"}
+                        {known && (
+                          // BANK covers the whole liquid layer (bank/cash
+                          // accounts AND liquid partitions like the built-in
+                          // Cash bucket) — the same split the breakdown card's
+                          // "Bank / Liquid" section and the add-snapshot
+                          // dialog's group headings draw.
+                          <span
+                            className={`ml-1.5 align-middle text-[9px] font-semibold tracking-wider px-1.5 py-0.5 rounded-md border ${
+                              known.group === "liquid"
+                                ? "border-[oklch(0.78_0.14_80_/_0.4)] text-[oklch(0.78_0.14_80)]"
+                                : "border-primary/40 text-primary"
+                            }`}
+                          >
+                            {known.group === "liquid" ? "BANK" : "INVESTMENT"}
+                          </span>
+                        )}
                         {!known && (
                           <span className="ml-1.5 text-[10px] font-normal text-muted-foreground/60">
                             ({id})

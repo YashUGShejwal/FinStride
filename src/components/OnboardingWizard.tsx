@@ -89,6 +89,17 @@ const PARTITION_GROUPS: {
     noun: "Crypto",
   },
   {
+    // Covers the built-in "Cash" partition (purpose "liquid") so it stays
+    // visible and deletable here — without this group it would match nothing
+    // and silently vanish from this step while Settings still lists it.
+    purpose: "liquid",
+    title: "Cash & liquid reserves",
+    hint: "Physical cash or parked liquid pots. Bank BALANCES are tracked via the accounts from step 1 — this is for cash outside any bank.",
+    placeholder: "e.g. Emergency Cash…",
+    suggestions: [],
+    noun: null,
+  },
+  {
     purpose: "custom",
     title: "Anything else",
     hint: "Gold, a side pot, an emergency fund — anything you want tracked separately.",
@@ -410,7 +421,7 @@ function LinkedBadge({ children }: { children: React.ReactNode }) {
  * exists, so the funding accounts genuinely have to come first.
  */
 function AccountsStep() {
-  const { accountModes, bankAccounts, addAccountMode, deleteAccountMode } = useStore();
+  const { accountModes, bankAccounts, brokerPartitions, addAccountMode, deleteAccountMode } = useStore();
 
   const [bankInput, setBankInput] = useState("");
   const [cardInput, setCardInput] = useState("");
@@ -441,13 +452,23 @@ function AccountsStep() {
       toast.error(bank ? `"${trimmed}" via ${bank} is already on the list` : `"${trimmed}" is already on the list`);
       return false;
     }
+    // Bank/cash account ids share the snapshot-target namespace with broker
+    // partitions (see getSnapshotTargets) — the store rejects the collision,
+    // so surface why instead of silently doing nothing.
+    if (
+      (type === "bank" || type === "cash") &&
+      brokerPartitions.some((p) => p.id.toLowerCase() === trimmed.toLowerCase())
+    ) {
+      toast.error(`"${trimmed}" is already an investment partition — pick a different name`);
+      return false;
+    }
     addAccountMode(trimmed, type, { linkedBankId: resolvedBankId });
     return true;
   };
 
   const remove = (a: AccountMode) => {
     if (!deleteAccountMode(a.id)) {
-      toast.error(`"${a.name}" is already used by a transaction — remove that first`);
+      toast.error(`"${a.name}" is already used by a transaction or snapshot — remove that first`);
     }
   };
 
@@ -578,7 +599,7 @@ function AccountsStep() {
 
 // ─── Step 2 — Investment partitions ─────────────────────────────────────────
 function PartitionsStep() {
-  const { brokerPartitions, addBrokerPartition, deleteBrokerPartition } = useStore();
+  const { brokerPartitions, accountModes, addBrokerPartition, deleteBrokerPartition } = useStore();
   const [inputs, setInputs] = useState<Record<string, string>>({});
 
   const taken = new Set(brokerPartitions.map((p) => p.id.toLowerCase()));
@@ -593,6 +614,19 @@ function PartitionsStep() {
     const name = group.noun ? `${group.noun} (${broker})` : broker;
     if (taken.has(name.toLowerCase())) {
       toast.error(`"${name}" is already on the list`);
+      return false;
+    }
+    // Partition ids share the snapshot-target namespace with bank/cash ACCOUNT
+    // ids (see getSnapshotTargets) — the store rejects the collision, so
+    // surface why instead of silently doing nothing.
+    if (
+      accountModes.some(
+        (a) =>
+          (a.type === "bank" || a.type === "cash") &&
+          a.id.toLowerCase() === name.toLowerCase(),
+      )
+    ) {
+      toast.error(`"${name}" is already a bank/cash account from step 1 — pick a different name`);
       return false;
     }
     addBrokerPartition(name, group.purpose, {

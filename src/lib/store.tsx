@@ -169,7 +169,7 @@ export type PartitionCategory = "equity_swing" | "long_term_etf" | "mutual_funds
  * Distinct from `category` (WHAT the instrument is, which drives allocation
  * analytics) — a long_term purpose can hold long_term_etf or mutual_funds.
  */
-export type PartitionPurpose = "long_term" | "swing" | "international" | "crypto" | "custom";
+export type PartitionPurpose = "long_term" | "swing" | "international" | "crypto" | "liquid" | "custom";
 
 export type BrokerPartition = {
   id: string;
@@ -194,7 +194,7 @@ const PURPOSE_BY_CATEGORY: Record<PartitionCategory, PartitionPurpose> = {
   long_term_etf: "long_term",
   mutual_funds: "long_term",
   crypto: "crypto",
-  liquid: "custom",
+  liquid: "liquid",
 };
 
 /** Instrument type a purpose usually implies — the starting `category` when only a purpose is picked. */
@@ -203,6 +203,7 @@ export const CATEGORY_BY_PURPOSE: Record<PartitionPurpose, PartitionCategory> = 
   swing: "equity_swing",
   international: "equity_swing",
   crypto: "crypto",
+  liquid: "liquid",
   custom: "equity_swing",
 };
 
@@ -245,7 +246,10 @@ export const DEFAULT_BROKER_PARTITIONS: readonly BrokerPartition[] = [
   {
     id: "Cash",
     name: "Cash",
-    purpose: "custom",
+    // "liquid" (not "custom") since the purpose gained a first-class liquid
+    // member — this is what routes the built-in Cash bucket into the
+    // "Bank / Liquid" side of the unified snapshot-target split below.
+    purpose: "liquid",
     category: "liquid",
     description: "Physical cash & liquid reserves",
   },
@@ -256,6 +260,56 @@ export const DEFAULT_BROKER_PARTITIONS: readonly BrokerPartition[] = [
 // separately-styled elements, and every other surface wants the bare name, so
 // a combined-string helper had no caller — it was dead the moment it was
 // written. partitionLabel(id) in the store covers the id -> name lookup.
+
+// ─── Unified snapshot targets ───────────────────────────────────────────────
+/**
+ * One row in the "what can a portfolio snapshot be recorded against?" list:
+ * every broker partition PLUS every bank/cash account mode. Both kinds store
+ * their id in PortfolioSnapshot.brokerPartition — the DB column is a plain
+ * text id, so bank accounts participate with no schema change.
+ */
+export type SnapshotTarget = {
+  id: string;
+  name: string;
+  /** Investment rows chart as market capital; liquid rows (liquid partitions + bank/cash accounts) are the "Bank / Liquid" layer. */
+  group: "investment" | "liquid";
+  category: PartitionCategory;
+  /** A partition's brokerApp. Unset for bank/cash accounts — the account IS the bank. */
+  brokerOrBankName?: string;
+};
+
+/**
+ * Merge broker partitions and bank/cash account modes into one snapshot-target
+ * list. Partitions come first (they are the established snapshot ids), then
+ * bank/cash accounts. Both lists are name-derived-id namespaces, so an id
+ * collision — the built-in "Cash" ships as BOTH a default partition and a
+ * default account — resolves in the partition's favour: the two would be
+ * indistinguishable in snapshot data anyway, since
+ * PortfolioSnapshot.brokerPartition stores just the id string.
+ */
+export function getSnapshotTargets(
+  brokerPartitions: readonly BrokerPartition[],
+  accountModes: readonly AccountMode[],
+): SnapshotTarget[] {
+  const targets: SnapshotTarget[] = brokerPartitions.map((p) => ({
+    id: p.id,
+    name: p.name,
+    group: p.category === "liquid" || p.purpose === "liquid" ? "liquid" : "investment",
+    category: p.category,
+    brokerOrBankName: p.brokerApp,
+  }));
+  // Case-insensitive, matching the duplicate checks in addAccountMode /
+  // addBrokerPartition — differently-cased same-name entries are already one
+  // identity everywhere else in this file.
+  const seen = new Set(targets.map((t) => t.id.toLowerCase()));
+  for (const a of accountModes) {
+    if (a.type !== "bank" && a.type !== "cash") continue;
+    if (seen.has(a.id.toLowerCase())) continue; // dedup: e.g. the generic "Cash" default exists on both sides
+    seen.add(a.id.toLowerCase());
+    targets.push({ id: a.id, name: a.name, group: "liquid", category: "liquid" });
+  }
+  return targets;
+}
 
 // ─── Portfolio snapshots ───────────────────────────────────────────────────
 /**
@@ -456,6 +510,7 @@ export const PARTITION_PURPOSES: readonly PartitionPurpose[] = [
   "swing",
   "international",
   "crypto",
+  "liquid",
   "custom",
 ];
 
@@ -636,8 +691,9 @@ export type TxType = "income" | "expense";
 export type TxCategory = string;
 
 /**
- * Mirrors cashflow_ledger DB columns (camelCase).
- * tags is a local UI-only field with no DB column.
+ * Mirrors cashflow_ledger DB columns (camelCase) — including `tags`, which
+ * round-trips through the cashflow_ledger.tags text[] column (see
+ * src/lib/db/mappers.ts transactionToRow/rowToTransaction).
  */
 export type Transaction = {
   id: string;
@@ -1788,6 +1844,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         );
         return;
       }
+      // Cross-namespace guard: bank/cash account ids share the snapshot-target
+      // id namespace with broker partitions (see getSnapshotTargets), and a
+      // colliding account would lose the dedup — silently never becoming a
+      // snapshot target at all. Reject the collision up front instead. (The
+      // built-in "Cash"/"Cash" pair is the one sanctioned collision; it's
+      // handled by the restore path above and the dedup itself.)
+      if (
+        (type === "bank" || type === "cash") &&
+        brokerPartitions.some((p) => p.id.toLowerCase() === trimmed.toLowerCase())
+      ) {
+        return;
+      }
       // Only cards and UPI handles are funded by a bank; silently ignore a
       // link on anything else rather than persisting a field that would never
       // be read but would show up in exports and confuse the next reader.
@@ -1824,7 +1892,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // account-scoped view (ledger table/cards, credit-card-dues total) reads
       // from accountModes, so deleting it out from under existing data would
       // orphan that data: still summed into totals, but unlabeled everywhere else.
-      const hasReferences = transactions.some((t) => t.account === id);
+      // Portfolio snapshots can reference bank/cash accounts too (they're
+      // snapshot targets — see getSnapshotTargets), so a snapshot reference
+      // blocks deletion for the same reason deleteBrokerPartition's does — but
+      // ONLY when this account is the target those snapshots actually resolve
+      // to. A non-bank/cash account is never a target, and a same-id broker
+      // partition wins the getSnapshotTargets dedup (the built-in "Cash" ships
+      // as both), in which case the PARTITION owns the reference and
+      // deleteBrokerPartition already guards it — blocking the account too
+      // would force deleting real snapshot data just to remove an unused
+      // payment mode.
+      const account = accountModes.find((a) => a.id === id);
+      const ownsSnapshotTarget =
+        (account?.type === "bank" || account?.type === "cash") &&
+        // Case-insensitive to mirror getSnapshotTargets' dedup exactly.
+        !brokerPartitions.some((p) => p.id.toLowerCase() === id.toLowerCase());
+      const hasReferences =
+        transactions.some((t) => t.account === id) ||
+        (ownsSnapshotTarget && portfolioSnapshots.some((s) => s.brokerPartition === id));
       if (hasReferences) return false;
       markLocalWrite();
       // A default isn't a member of customAccountModes (it lives in
@@ -1849,7 +1934,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return true;
     },
     updateAccountMode: (id, patch) => {
-      if (!customAccountModes.some((a) => a.id === id)) return false; // defaults can't be edited in place
+      const existing = customAccountModes.find((a) => a.id === id);
+      if (!existing) return false; // defaults can't be edited in place
+      // Retyping a bank/cash account to any other type silently pulls it out
+      // of the snapshot-target list (getSnapshotTargets only admits bank|cash)
+      // while its snapshots remain — the exact orphaning the deleteAccountMode
+      // guard above exists to prevent, just reached through edit instead.
+      // Block it under the same ownership condition: the account is the live
+      // target (no same-id partition shadows it) and snapshots reference it.
+      const nextType = patch.type ?? existing.type;
+      const leavesTargetSet =
+        (existing.type === "bank" || existing.type === "cash") &&
+        nextType !== "bank" &&
+        nextType !== "cash";
+      if (
+        leavesTargetSet &&
+        !brokerPartitions.some((p) => p.id.toLowerCase() === id.toLowerCase()) &&
+        portfolioSnapshots.some((s) => s.brokerPartition === id)
+      ) {
+        return false;
+      }
       markLocalWrite();
       setCustomAccountModes((prev) => {
         const next = prev.map((a) => {
@@ -1899,6 +2003,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // is treated as the same partition instead of silently creating a
       // near-duplicate.
       if (brokerPartitions.some((p) => p.id.toLowerCase() === trimmed.toLowerCase())) return;
+      // Cross-namespace guard (mirror of addAccountMode's): a new partition
+      // colliding with a bank/cash ACCOUNT id would win the getSnapshotTargets
+      // dedup — instantly reclassifying every snapshot recorded against that
+      // bank account as investment capital and cutting the account off from
+      // ever being snapshotted again. Reject the collision instead of silently
+      // reassigning history.
+      if (
+        accountModes.some(
+          (a) =>
+            (a.type === "bank" || a.type === "cash") &&
+            a.id.toLowerCase() === trimmed.toLowerCase(),
+        )
+      ) {
+        return;
+      }
       markLocalWrite();
       setCustomBrokerPartitions((prev) => [
         ...prev,
