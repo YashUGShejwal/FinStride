@@ -14,7 +14,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  CheckSquare, Columns3, FileSpreadsheet, Loader2, Search, Square, TriangleAlert, UploadCloud,
+  CheckSquare, Columns3, ExternalLink, FileSpreadsheet, Loader2, Search, Square, TriangleAlert,
+  UploadCloud,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useStore, type PaymentMode, type Transaction, type TxType } from "@/lib/store";
@@ -81,6 +82,28 @@ const NOTES_MAX = 140;
 const EMERALD = "text-[oklch(0.78_0.16_155)]";
 const ROSE = "text-[oklch(0.78_0.18_25)]";
 const AMBER = "text-[oklch(0.82_0.13_80)]";
+
+/** Quick portals to the statement-download page for the brokers/banks this parser targets. */
+const STATEMENT_HELPER_LINKS = [
+  { label: "Zerodha Console", url: "https://console.zerodha.com/reports/statement" },
+  { label: "Groww Reports", url: "https://groww.in/user/reports" },
+  { label: "Dhan Reports", url: "https://login.dhan.co/" },
+  { label: "HDFC NetBanking", url: "https://netbanking.hdfcbank.com/" },
+  { label: "ICICI NetBanking", url: "https://infinity.icicibank.com/" },
+];
+
+function HelperLinkPill({ label, url }: { label: string; url: string }) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-full border border-glass-border bg-white/[0.03] text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
+    >
+      {label} <ExternalLink className="size-3" />
+    </a>
+  );
+}
 
 export function CsvImportDrawer({
   open,
@@ -479,6 +502,15 @@ export function CsvImportDrawer({
                 e.target.value = ""; // allow re-picking the same file
               }}
             />
+
+            <div className="space-y-1.5">
+              <p className="text-[11px] text-muted-foreground">Get your statement from:</p>
+              <div className="flex flex-wrap gap-1.5">
+                {STATEMENT_HELPER_LINKS.map((l) => (
+                  <HelperLinkPill key={l.url} {...l} />
+                ))}
+              </div>
+            </div>
           </div>
         )}
 

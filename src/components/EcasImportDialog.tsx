@@ -16,7 +16,8 @@
 
 import { useMemo, useRef, useState } from "react";
 import {
-  CheckSquare, Eye, EyeOff, FileLock2, Loader2, Lock, Square, TriangleAlert, UploadCloud,
+  CheckSquare, ExternalLink, Eye, EyeOff, FileLock2, Loader2, Lock, Square, TriangleAlert,
+  UploadCloud,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useStore, type BrokerPartition, type PartitionId } from "@/lib/store";
@@ -41,6 +42,26 @@ type StagedHolding = EcasHolding & {
 
 const EMERALD = "text-[oklch(0.78_0.16_155)]";
 const AMBER = "text-[oklch(0.82_0.13_80)]";
+
+/** Where to actually get an eCAS — CDSL/NSDL cover demat, MFCentral covers MF-only folios. */
+const ECAS_HELPER_LINKS = [
+  { label: "CDSL eCAS", url: "https://www.cdslindia.com/cas/logincas.aspx" },
+  { label: "NSDL CAS", url: "https://cas.nsdl.com/" },
+  { label: "MFCentral", url: "https://www.mfcentral.com/" },
+];
+
+function HelperLinkPill({ label, url }: { label: string; url: string }) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-full border border-glass-border bg-white/[0.03] text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
+    >
+      {label} <ExternalLink className="size-3" />
+    </a>
+  );
+}
 
 /** First brokerPartition matching the holding's category, else the first partition overall. */
 function defaultPartitionFor(category: EcasHoldingCategory, brokerPartitions: BrokerPartition[]): PartitionId {
@@ -240,6 +261,17 @@ export function EcasImportDialog({
                 e.target.value = "";
               }}
             />
+
+            <div className="space-y-1.5">
+              <p className="text-[11px] text-muted-foreground">
+                Need your statement? Generate or download here:
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {ECAS_HELPER_LINKS.map((l) => (
+                  <HelperLinkPill key={l.url} {...l} />
+                ))}
+              </div>
+            </div>
 
             <div>
               <Label htmlFor="ecas-pw" className="text-[10px] uppercase tracking-wider text-muted-foreground">
