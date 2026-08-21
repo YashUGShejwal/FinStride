@@ -258,6 +258,7 @@ const PARTITION_PURPOSES: readonly string[] = [
   "swing",
   "international",
   "crypto",
+  "liquid",
   "custom",
 ];
 
@@ -267,7 +268,7 @@ const PURPOSE_FALLBACK: Record<string, PartitionPurpose> = {
   long_term_etf: "long_term",
   mutual_funds: "long_term",
   crypto: "crypto",
-  liquid: "custom",
+  liquid: "liquid",
 };
 
 function accountModeToJson(a: AccountMode): DbAccountModeJson {

@@ -80,6 +80,7 @@ const PARTITION_PURPOSE_LABELS: Record<PartitionPurpose, string> = {
   swing: "Swing",
   international: "International",
   crypto: "Crypto",
+  liquid: "Liquid",
   custom: "Custom",
 };
 
@@ -409,6 +410,7 @@ function SettingsPage() {
         <AccountModeColumn
           accountModes={accountModes}
           bankAccounts={bankAccounts}
+          brokerPartitions={brokerPartitions}
           defaultIds={DEFAULT_ACCOUNT_MODES.map((a) => a.id)}
           onAdd={addAccountMode}
           onDelete={deleteAccountMode}
@@ -434,6 +436,7 @@ function SettingsPage() {
         </div>
         <BrokerPartitionColumn
           brokerPartitions={brokerPartitions}
+          accountModes={accountModes}
           defaultIds={DEFAULT_BROKER_PARTITIONS.map((p) => p.id)}
           onAdd={addBrokerPartition}
           onDelete={deleteBrokerPartition}
@@ -870,6 +873,7 @@ const CHANNEL_SUGGESTIONS_ID = "finstride-channel-suggestions";
 function AccountModeColumn({
   accountModes,
   bankAccounts,
+  brokerPartitions,
   defaultIds,
   onAdd,
   onDelete,
@@ -878,6 +882,8 @@ function AccountModeColumn({
   accountModes: AccountMode[];
   /** Linkable targets — bank-type accounts only (see AccountMode.linkedBankId). */
   bankAccounts: AccountMode[];
+  /** For the cross-namespace snapshot-target id check — see getSnapshotTargets in the store. */
+  brokerPartitions: BrokerPartition[];
   defaultIds: readonly string[];
   onAdd: (
     name: string,
@@ -917,6 +923,17 @@ function AccountModeColumn({
         bank ? `"${trimmed}" via ${bank} is already on the list` : `"${trimmed}" is already on the list`,
       );
     }
+    // Bank/cash account ids share the snapshot-target namespace with broker
+    // partitions (see getSnapshotTargets) — the store rejects the collision,
+    // so surface why instead of showing a false "added" toast.
+    if (
+      (type === "bank" || type === "cash") &&
+      brokerPartitions.some((p) => p.id.toLowerCase() === trimmed.toLowerCase())
+    ) {
+      return toast.error(
+        `"${trimmed}" is already a broker partition — bank/cash accounts and partitions share the snapshot-target list, so pick a different name`,
+      );
+    }
     onAdd(trimmed, type, { linkedBankId: resolvedBankId, channelLabel: channel.trim() || undefined });
     setName("");
     setChannel("");
@@ -954,7 +971,12 @@ function AccountModeColumn({
       toast.success(`"${trimmed}" updated`);
       setEditing(null);
     } else {
-      toast.error("This account can't be edited in place");
+      // Covers both store rejections: defaults can't be edited in place, and a
+      // bank/cash account with recorded snapshots can't be re-typed out of the
+      // snapshot-target set (that would orphan its snapshot history).
+      toast.error(
+        "Couldn't update — an account with recorded snapshots must stay a bank/cash type",
+      );
     }
   };
 
@@ -1057,7 +1079,7 @@ function AccountModeColumn({
               <button
                 onClick={() => {
                   if (onDelete(a.id)) toast.success(`"${a.name}" removed`);
-                  else toast.error(`"${a.name}" is still in use — remove its transactions first`);
+                  else toast.error(`"${a.name}" is still in use — remove its transactions/snapshots first`);
                 }}
                 className="text-muted-foreground hover:text-destructive"
               >
@@ -1154,12 +1176,15 @@ function AccountModeColumn({
 // ─── Broker partition column ────────────────────────────────────────────────
 function BrokerPartitionColumn({
   brokerPartitions,
+  accountModes,
   defaultIds,
   onAdd,
   onDelete,
   onUpdate,
 }: {
   brokerPartitions: BrokerPartition[];
+  /** For the cross-namespace snapshot-target id check — see getSnapshotTargets in the store. */
+  accountModes: AccountMode[];
   defaultIds: readonly string[];
   onAdd: (
     name: string,
@@ -1189,6 +1214,21 @@ function BrokerPartitionColumn({
       )
     ) {
       return toast.error("A partition with that name already exists");
+    }
+    // Partition ids share the snapshot-target namespace with bank/cash ACCOUNT
+    // ids (see getSnapshotTargets), and a colliding partition would silently
+    // claim the account's snapshot history — the store rejects it, so surface
+    // why instead of showing a false "added" toast.
+    if (
+      accountModes.some(
+        (a) =>
+          (a.type === "bank" || a.type === "cash") &&
+          a.id.toLowerCase() === trimmed.toLowerCase(),
+      )
+    ) {
+      return toast.error(
+        `"${trimmed}" is already a bank/cash account — accounts and partitions share the snapshot-target list, so pick a different name`,
+      );
     }
     onAdd(trimmed, purpose, {
       category: category === "auto" ? undefined : category,

@@ -306,6 +306,16 @@ export async function deleteSnapshotRow(
   return !error;
 }
 
+/** Deletes EVERY portfolio_snapshots row for this user — the remote half of "Clear All History". */
+export async function deleteAllSnapshotRows(
+  client: FinStrideClient,
+  userId: string,
+): Promise<boolean> {
+  const { error } = await client.from("portfolio_snapshots").delete().eq("user_id", userId);
+  if (error) logFailure("deleteAllSnapshots", error);
+  return !error;
+}
+
 // ─── Writes: grind + hustle ────────────────────────────────────────────────
 export async function upsertGrindLog(
   client: FinStrideClient,

@@ -18,6 +18,7 @@ const PURPOSE_LABELS: Record<PartitionPurpose, string> = {
   swing: "Swing",
   international: "International",
   crypto: "Crypto",
+  liquid: "Liquid",
   custom: "Custom",
 };
 
