@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
 import { isRunningStandalone, type BeforeInstallPromptEvent } from "@/lib/platform";
 import {
+  deleteAllSnapshotRows,
   deleteGrindLogRow,
   deleteHustleEntryRow,
   deleteSnapshotRow,
@@ -908,6 +909,8 @@ type StoreCtx = {
     snapshotDate?: string,
   ) => void;
   deletePortfolioSnapshot: (id: string) => void;
+  /** Wipes every recorded portfolio snapshot — local state, localStorage, and (if synced) every remote row for this user. */
+  clearAllSnapshots: () => void;
   // Grind Deck
   grind: GrindState;
   addGrindLog: (metric: GrindMetricKey, label: string, meta?: string) => void;
@@ -2097,6 +2100,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setPortfolioSnapshots((s) => s.filter((x) => x.id !== id));
       const sync = getSync();
       if (sync) trackedWrite(deleteSnapshotRow(sync.client, sync.userId, id));
+    },
+    clearAllSnapshots: () => {
+      markLocalWrite();
+      setPortfolioSnapshots([]);
+      // Explicit and immediate, mirroring resetAllData's treatment of this
+      // same key — the persist effect below would also write the (now empty)
+      // array once hydrated, but this guarantees the on-disk state agrees
+      // with memory the instant the action runs, not on the next render.
+      try {
+        localStorage.removeItem(SNAP_KEY);
+      } catch {
+        // Ignore — in-memory state is what the rest of the app reads from.
+      }
+      const sync = getSync();
+      if (sync) trackedWrite(deleteAllSnapshotRows(sync.client, sync.userId));
     },
     grind,
     addGrindLog: (metric, label, meta) => {

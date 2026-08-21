@@ -6,7 +6,7 @@ import {
 } from "recharts";
 import {
   PieChart as PieChartIcon, TrendingUp, X, Filter,
-  Plus, History, ChevronDown, ChevronUp, Trash2,
+  Plus, History, ChevronDown, ChevronUp, Trash2, TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -25,6 +25,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 type AnalyticsSearch = { action?: "add-snapshot" };
 
@@ -255,7 +260,13 @@ function AnalyticsPage() {
         <KpiTile label="Total Deposits" value={summary.totalDeposits} format={inr} tone="neutral" />
         <KpiTile label="Total Withdrawals" value={summary.totalWithdrawals} format={inr} tone="neutral" />
         <KpiTile label="Net Investment" value={summary.netInvestment} format={inr} tone="neutral" />
-        <KpiTile label="Current Value" value={summary.currentValue} format={inr} tone="primary" />
+        <KpiTile
+          label="Current Value"
+          value={summary.currentValue}
+          format={inr}
+          tone="primary"
+          subtext={portfolioSnapshots.length === 0 ? "(no snapshot yet)" : undefined}
+        />
         <KpiTile
           label="Absolute Return"
           value={summary.absoluteReturn}
@@ -424,6 +435,31 @@ function AnalyticsPage() {
                       <AnimatedNumber value={d.value} format={inr} />
                     </Sensitive>
                   </p>
+                </li>
+              ))}
+            </ul>
+          ) : portfolioSnapshots.length === 0 ? (
+            // No snapshot has EVER been recorded — list every active partition
+            // explicitly at ₹0 rather than collapsing the whole card to one
+            // generic placeholder, so it's clear these are real, trackable
+            // partitions that simply have no data yet, not a broken chart.
+            <ul className="space-y-2">
+              {(filters.partitions.length > 0 ? filters.partitions : ALL_PARTITIONS).map((key) => (
+                <li
+                  key={key}
+                  className="flex items-center justify-between gap-3 p-3 rounded-xl border border-glass-border bg-white/3"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span
+                      className="size-3 rounded-full shrink-0 opacity-40"
+                      style={{ backgroundColor: hexForPartition(key, canonicalPartitionIndex(key)) }}
+                    />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate text-muted-foreground">{partitionLabel(key)}</p>
+                      <p className="text-[11px] text-muted-foreground/70">(no snapshot yet)</p>
+                    </div>
+                  </div>
+                  <p className="font-semibold tnum text-sm text-muted-foreground shrink-0">{inr(0)}</p>
                 </li>
               ))}
             </ul>
@@ -643,10 +679,18 @@ const UNDO_WINDOW_MS = 5000;
 
 // ─── Snapshot history (grouped by partition, delete-with-undo) ────────────
 function SnapshotHistorySection() {
-  const { portfolioSnapshots, deletePortfolioSnapshot, brokerPartitions, partitionLabel, isStealthMode } = useStore();
+  const {
+    portfolioSnapshots, deletePortfolioSnapshot, clearAllSnapshots,
+    brokerPartitions, isStealthMode,
+  } = useStore();
   const [expanded, setExpanded] = useState<Set<PartitionId>>(new Set());
   const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set());
   const deleteTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  // Same fallback used for the group headers below — a plain partitionLabel()
+  // lookup falls back to the raw id, which would make this toast (and the
+  // group header) disagree on what to call an unmapped/legacy partition.
+  const groupLabel = (id: PartitionId) => brokerPartitions.find((p) => p.id === id)?.name ?? "Legacy Partition";
 
   const togglePartition = (key: PartitionId) => {
     setExpanded((prev) => {
@@ -682,7 +726,7 @@ function SnapshotHistorySection() {
     // masks the balance outright instead of broadcasting it for 5 seconds.
     toast("Snapshot removed", {
       duration: UNDO_WINDOW_MS,
-      description: `${partitionLabel(snap.brokerPartition)} • ${isStealthMode ? "₹••••••" : inr(snap.currentValue)} • ${fmtDate(snap.snapshotDate)}`,
+      description: `${groupLabel(snap.brokerPartition)} • ${isStealthMode ? "₹••••••" : inr(snap.currentValue)} • ${fmtDate(snap.snapshotDate)}`,
       action: {
         label: "Undo",
         onClick: () => {
@@ -701,45 +745,124 @@ function SnapshotHistorySection() {
     });
   };
 
+  // Cancels a Clear All in flight before it's finished clearing everything.
+  const handleClearAll = () => {
+    // Any single-row deletes still mid-Undo-window get folded into the bulk
+    // clear immediately — their deferred timers would otherwise still fire
+    // (harmlessly, since the rows are already gone either way) but their
+    // "Undo" toasts would stay onscreen promising to restore a snapshot that
+    // Clear All just wiped everywhere, local and remote.
+    for (const t of deleteTimers.current.values()) clearTimeout(t);
+    deleteTimers.current.clear();
+    setPendingDeleteIds(new Set());
+    clearAllSnapshots();
+    toast.success("All snapshots cleared");
+  };
+
   const visibleSnapshots = portfolioSnapshots.filter((s) => !pendingDeleteIds.has(s.id));
+
+  // Grouped by whatever partition ids are ACTUALLY PRESENT in the data, not
+  // by iterating the current brokerPartitions list. A snapshot can outlive
+  // the partition it names — an imported backup naming one that was never
+  // re-created locally, or data from before an earlier renaming pass — and
+  // iterating brokerPartitions instead would make such a row silently
+  // disappear from this page with no way to see or delete it.
+  const presentIds = [...new Set(visibleSnapshots.map((s) => s.brokerPartition))];
+  const knownIds = new Set(brokerPartitions.map((p) => p.id));
+  const unmappedIds = presentIds.filter((id) => !knownIds.has(id));
+  const orderedIds = [
+    ...brokerPartitions.map((p) => p.id).filter((id) => presentIds.includes(id)),
+    ...unmappedIds,
+  ];
+  // Known partitions keep the SAME color index used everywhere else on this
+  // page (their position in brokerPartitions); legacy ones get a stable index
+  // past the end of that list so they never coincidentally reuse a real
+  // partition's color.
+  const colorIndexFor = (id: PartitionId) => {
+    const known = brokerPartitions.findIndex((p) => p.id === id);
+    return known >= 0 ? known : brokerPartitions.length + unmappedIds.indexOf(id);
+  };
 
   return (
     <section className="glass rounded-2xl p-5">
-      <div className="flex items-center gap-2 mb-4">
-        <History className="size-4 text-primary" />
-        <h2 className="font-display font-semibold tracking-tight">Snapshot history</h2>
-        <span className="text-xs text-muted-foreground font-normal ml-1">
-          ({visibleSnapshots.length} total)
-        </span>
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <div className="flex items-center gap-2">
+          <History className="size-4 text-primary" />
+          <h2 className="font-display font-semibold tracking-tight">Snapshot history</h2>
+          <span className="text-xs text-muted-foreground font-normal ml-1">
+            ({visibleSnapshots.length} total)
+          </span>
+        </div>
+        {visibleSnapshots.length > 0 && (
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5 h-8 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              >
+                <Trash2 className="size-3.5" /> Clear All History
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent className="glass-strong border-glass-border">
+              <AlertDialogHeader>
+                <AlertDialogTitle className="flex items-center gap-2">
+                  <TriangleAlert className="size-4 text-destructive" /> Delete all snapshots?
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  Are you sure you want to delete all historical snapshots? This cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleClearAll}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  Delete all snapshots
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        )}
       </div>
 
       {visibleSnapshots.length === 0 ? (
         <EmptyChart icon={<History className="size-10 opacity-30" />} text="No snapshots recorded yet" />
       ) : (
         <div className="space-y-3">
-          {brokerPartitions.map((p, i) => {
+          {orderedIds.map((id) => {
             const rows = visibleSnapshots
-              .filter((s) => s.brokerPartition === p.id)
+              .filter((s) => s.brokerPartition === id)
               .sort((a, b) => b.snapshotDate.localeCompare(a.snapshotDate));
             if (rows.length === 0) return null;
 
-            const isOpen = expanded.has(p.id);
+            const known = brokerPartitions.find((p) => p.id === id);
+            const isOpen = expanded.has(id);
             const latest = rows[0];
 
             return (
-              <div key={p.id} className="rounded-xl border border-glass-border overflow-hidden">
+              <div key={id} className="rounded-xl border border-glass-border overflow-hidden">
                 <button
                   type="button"
-                  onClick={() => togglePartition(p.id)}
+                  onClick={() => togglePartition(id)}
                   className="w-full flex items-center justify-between p-3.5 hover:bg-white/5 transition-colors"
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
                     <span
                       className="size-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: hexForPartition(p.id, i) }}
+                      style={{ backgroundColor: hexForPartition(id, colorIndexFor(id)) }}
                     />
                     <div className="text-left min-w-0">
-                      <p className="text-sm font-medium">{p.name}</p>
+                      <p className="text-sm font-medium">
+                        {known?.name ?? "Legacy Partition"}
+                        {!known && (
+                          <span className="ml-1.5 text-[10px] font-normal text-muted-foreground/60">
+                            ({id})
+                          </span>
+                        )}
+                      </p>
                       <p className="text-[11px] text-muted-foreground">
                         {rows.length} snapshot{rows.length !== 1 ? "s" : ""} • latest{" "}
                         <Sensitive>
@@ -771,6 +894,8 @@ function SnapshotHistorySection() {
                         </div>
                         <button
                           onClick={() => handleDelete(s)}
+                          title="Delete snapshot"
+                          aria-label="Delete snapshot"
                           className="text-muted-foreground hover:text-destructive p-1.5 shrink-0"
                         >
                           <Trash2 className="size-3.5" />

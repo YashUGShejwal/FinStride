@@ -34,6 +34,7 @@ export {
   deleteTradeRow,
   upsertSnapshots,
   deleteSnapshotRow,
+  deleteAllSnapshotRows,
   upsertGrindLog,
   deleteGrindLogRow,
   upsertHustleEntry,
