@@ -22,6 +22,7 @@ import {
   upsertSettings as dbUpsertSettings,
   upsertSnapshots as dbUpsertSnapshots,
   upsertTrade as dbUpsertTrade,
+  upsertTrades as dbUpsertTrades,
   upsertTransaction as dbUpsertTransaction,
   upsertTransactions as dbUpsertTransactions,
   type FinStrideClient,
@@ -956,6 +957,8 @@ type StoreCtx = {
   deleteTransaction: (id: string) => void;
   // Trades
   addTrade: (t: Omit<Trade, "id" | "status">) => void;
+  /** Batch insert (tradebook CSV imports) — see addTransactions for the identical reasoning. */
+  addTrades: (ts: Omit<Trade, "id" | "status">[]) => void;
   closeTrade: (id: string, closeReason: CloseReason, closeNotes?: string) => void;
   deleteTrade: (id: string) => void;
   // Obligations
@@ -2152,6 +2155,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setTrades((s) => [row, ...s]);
       const sync = getSync();
       if (sync) trackedWrite(dbUpsertTrade(sync.client, sync.userId, row));
+    },
+    addTrades: (ts) => {
+      if (ts.length === 0) return;
+      markLocalWrite();
+      const rows: Trade[] = ts.map((t) => ({ ...t, id: crypto.randomUUID(), status: "open" }));
+      // Single state update (not N addTrade calls) — a tradebook import can be
+      // hundreds of rows, and this mirrors addTransactions' exact reasoning:
+      // one render, one localStorage persist, one batched remote upsert.
+      setTrades((s) => [...rows, ...s]);
+      const sync = getSync();
+      if (sync) trackedWrite(dbUpsertTrades(sync.client, sync.userId, rows));
     },
     closeTrade: (id, closeReason, closeNotes) => {
       markLocalWrite();

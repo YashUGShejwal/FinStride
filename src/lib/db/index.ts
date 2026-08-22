@@ -32,6 +32,7 @@ export {
   upsertTransactions,
   deleteTransactionRow,
   upsertTrade,
+  upsertTrades,
   deleteTradeRow,
   upsertSnapshots,
   deleteSnapshotRow,

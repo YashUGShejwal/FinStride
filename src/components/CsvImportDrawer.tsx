@@ -83,13 +83,16 @@ const EMERALD = "text-[oklch(0.78_0.16_155)]";
 const ROSE = "text-[oklch(0.78_0.18_25)]";
 const AMBER = "text-[oklch(0.82_0.13_80)]";
 
-/** Quick portals to the statement-download page for the brokers/banks this parser targets. */
+// Pure bank NetBanking portals — this drawer parses bank/card CSV statements,
+// not broker tradebooks (see TradeImportModal for that), so the broker links
+// that used to live here (Zerodha/Groww/Dhan) were the wrong destination for
+// what this importer actually accepts.
 const STATEMENT_HELPER_LINKS = [
-  { label: "Zerodha Console", url: "https://console.zerodha.com/reports/statement" },
-  { label: "Groww Reports", url: "https://groww.in/user/reports" },
-  { label: "Dhan Reports", url: "https://login.dhan.co/" },
   { label: "HDFC NetBanking", url: "https://netbanking.hdfcbank.com/" },
   { label: "ICICI NetBanking", url: "https://infinity.icicibank.com/" },
+  { label: "SBI NetBanking", url: "https://retail.onlinesbi.sbi/" },
+  { label: "Axis NetBanking", url: "https://omni.axisbank.co.in/" },
+  { label: "Kotak NetBanking", url: "https://netbanking.kotak.com/" },
 ];
 
 function HelperLinkPill({ label, url }: { label: string; url: string }) {
@@ -504,7 +507,7 @@ export function CsvImportDrawer({
             />
 
             <div className="space-y-1.5">
-              <p className="text-[11px] text-muted-foreground">Get your statement from:</p>
+              <p className="text-[11px] text-muted-foreground">Get your bank statement from:</p>
               <div className="flex flex-wrap gap-1.5">
                 {STATEMENT_HELPER_LINKS.map((l) => (
                   <HelperLinkPill key={l.url} {...l} />

@@ -291,6 +291,29 @@ export async function upsertTrade(
   return !error;
 }
 
+/**
+ * Batch upsert for tradebook CSV imports. Chunked so a large tradebook
+ * doesn't ride on one oversized PostgREST payload; mirrors upsertTransactions
+ * above exactly — same chunk size, same AND-of-chunk-results semantics.
+ */
+export async function upsertTrades(
+  client: FinStrideClient,
+  userId: string,
+  trades: Trade[],
+): Promise<boolean> {
+  if (trades.length === 0) return true;
+  let ok = true;
+  for (let i = 0; i < trades.length; i += TX_BATCH_CHUNK) {
+    const chunk = trades.slice(i, i + TX_BATCH_CHUNK);
+    const { error } = await client.from("swing_trades").upsert(chunk.map((t) => tradeToRow(t, userId)));
+    if (error) {
+      logFailure(`upsertTrades (rows ${i}–${i + chunk.length - 1})`, error);
+      ok = false;
+    }
+  }
+  return ok;
+}
+
 export async function deleteTradeRow(
   client: FinStrideClient,
   userId: string,

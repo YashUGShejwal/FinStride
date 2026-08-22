@@ -3,12 +3,14 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   Plus, Trash2, AlertTriangle, ShieldAlert, Lock,
   CheckCircle2, XCircle, MinusCircle, ChevronDown, ChevronUp,
-  Wallet, Pencil,
+  Wallet, Pencil, FileSpreadsheet,
 } from "lucide-react";
+import { TradeImportModal } from "@/components/TradeImportModal";
 import {
   useStore,
   type CloseReason, type PartitionId,
 } from "@/lib/store";
+import { FNO_REGEX } from "@/lib/blueprintRules";
 import { inr, fmtDate, todayLocalISO } from "@/lib/format";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { Sensitive } from "@/components/Sensitive";
@@ -30,10 +32,6 @@ export const Route = createFileRoute("/_authenticated/swing")({
   }),
   component: SwingPage,
 });
-
-// Blueprint Rule 2 — F&O ban regex (always active)
-const FNO_REGEX =
-  /\b(CALL|PUT|CE|PE|NIFTY|SENSEX|BANKNIFTY|FINNIFTY)\b|\d{2}(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d{0,4}(CE|PE)?/i;
 
 const CLOSE_REASONS: {
   value: CloseReason;
@@ -255,6 +253,7 @@ function SwingPage() {
 
   // ── quick-log drawer + logged-trade ripple ───────────────────────────────
   const [formOpen, setFormOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const positionsRipple = useGlowRipple();
 
   // Deep-link intent (command palette "New Swing Trade", dashboard quick
@@ -394,7 +393,8 @@ function SwingPage() {
       <CapitalSnapshotPanel />
 
       {/* ── Entry form — collapsed by default so open positions lead ─────────── */}
-      <QuickLogDrawer label="Quick Log Trade" open={formOpen} onToggle={toggleForm}>
+      <div className="flex items-start gap-3">
+        <QuickLogDrawer label="Quick Log Trade" open={formOpen} onToggle={toggleForm} className="flex-1">
         <form onSubmit={submit} className="grid grid-cols-2 md:grid-cols-6 gap-3">
           {/* Row 1 */}
           <Field className="col-span-2 md:col-span-2" label="Ticker">
@@ -549,6 +549,17 @@ function SwingPage() {
           </div>
         </form>
       </QuickLogDrawer>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setImportOpen(true)}
+          className="border-glass-border gap-2 h-[52px] shrink-0 hover:border-primary/40"
+        >
+          <FileSpreadsheet className="size-4" /> Import Tradebook
+        </Button>
+      </div>
+
+      <TradeImportModal open={importOpen} onOpenChange={setImportOpen} />
 
       {/* ── Open positions ────────────────────────────────────────────────────── */}
       <section className={`glass rounded-2xl p-5 ${positionsRipple.className}`}>
