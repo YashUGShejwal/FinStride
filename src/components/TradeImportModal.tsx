@@ -4,26 +4,41 @@
  * Three linear steps: drop (target partition + file) -> (map, only on
  * auto-detect failure) -> review (stage, edit target/stop, commit).
  *
- * MODELING NOTE (see tradebookParser.ts for the full reasoning): a tradebook
- * row is a BUY or a SELL fill, not a "trade". BUY rows map cleanly onto this
- * app's Trade model (open a new LONG position). A SELL row exits a position
- * that must already exist — this modal now reconciles that automatically:
- * every SELL is matched against the OLDEST open trade for the same ticker in
- * the target partition (FIFO — there is no per-lot tracking engine, so this
- * is the standard, defensible convention when more than one open lot could
- * match) and staged as a "Close position" row with the exit price/date and
- * computed P&L pre-filled. A SELL with no open-trade candidate is still shown
- * (so the user sees everything the file contains) but stays inert.
+ * FOUR-PASS RECONCILIATION ENGINE (stageRows below) — deterministic, in this
+ * order, each pass only ever seeing what the previous one left unclaimed:
  *
- * Every close carries an execution fingerprint (the source row's trade/order
- * id, or a synthetic date+symbol+qty+price key) stamped onto the closed
- * Trade's closeExecutionId — checked against already-closed trades on every
- * future import so a re-uploaded/overlapping tradebook can never re-apply
- * (or misapply) the same close twice.
+ *   Pass 1 — Intra-CSV round trips. Within the uploaded file itself, a BUY
+ *     and a later SELL for the same ticker/contract are paired FIFO
+ *     (chronological, oldest buy first) into a single "round trip" that's
+ *     imported ALREADY CLOSED — both entry and exit are known from the file,
+ *     so this needs no cross-reference to the store at all.
+ *   Pass 2 — DB open-position matching. A SELL the file couldn't pair with
+ *     its own BUY is matched against the OLDEST open trade for the same
+ *     ticker in the target partition (FIFO again — there is no per-lot
+ *     tracking engine, so this is the standard, defensible convention when
+ *     more than one open lot could match) and staged as an auto-close.
+ *   Pass 3 — Unpaired BUYs become new open trades, target/stop suggested
+ *     from the configured risk cap (same heuristic the manual entry form's
+ *     risk meter uses).
+ *   Pass 4 — Whatever SELL is left after passes 1-2 is an orphan: no CSV-
+ *     side buy, no DB-side open position. Still shown (so the user sees
+ *     everything the file contains) but flagged and never actionable.
+ *
+ * Every close (round-trip or auto-close) carries an execution fingerprint
+ * (the source SELL row's trade/order id, or a synthetic date+symbol+qty+
+ * price key) stamped onto the closed Trade's closeExecutionId — checked
+ * against already-closed trades on every future import so a re-uploaded/
+ * overlapping tradebook can never re-apply (or misapply) the same close
+ * twice.
+ *
+ * P&L is reported NET of charges (brokerage/STT/stamp duty/GST/etc, summed
+ * per fill by tradebookParser.ts) wherever the underlying trade has that
+ * data — netPnl = (exitPrice - entryPrice) * qty - charges. The plain `pnl`
+ * field is kept as the gross figure alongside it.
  *
  * F&O handling: FNO_REGEX-matched rows are skipped entirely (Blueprint Rule
  * 2) UNLESS the user has opted into enableFnoTracking, in which case they
- * flow through the same buy/close staging as equity rows, tagged with a
+ * flow through all four passes exactly like equity rows, tagged with a
  * best-effort decoded contract (see decodeFnoSymbol).
  *
  * The parser is a plain, isomorphic CSV reader (like csvStatementParser.ts) —
@@ -55,9 +70,39 @@ import {
 
 // ─── Staging model ───────────────────────────────────────────────────────────
 // A discriminated union rather than one flat shape with placeholder ""
-// strings on irrelevant fields — a close card has no target/stop to edit, an
+// strings on irrelevant fields — a round-trip has no target/stop to edit, an
 // unmatched sell has neither those nor P&L, and this keeps each variant only
 // carrying the fields that are actually meaningful for it.
+//
+// StagedRoundTripRow does NOT extend ParsedTradeRow (unlike the other three)
+// since it represents a MERGED pair of rows, not one — it declares its own
+// symbol/rawSymbol rather than inheriting a single row's.
+type StagedRoundTripRow = {
+  kind: "round-trip";
+  key: number;
+  selected: boolean;
+  symbol: string;
+  rawSymbol: string;
+  assetClass: "equity" | "fno";
+  fno: FnoContractInfo | null;
+  entryDate: string;
+  exitDate: string;
+  entryPrice: number;
+  exitPrice: number;
+  qty: number;
+  charges: number;
+  /** (exitPrice - entryPrice) * qty - charges. */
+  netPnl: number;
+  /** netPnl / (entryPrice * qty). */
+  roiPct: number;
+  durationDays: number;
+  /** True when the CSV's buy leg and sell leg had different quantities — a partial exit relative to the single lot this app tracks. */
+  qtyMismatch: boolean;
+  /** This exact SELL leg's fingerprint already matches a trade closed by a PAST import. */
+  isDuplicate: boolean;
+  closeExecutionId: string;
+};
+
 type StagedBuyRow = ParsedTradeRow & {
   kind: "buy";
   key: number;
@@ -77,8 +122,13 @@ type StagedCloseRow = ParsedTradeRow & {
   selected: boolean;
   matchedTradeId: string;
   matchedTrade: Trade;
-  /** (price - matchedTrade.entryPrice) * min(quantity, matchedTrade.qty). */
+  /** Combined entry-leg + exit-leg charges (the open trade's own charges, if any, plus this SELL's). */
+  charges: number;
+  /** (price - matchedTrade.entryPrice) * min(quantity, matchedTrade.qty) — gross, no charges deducted. */
   pnl: number;
+  /** pnl - charges. */
+  netPnl: number;
+  /** netPnl / (matchedTrade.entryPrice * min(quantity, matchedTrade.qty)). */
   roiPct: number;
   /** True when this SELL's quantity doesn't exactly match the open trade's — a partial exit or an oversell relative to the single lot this app tracks. */
   qtyMismatch: boolean;
@@ -91,7 +141,7 @@ type StagedUnmatchedSellRow = ParsedTradeRow & {
   alreadyClosed?: boolean;
 };
 
-type StagedTradeRow = StagedBuyRow | StagedCloseRow | StagedUnmatchedSellRow;
+type StagedTradeRow = StagedRoundTripRow | StagedBuyRow | StagedCloseRow | StagedUnmatchedSellRow;
 
 type Step = "drop" | "map" | "review";
 
@@ -119,10 +169,11 @@ const EMERALD = "text-[oklch(0.78_0.16_155)]";
 const ROSE = "text-[oklch(0.78_0.18_25)]";
 const AMBER = "text-[oklch(0.82_0.13_80)]";
 const SKY = "text-[oklch(0.75_0.14_230)]";
+const CYAN = "text-[oklch(0.76_0.13_195)]";
 // Trade counts are typically much smaller than bank-statement transaction
 // counts, so this is a generous ceiling — but it must still hold regardless
-// of size: see the forced-deselect-beyond-cap logic in stageRows below,
-// which keeps "what's shown" and "what's committed" in sync even if a file
+// of size: see the render-cap pass at the end of stageRows below, which
+// keeps "what's shown" and "what's committed" in sync even if a file
 // somehow exceeds it.
 const ROW_RENDER_CAP = 500;
 
@@ -204,11 +255,89 @@ export function TradeImportModal({
   const suggestTarget = (entryPrice: number) => (entryPrice * (1 + 2 * riskPct)).toFixed(2);
   const suggestStop = (entryPrice: number) => (entryPrice * (1 - riskPct)).toFixed(2);
 
-  // ── Staging from parsed rows ───────────────────────────────────────────────
+  // ── Staging from parsed rows — the 4-pass engine ───────────────────────────
   const stageRows = (rows: ParsedTradeRow[], skipped: number) => {
     const fnoRows = enableFnoTracking ? [] : rows.filter((r) => FNO_REGEX.test(r.symbol));
     const workingRows = enableFnoTracking ? rows : rows.filter((r) => !FNO_REGEX.test(r.symbol));
 
+    // Fingerprints of executions that already closed a trade in a PAST
+    // import — checked by both Pass 1 and Pass 2 so a re-uploaded/
+    // overlapping tradebook can never re-apply (or misapply) the same close
+    // twice, regardless of which pass would otherwise claim it.
+    const closedFingerprints = new Set(
+      trades
+        .filter((t) => t.status === "closed" && t.closeExecutionId)
+        .map((t) => t.closeExecutionId as string),
+    );
+
+    // ── Pass 1: intra-CSV round-trip matching ──────────────────────────────
+    // Grouped by symbol, then sorted CHRONOLOGICALLY within each group
+    // (not left in file order) — some broker exports list newest-first, and
+    // pairing off raw file order in that case would match a later buy to an
+    // earlier sell, producing a negative-duration "round trip". FIFO per
+    // symbol: the oldest still-unclaimed buy in the file pairs with the next
+    // sell for that same symbol.
+    const bySymbol = new Map<string, ParsedTradeRow[]>();
+    for (const r of workingRows) {
+      const list = bySymbol.get(r.symbol) ?? [];
+      list.push(r);
+      bySymbol.set(r.symbol, list);
+    }
+
+    const roundTripRows: StagedRoundTripRow[] = [];
+    const consumed = new Set<number>();
+
+    for (const [symbol, group] of bySymbol) {
+      const chronological = [...group].sort((a, b) => a.dateISO.localeCompare(b.dateISO));
+      const buyQueue: ParsedTradeRow[] = [];
+      for (const r of chronological) {
+        if (r.side === "buy") {
+          buyQueue.push(r);
+          continue;
+        }
+        const buyLeg = buyQueue.shift();
+        if (!buyLeg) continue; // no CSV-side buy available yet — leaves for Pass 2/4
+        const sellLeg = r;
+        const matchedQty = Math.min(buyLeg.quantity, sellLeg.quantity);
+        const qtyMismatch = buyLeg.quantity !== sellLeg.quantity;
+        const charges = buyLeg.charges + sellLeg.charges;
+        const netPnl = (sellLeg.price - buyLeg.price) * matchedQty - charges;
+        const roiPct = buyLeg.price > 0 ? netPnl / (buyLeg.price * matchedQty) : 0;
+        const durationDays = Math.max(
+          0,
+          Math.round((new Date(sellLeg.dateISO).getTime() - new Date(buyLeg.dateISO).getTime()) / 86400000),
+        );
+        const isFno = FNO_REGEX.test(symbol);
+        const fp = executionFingerprint(sellLeg, partition);
+        roundTripRows.push({
+          kind: "round-trip",
+          key: sellLeg.sourceIndex,
+          selected: !qtyMismatch && !closedFingerprints.has(fp),
+          symbol,
+          rawSymbol: sellLeg.rawSymbol,
+          assetClass: isFno ? "fno" : "equity",
+          fno: isFno ? decodeFnoSymbol(symbol) : null,
+          entryDate: buyLeg.dateISO,
+          exitDate: sellLeg.dateISO,
+          entryPrice: buyLeg.price,
+          exitPrice: sellLeg.price,
+          qty: matchedQty,
+          charges,
+          netPnl,
+          roiPct,
+          durationDays,
+          qtyMismatch,
+          isDuplicate: closedFingerprints.has(fp),
+          closeExecutionId: fp,
+        });
+        consumed.add(buyLeg.sourceIndex);
+        consumed.add(sellLeg.sourceIndex);
+      }
+    }
+
+    const remainingRows = workingRows.filter((r) => !consumed.has(r.sourceIndex));
+
+    // ── Pass 2 (DB open-position matching) / Pass 3 (unpaired buys) / Pass 4 (orphan sells) ──
     // Count-aware BUY duplicate matching against ALL existing trades (open
     // AND closed) in the target partition — mirrors the CSV importer's
     // approach: N existing trades flag at most N staged rows, so two
@@ -243,71 +372,57 @@ export function TradeImportModal({
       list.sort((a, b) => a.entryDate.localeCompare(b.entryDate));
     }
 
-    // Fingerprints of executions that already closed a trade in a PAST
-    // import — checked so a re-uploaded/overlapping tradebook can never
-    // re-apply (or misapply) the same close twice.
-    const closedFingerprints = new Set(
-      trades
-        .filter((t) => t.status === "closed" && t.closeExecutionId)
-        .map((t) => t.closeExecutionId as string),
-    );
-
-    const next: StagedTradeRow[] = [];
-    let rowIndex = 0;
-    for (const r of workingRows) {
-      // Rows past the render cap are never auto-selected: the review grid's
-      // search box re-slices `filtered` from this SAME staged order, so a
-      // row out here can still be found and selected later once the user
-      // actually filters down to see it — this only prevents committing
-      // something that was never shown by default.
-      const withinRenderCap = rowIndex < ROW_RENDER_CAP;
-      rowIndex++;
-
+    const rest: StagedTradeRow[] = [];
+    for (const r of remainingRows) {
       if (r.side === "sell") {
         const fp = executionFingerprint(r, partition);
         if (closedFingerprints.has(fp)) {
-          next.push({ ...r, kind: "unmatched-sell", key: r.sourceIndex, alreadyClosed: true });
+          rest.push({ ...r, kind: "unmatched-sell", key: r.sourceIndex, alreadyClosed: true });
           continue;
         }
         const pool = openByTicker.get(r.symbol);
         const candidate = pool && pool.length > 0 ? pool[0] : undefined;
         if (!candidate) {
-          next.push({ ...r, kind: "unmatched-sell", key: r.sourceIndex });
+          rest.push({ ...r, kind: "unmatched-sell", key: r.sourceIndex }); // Pass 4: orphan
           continue;
         }
         pool!.shift();
         const qtyMismatch = candidate.qty !== r.quantity;
         const matchedQty = Math.min(candidate.qty, r.quantity);
+        const totalCharges = (candidate.charges ?? 0) + r.charges;
         const pnl = (r.price - candidate.entryPrice) * matchedQty;
-        const roiPct = candidate.entryPrice > 0 ? (r.price - candidate.entryPrice) / candidate.entryPrice : 0;
-        next.push({
+        const netPnl = pnl - totalCharges;
+        const roiPct = candidate.entryPrice > 0 ? netPnl / (candidate.entryPrice * matchedQty) : 0;
+        rest.push({
           ...r,
           kind: "close",
           key: r.sourceIndex,
-          selected: !qtyMismatch && withinRenderCap,
+          selected: !qtyMismatch,
           matchedTradeId: candidate.id,
           matchedTrade: candidate,
+          charges: totalCharges,
           pnl,
+          netPnl,
           roiPct,
           qtyMismatch,
         });
         continue;
       }
 
-      // Buy row.
+      // Pass 3: remaining unpaired BUY rows become new open trades.
       const isFno = FNO_REGEX.test(r.symbol);
       let isDuplicate = false;
       const k = dupKey(r.dateISO, r.symbol, r.quantity, r.price, partition);
-      const remaining = buyDupCounts.get(k) ?? 0;
-      if (remaining > 0) {
-        buyDupCounts.set(k, remaining - 1);
+      const remainingCount = buyDupCounts.get(k) ?? 0;
+      if (remainingCount > 0) {
+        buyDupCounts.set(k, remainingCount - 1);
         isDuplicate = true;
       }
-      next.push({
+      rest.push({
         ...r,
         kind: "buy",
         key: r.sourceIndex,
-        selected: !isDuplicate && withinRenderCap,
+        selected: !isDuplicate,
         isDuplicate,
         targetPrice: suggestTarget(r.price),
         stopLoss: suggestStop(r.price),
@@ -316,7 +431,18 @@ export function TradeImportModal({
       });
     }
 
-    setStaged(next);
+    // Merge all four passes into one chronologically-coherent list (a
+    // round-trip sorts at its SELL leg's position — the "closing" event is
+    // the more salient anchor of a completed trade), then apply the render
+    // cap LAST, across the unified order — computing it per-pass earlier
+    // would have let a round-trip beyond the cap stay auto-selected just
+    // because Pass 1 never rate-limited itself.
+    const merged = [...roundTripRows, ...rest].sort((a, b) => a.key - b.key);
+    const final = merged.map((r, idx) =>
+      idx >= ROW_RENDER_CAP && "selected" in r ? ({ ...r, selected: false } as StagedTradeRow) : r,
+    );
+
+    setStaged(final);
     setSkippedRows(skipped);
     setFnoSkipped(fnoRows.length);
     setStep("review");
@@ -381,19 +507,30 @@ export function TradeImportModal({
     return s ? staged.filter((r) => r.symbol.toLowerCase().includes(s)) : staged;
   }, [staged, q]);
 
+  const roundTripRowsAll = staged.filter((r): r is StagedRoundTripRow => r.kind === "round-trip");
   const buyRows = staged.filter((r): r is StagedBuyRow => r.kind === "buy");
   const closeRows = staged.filter((r): r is StagedCloseRow => r.kind === "close");
   const unmatchedSellRows = staged.filter((r): r is StagedUnmatchedSellRow => r.kind === "unmatched-sell");
+  const selectedRoundTrips = roundTripRowsAll.filter((r) => r.selected);
   const selectedBuys = buyRows.filter((r) => r.selected);
   const selectedCloses = closeRows.filter((r) => r.selected);
-  const buyVolume = buyRows.reduce((s, r) => s + r.quantity * r.price, 0);
-  const sellVolume = [...closeRows, ...unmatchedSellRows].reduce((s, r) => s + r.quantity * r.price, 0);
+  const buyVolume =
+    buyRows.reduce((s, r) => s + r.quantity * r.price, 0) +
+    roundTripRowsAll.reduce((s, r) => s + r.qty * r.entryPrice, 0);
+  const sellVolume =
+    [...closeRows, ...unmatchedSellRows].reduce((s, r) => s + r.quantity * r.price, 0) +
+    roundTripRowsAll.reduce((s, r) => s + r.qty * r.exitPrice, 0);
   const tickerCount = new Set(staged.map((r) => r.symbol)).size;
-  const dupCount = buyRows.filter((r) => r.isDuplicate).length;
+  const dupCount =
+    buyRows.filter((r) => r.isDuplicate).length + roundTripRowsAll.filter((r) => r.isDuplicate).length;
   // Counts only STILL-unchecked mismatches (not the total) — once the user
   // manually re-checks one after reviewing it, it must drop out of this
   // count, or the banner would keep claiming rows are unreviewed forever.
-  const qtyMismatchCount = closeRows.filter((r) => r.qtyMismatch && !r.selected).length;
+  const qtyMismatchCount =
+    closeRows.filter((r) => r.qtyMismatch && !r.selected).length +
+    roundTripRowsAll.filter((r) => r.qtyMismatch && !r.selected).length;
+  const estimatedNetPnl =
+    selectedRoundTrips.reduce((s, r) => s + r.netPnl, 0) + selectedCloses.reduce((s, r) => s + r.netPnl, 0);
 
   // Loose patch type + one cast at the merge point — every call site below
   // controls exactly which fields it passes for a row it already knows the
@@ -401,6 +538,11 @@ export function TradeImportModal({
   // over a discriminated union for zero real safety loss.
   const patchRow = (key: number, patch: Record<string, unknown>) =>
     setStaged((s) => s.map((r) => (r.key === key ? ({ ...r, ...patch } as StagedTradeRow) : r)));
+
+  const toggleAllRoundTrips = () => {
+    const target = !roundTripRowsAll.every((r) => r.selected);
+    setStaged((s) => s.map((r) => (r.kind === "round-trip" ? { ...r, selected: target } : r)));
+  };
 
   const toggleAllBuys = () => {
     const target = !buyRows.every((r) => r.selected);
@@ -413,7 +555,13 @@ export function TradeImportModal({
   };
 
   const deselectDuplicates = () =>
-    setStaged((s) => s.map((r) => (r.kind === "buy" && r.isDuplicate ? { ...r, selected: false } : r)));
+    setStaged((s) =>
+      s.map((r) =>
+        (r.kind === "buy" && r.isDuplicate) || (r.kind === "round-trip" && r.isDuplicate)
+          ? { ...r, selected: false }
+          : r,
+      ),
+    );
 
   // ── Commit ─────────────────────────────────────────────────────────────────
   const invalidSelected = selectedBuys.some(
@@ -421,7 +569,7 @@ export function TradeImportModal({
   );
 
   const handleCommit = async () => {
-    if (selectedBuys.length === 0 && selectedCloses.length === 0) {
+    if (selectedRoundTrips.length === 0 && selectedBuys.length === 0 && selectedCloses.length === 0) {
       toast.error("Select at least one row to import");
       return;
     }
@@ -432,8 +580,48 @@ export function TradeImportModal({
     setImporting(true);
     await new Promise((r) => setTimeout(r, 60));
 
+    if (selectedRoundTrips.length > 0) {
+      // Created ALREADY CLOSED — status:"closed" plus the full exit shape —
+      // via the same batch mutator as ordinary buys (addTrades now accepts
+      // an optional per-entry status override for exactly this case).
+      const entries = selectedRoundTrips.map((r) => ({
+        ticker: r.symbol,
+        entryDate: r.entryDate,
+        direction: "LONG" as const,
+        qty: r.qty,
+        entryPrice: r.entryPrice,
+        // Structural filler, not a real plan: the position is already
+        // closed by the time this exists, so target/stop can never be
+        // tested again — the closed-card UI leads with entry/exit/P&L
+        // instead of these. Kept only because Trade requires them.
+        targetPrice: Number(suggestTarget(r.entryPrice)),
+        stopLoss: Number(suggestStop(r.entryPrice)),
+        source: "Self" as const,
+        partition,
+        notes: `Round-trip from tradebook (${r.rawSymbol})`.slice(0, 140),
+        status: "closed" as const,
+        exitDate: r.exitDate,
+        exitPrice: r.exitPrice,
+        pnl: (r.exitPrice - r.entryPrice) * r.qty,
+        netPnl: r.netPnl,
+        charges: r.charges,
+        closeReason: "other" as const,
+        closeExecutionId: r.closeExecutionId,
+        exitReason: "tradebook_sync" as const,
+        ...(r.assetClass === "fno"
+          ? {
+              assetClass: "fno" as const,
+              expiry: r.fno?.expiry,
+              strike: r.fno?.strike ?? undefined,
+              optionType: r.fno?.optionType,
+            }
+          : {}),
+      }));
+      addTrades(entries);
+    }
+
     if (selectedBuys.length > 0) {
-      const entries: Omit<Trade, "id" | "status">[] = selectedBuys.map((r) => ({
+      const entries: Array<Omit<Trade, "id" | "status">> = selectedBuys.map((r) => ({
         ticker: r.symbol,
         entryDate: r.dateISO,
         direction: "LONG",
@@ -448,6 +636,9 @@ export function TradeImportModal({
         // matching CsvImportDrawer's NOTES_MAX convention exactly, so this
         // stays correct even if that upstream cap ever changes independently.
         notes: `Imported from tradebook (${r.rawSymbol})`.slice(0, 140),
+        // Recorded on the OPEN trade so a future import's Pass 2 can add the
+        // exit leg's charges to this entry leg's when it eventually closes.
+        charges: r.charges,
         ...(r.assetClass === "fno"
           ? {
               assetClass: "fno" as const,
@@ -470,16 +661,20 @@ export function TradeImportModal({
         exitDate: r.dateISO,
         exitPrice: r.price,
         pnl: r.pnl,
+        netPnl: r.netPnl,
+        charges: r.charges,
         closeExecutionId: executionFingerprint(r, partition),
       });
     }
 
     setImporting(false);
     const parts: string[] = [];
+    if (selectedRoundTrips.length)
+      parts.push(`${selectedRoundTrips.length} round trip${selectedRoundTrips.length !== 1 ? "s" : ""}`);
     if (selectedBuys.length) parts.push(`${selectedBuys.length} new trade${selectedBuys.length !== 1 ? "s" : ""}`);
     if (selectedCloses.length)
       parts.push(`${selectedCloses.length} closed position${selectedCloses.length !== 1 ? "s" : ""}`);
-    toast.success(`Imported ${parts.join(" and ")}`);
+    toast.success(`Imported ${parts.join(", ")}`);
     onOpenChange(false);
     resetAll();
   };
@@ -487,6 +682,7 @@ export function TradeImportModal({
   const rendered = filtered.slice(0, ROW_RENDER_CAP);
   const commitLabel = (() => {
     const parts: string[] = [];
+    if (selectedRoundTrips.length) parts.push(`${selectedRoundTrips.length} round trip${selectedRoundTrips.length !== 1 ? "s" : ""}`);
     if (selectedBuys.length) parts.push(`${selectedBuys.length} new`);
     if (selectedCloses.length) parts.push(`${selectedCloses.length} close${selectedCloses.length !== 1 ? "s" : ""}`);
     return parts.length ? `Import ${parts.join(" + ")}` : "Import";
@@ -506,7 +702,7 @@ export function TradeImportModal({
             <FileSpreadsheet className="size-4 text-primary" /> Import tradebook
           </DialogTitle>
           <DialogDescription>
-            Stage buy fills as new swing positions, and matched sell fills as auto-closes.
+            Reconciles round trips, new positions, and closes in one pass — review, then import.
           </DialogDescription>
         </DialogHeader>
 
@@ -621,23 +817,28 @@ export function TradeImportModal({
           <>
             <div className="px-6 py-4 space-y-3 border-b border-glass-border shrink-0">
               <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
-                {/* "Rows parsed", not "Total trades" — staged includes sell
-                    rows that don't independently import as new trades (see
-                    the modeling note in the file doc comment). */}
-                <SummaryStat label="Rows parsed" value={String(staged.length)} />
-                <SummaryStat label="Buy volume" value={inr(buyVolume)} tone={EMERALD} sensitive />
-                <SummaryStat label="Sell volume" value={inr(sellVolume)} tone={ROSE} sensitive />
+                <SummaryStat label="Total rows" value={String(staged.length)} />
+                {roundTripRowsAll.length > 0 && (
+                  <SummaryStat label="Round trips matched" value={String(roundTripRowsAll.length)} tone={CYAN} />
+                )}
+                <SummaryStat label="New buys" value={String(buyRows.length)} tone={EMERALD} />
+                {unmatchedSellRows.length > 0 && (
+                  <SummaryStat label="Unmatched sells" value={String(unmatchedSellRows.length)} tone={ROSE} />
+                )}
+                {(roundTripRowsAll.length > 0 || closeRows.length > 0) && (
+                  <SummaryStat
+                    label="Estimated net P&L"
+                    value={inr(estimatedNetPnl)}
+                    tone={estimatedNetPnl >= 0 ? EMERALD : ROSE}
+                    sensitive
+                  />
+                )}
                 {closeRows.length > 0 && (
                   <SummaryStat label="Auto-close matches" value={String(closeRows.length)} tone={SKY} />
                 )}
-                <SummaryStat label="Tickers" value={String(tickerCount)} />
                 {dupCount > 0 && <SummaryStat label="Duplicates" value={String(dupCount)} tone={AMBER} />}
                 {(skippedRows > 0 || fnoSkipped > 0) && (
-                  <SummaryStat
-                    label="Skipped"
-                    value={String(skippedRows + fnoSkipped)}
-                    tone={AMBER}
-                  />
+                  <SummaryStat label="Skipped" value={String(skippedRows + fnoSkipped)} tone={AMBER} />
                 )}
                 <span className="text-muted-foreground ml-auto truncate max-w-[14rem]" title={fileName}>
                   {fileName}
@@ -651,10 +852,10 @@ export function TradeImportModal({
                 </p>
               )}
               <p className="text-[11px] text-muted-foreground">
-                <span className={EMERALD}>BUY</span> rows open new trades.{" "}
-                <span className={SKY}>SELL</span> rows matched to an open position become{" "}
-                <span className={SKY}>close</span> rows — checked by default, editable, and applied
-                on import. Unmatched sells are shown for context only.
+                <span className={CYAN}>ROUND-TRIP</span> pairs a BUY and SELL found in this file into
+                one already-closed trade. <span className={SKY}>CLOSE</span> matches a SELL to an
+                existing open position. Unpaired <span className={EMERALD}>BUY</span> rows open new
+                trades. Orphan sells (no match anywhere) are shown for context only.
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 <div className="relative flex-1 min-w-[10rem]">
@@ -666,6 +867,22 @@ export function TradeImportModal({
                     className="pl-8 h-8 text-sm bg-input/40 border-glass-border"
                   />
                 </div>
+                {roundTripRowsAll.length > 0 && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 border-glass-border gap-1.5"
+                    onClick={toggleAllRoundTrips}
+                  >
+                    {roundTripRowsAll.every((r) => r.selected) ? (
+                      <CheckSquare className="size-3.5" />
+                    ) : (
+                      <Square className="size-3.5" />
+                    )}
+                    {roundTripRowsAll.every((r) => r.selected) ? "Deselect all round trips" : "Select all round trips"}
+                  </Button>
+                )}
                 <Button
                   type="button"
                   variant="outline"
@@ -718,7 +935,87 @@ export function TradeImportModal({
                 </p>
               ) : (
                 <ul className="space-y-1.5">
-                  {rendered.map((r) => (
+                  {rendered.map((r) => {
+                    if (r.kind === "round-trip") {
+                      return (
+                        <li
+                          key={r.key}
+                          className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-colors ${
+                            r.selected
+                              ? "border-[oklch(0.76_0.13_195_/_0.4)] bg-[oklch(0.76_0.13_195_/_0.06)]"
+                              : "border-glass-border/50 opacity-60"
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => patchRow(r.key, { selected: !r.selected })}
+                            className={`shrink-0 ${r.selected ? CYAN : "text-muted-foreground"}`}
+                            aria-label={r.selected ? "Deselect row" : "Select row"}
+                          >
+                            {r.selected ? <CheckSquare className="size-4" /> : <Square className="size-4" />}
+                          </button>
+                          <span
+                            className="text-xs font-semibold tracking-wider px-2 py-0.5 rounded-md bg-white/[0.06] border border-glass-border shrink-0"
+                            title={r.rawSymbol}
+                          >
+                            {r.symbol}
+                          </span>
+                          <span
+                            className={`text-[9px] font-semibold tracking-wider px-1.5 py-0.5 rounded-md shrink-0 border border-[oklch(0.76_0.13_195_/_0.4)] ${CYAN}`}
+                          >
+                            ROUND-TRIP
+                          </span>
+                          {r.assetClass === "fno" && (
+                            <span
+                              className={`text-[9px] font-semibold tracking-wider px-1.5 py-0.5 rounded-md border border-glass-border shrink-0 ${AMBER}`}
+                              title={
+                                r.fno
+                                  ? `${r.fno.instrument} ${r.fno.optionType}${r.fno.strike ? ` ${r.fno.strike}` : ""} · ${r.fno.expiry}`
+                                  : "F&O contract — couldn't decode the symbol shape"
+                              }
+                            >
+                              F&O{r.fno?.optionType ? ` ${r.fno.optionType}` : ""}
+                            </span>
+                          )}
+                          {r.qtyMismatch && (
+                            <span
+                              className={`shrink-0 inline-flex items-center gap-1 text-[9px] font-semibold tracking-wider px-1.5 py-0.5 rounded-md border border-[oklch(0.78_0.14_80_/_0.4)] ${AMBER}`}
+                              title="The buy and sell legs in this file had different quantities — review before confirming"
+                            >
+                              <TriangleAlert className="size-2.5" /> QTY MISMATCH
+                            </span>
+                          )}
+                          {r.isDuplicate && (
+                            <span
+                              className={`shrink-0 inline-flex items-center gap-1 text-[9px] font-semibold tracking-wider px-1.5 py-0.5 rounded-md border border-[oklch(0.78_0.14_80_/_0.4)] ${AMBER}`}
+                              title="A trade with this same execution already exists from a past import"
+                            >
+                              <TriangleAlert className="size-2.5" /> DUP
+                            </span>
+                          )}
+                          <span className="text-[11px] text-muted-foreground shrink-0 tnum">
+                            <Sensitive>{inr(r.entryPrice)}</Sensitive> ➔ <Sensitive>{inr(r.exitPrice)}</Sensitive>
+                          </span>
+                          <span className="text-[10px] text-muted-foreground shrink-0">
+                            {r.durationDays === 0 ? "Intraday" : `${r.durationDays}d`}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground shrink-0 tnum ml-auto md:ml-0">
+                            Charges <Sensitive>{inr(r.charges)}</Sensitive>
+                          </span>
+                          <span className={`tnum text-xs font-semibold shrink-0 ${r.netPnl >= 0 ? EMERALD : ROSE}`}>
+                            <Sensitive>
+                              {r.netPnl >= 0 ? "+" : ""}
+                              {inr(r.netPnl)}
+                            </Sensitive>
+                          </span>
+                          <span className={`tnum text-[10px] shrink-0 ${r.roiPct >= 0 ? EMERALD : ROSE}`}>
+                            {r.roiPct >= 0 ? "+" : ""}
+                            {(r.roiPct * 100).toFixed(1)}%
+                          </span>
+                        </li>
+                      );
+                    }
+                    return (
                     <li
                       key={r.key}
                       className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-colors ${
@@ -794,6 +1091,13 @@ export function TradeImportModal({
                           <TriangleAlert className="size-2.5" /> QTY {r.quantity}≠{r.matchedTrade.qty}
                         </span>
                       )}
+                      {r.kind === "unmatched-sell" && !r.alreadyClosed && (
+                        <span
+                          className={`shrink-0 inline-flex items-center gap-1 text-[9px] font-semibold tracking-wider px-1.5 py-0.5 rounded-md border border-[oklch(0.78_0.14_80_/_0.4)] ${AMBER}`}
+                        >
+                          <TriangleAlert className="size-2.5" /> NO MATCH
+                        </span>
+                      )}
                       <span className="tnum text-xs text-muted-foreground shrink-0 w-14 text-right">
                         {r.quantity}
                       </span>
@@ -826,15 +1130,20 @@ export function TradeImportModal({
                         </div>
                       )}
                       {r.kind === "close" && (
-                        <div className="flex items-center gap-2 shrink-0 w-[13rem] justify-end">
+                        <div className="flex items-center gap-2 shrink-0 w-[15rem] justify-end">
                           <span
                             className="text-[10px] text-muted-foreground truncate max-w-[5.5rem]"
                             title={`Entered ${fmtDate(r.matchedTrade.entryDate)} @ ${inr(r.matchedTrade.entryPrice)}`}
                           >
                             vs {inr(r.matchedTrade.entryPrice)}
                           </span>
-                          <span className={`tnum text-xs font-semibold ${r.pnl >= 0 ? EMERALD : ROSE}`}>
-                            <Sensitive>{inr(r.pnl)}</Sensitive>
+                          {r.charges > 0 && (
+                            <span className="text-[10px] text-muted-foreground tnum" title="Charges deducted">
+                              -{inr(r.charges)}
+                            </span>
+                          )}
+                          <span className={`tnum text-xs font-semibold ${r.netPnl >= 0 ? EMERALD : ROSE}`}>
+                            <Sensitive>{inr(r.netPnl)}</Sensitive>
                           </span>
                           <span className={`tnum text-[10px] ${r.roiPct >= 0 ? EMERALD : ROSE}`}>
                             {r.roiPct >= 0 ? "+" : ""}
@@ -848,7 +1157,8 @@ export function TradeImportModal({
                         </span>
                       )}
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               )}
               {filtered.length > ROW_RENDER_CAP && (
@@ -874,8 +1184,8 @@ export function TradeImportModal({
               {qtyMismatchCount > 0 && (
                 <p className={`flex items-start gap-1.5 text-[11px] ${AMBER}`}>
                   <TriangleAlert className="size-3.5 shrink-0 mt-0.5" />
-                  {qtyMismatchCount} close{qtyMismatchCount !== 1 ? "s" : ""} left unchecked — the
-                  sold quantity didn't exactly match the open position. Review before including them.
+                  {qtyMismatchCount} row{qtyMismatchCount !== 1 ? "s" : ""} left unchecked — the buy
+                  and sell quantities didn't exactly match. Review before including them.
                 </p>
               )}
               <div className="flex items-center justify-between gap-3">
@@ -893,7 +1203,11 @@ export function TradeImportModal({
                 <Button
                   type="button"
                   onClick={() => void handleCommit()}
-                  disabled={importing || (selectedBuys.length === 0 && selectedCloses.length === 0) || invalidSelected}
+                  disabled={
+                    importing ||
+                    (selectedRoundTrips.length === 0 && selectedBuys.length === 0 && selectedCloses.length === 0) ||
+                    invalidSelected
+                  }
                   className="gradient-primary text-primary-foreground border-0 gap-2 glow"
                 >
                   {importing ? <Loader2 className="size-4 animate-spin" /> : <FileSpreadsheet className="size-4" />}

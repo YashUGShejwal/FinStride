@@ -133,6 +133,12 @@ export type DbSwingTradeRow = {
   strike: number | null;
   lot_size: number | null;
   option_type: string | null;
+  /** Brokerage/STT/stamp duty/GST etc. for this trade's fill(s) — see supabase/migrations/0006. NULL when the source never carried charge data. */
+  charges: number | null;
+  /** (exit_price - entry_price) * qty - charges — see supabase/migrations/0006. */
+  net_pnl: number | null;
+  /** 'target' | 'stop_loss' | 'manual' | 'tradebook_sync' — see supabase/migrations/0006. */
+  exit_reason: string | null;
   created_at: string;
 };
 

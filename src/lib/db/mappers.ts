@@ -123,6 +123,9 @@ export function tradeToRow(t: Trade, userId: string): DbSwingTradeInsert {
     strike: t.strike ?? null,
     lot_size: t.lotSize ?? null,
     option_type: t.optionType ?? null,
+    charges: t.charges ?? null,
+    net_pnl: t.netPnl ?? null,
+    exit_reason: t.exitReason ?? null,
   };
 }
 
@@ -156,6 +159,15 @@ export function rowToTrade(r: DbSwingTradeRow): Trade {
     optionType:
       r.option_type === "CE" || r.option_type === "PE" || r.option_type === "FUT"
         ? r.option_type
+        : undefined,
+    charges: r.charges !== null && r.charges !== undefined ? Number(r.charges) : undefined,
+    netPnl: r.net_pnl !== null && r.net_pnl !== undefined ? Number(r.net_pnl) : undefined,
+    exitReason:
+      r.exit_reason === "target" ||
+      r.exit_reason === "stop_loss" ||
+      r.exit_reason === "manual" ||
+      r.exit_reason === "tradebook_sync"
+        ? r.exit_reason
         : undefined,
   };
 }

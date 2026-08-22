@@ -731,6 +731,32 @@ function normalizeTransaction(raw: Record<string, unknown>): Transaction {
 
 export type TradeStatus = "open" | "closed";
 export type CloseReason = "target" | "stoploss" | "other";
+/**
+ * A coarser, ALWAYS-populated-on-close companion to CloseReason — see
+ * classifyExitReason below. CloseReason is the user's own pick in the manual
+ * close panel (unchanged); exitReason is auto-computed for every close
+ * (manual or tradebook-driven) so the closed-position card has one
+ * consistent field to key its outcome badge off regardless of which flow
+ * produced the close.
+ */
+export type ExitReason = "target" | "stop_loss" | "manual" | "tradebook_sync";
+
+/**
+ * Classifies how an IMPORT-DRIVEN close relates to the trade's plan, by
+ * comparing the real exit price against target/stop — never used for a
+ * manual close, which maps directly from the user's CloseReason pick instead
+ * (see closeTrade). Falls back to "tradebook_sync" (a real close, but not
+ * clearly a target or stop trigger) rather than guessing between the two.
+ */
+export function classifyExitReason(
+  exitPrice: number,
+  targetPrice: number,
+  stopLoss: number,
+): "target" | "stop_loss" | "tradebook_sync" {
+  if (exitPrice >= targetPrice) return "target";
+  if (exitPrice <= stopLoss) return "stop_loss";
+  return "tradebook_sync";
+}
 
 /**
  * Mirrors swing_trades DB columns (camelCase).
@@ -768,6 +794,12 @@ export type Trade = {
   lotSize?: number;
   /** F&O only. */
   optionType?: "CE" | "PE" | "FUT";
+  /** Brokerage/STT/stamp duty/GST etc. for this trade's fill(s), summed from a tradebook CSV import. Undefined for manually-entered trades or trades imported before charge-tracking existed — distinct from a genuine 0. */
+  charges?: number;
+  /** (exitPrice - entryPrice) * qty - charges — the realized-after-costs figure surfaced in the Performance Ribbon and closed-position cards. `pnl` stays the gross figure with no charges deducted. */
+  netPnl?: number;
+  /** Auto-computed at close time for every close — see classifyExitReason. */
+  exitReason?: ExitReason;
 };
 
 function normalizeTrade(raw: Record<string, unknown>): Trade {
@@ -797,6 +829,15 @@ function normalizeTrade(raw: Record<string, unknown>): Trade {
     optionType:
       raw.optionType === "CE" || raw.optionType === "PE" || raw.optionType === "FUT"
         ? raw.optionType
+        : undefined,
+    charges: typeof raw.charges === "number" ? raw.charges : undefined,
+    netPnl: typeof raw.netPnl === "number" ? raw.netPnl : undefined,
+    exitReason:
+      raw.exitReason === "target" ||
+      raw.exitReason === "stop_loss" ||
+      raw.exitReason === "manual" ||
+      raw.exitReason === "tradebook_sync"
+        ? raw.exitReason
         : undefined,
   };
 }
@@ -994,8 +1035,14 @@ type StoreCtx = {
   deleteTransaction: (id: string) => void;
   // Trades
   addTrade: (t: Omit<Trade, "id" | "status">) => void;
-  /** Batch insert (tradebook CSV imports) — see addTransactions for the identical reasoning. */
-  addTrades: (ts: Omit<Trade, "id" | "status">[]) => void;
+  /**
+   * Batch insert (tradebook CSV imports) — see addTransactions for the
+   * identical batching reasoning. Each entry may set its own `status`
+   * ("closed" for a completed round-trip staged directly from a matched
+   * BUY+SELL pair in the same CSV — see TradeImportModal's Pass 1); omitting
+   * it defaults to "open", preserving every existing call site unchanged.
+   */
+  addTrades: (ts: Array<Omit<Trade, "id" | "status"> & { status?: TradeStatus }>) => void;
   /**
    * `historical` carries the real exit data a tradebook SELL row provides
    * (TradeImportModal) — omit it for the manual close flow, which has never
@@ -1005,7 +1052,14 @@ type StoreCtx = {
     id: string,
     closeReason: CloseReason,
     closeNotes?: string,
-    historical?: { exitDate?: string; exitPrice?: number; pnl?: number; closeExecutionId?: string },
+    historical?: {
+      exitDate?: string;
+      exitPrice?: number;
+      pnl?: number;
+      netPnl?: number;
+      charges?: number;
+      closeExecutionId?: string;
+    },
   ) => void;
   deleteTrade: (id: string) => void;
   // Obligations
@@ -2231,7 +2285,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     addTrades: (ts) => {
       if (ts.length === 0) return;
       markLocalWrite();
-      const rows: Trade[] = ts.map((t) => ({ ...t, id: crypto.randomUUID(), status: "open" }));
+      const rows: Trade[] = ts.map((t) => ({
+        ...t,
+        id: crypto.randomUUID(),
+        status: t.status ?? "open",
+      }));
       // Single state update (not N addTrade calls) — a tradebook import can be
       // hundreds of rows, and this mirrors addTransactions' exact reasoning:
       // one render, one localStorage persist, one batched remote upsert.
@@ -2244,19 +2302,36 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // Compute the exit stamp once so local state and the remote row agree.
       // `historical` (import-driven closes only) supplies the REAL exit data;
       // the manual close flow has never collected this, so it keeps
-      // defaulting exitDate to "now" and leaves exitPrice/pnl/closeExecutionId
-      // untouched (undefined, same as before this feature existed).
+      // defaulting exitDate to "now" and leaves exitPrice/pnl/charges/
+      // closeExecutionId untouched (undefined, same as before this feature existed).
       const exitDate = historical?.exitDate ?? new Date().toISOString();
-      const patch = (t: Trade): Trade => ({
-        ...t,
-        status: "closed",
-        closeReason,
-        closeNotes: closeNotes || undefined,
-        exitDate,
-        exitPrice: historical?.exitPrice ?? t.exitPrice,
-        pnl: historical?.pnl ?? t.pnl,
-        closeExecutionId: historical?.closeExecutionId ?? t.closeExecutionId,
-      });
+      const patch = (t: Trade): Trade => {
+        const exitPrice = historical?.exitPrice ?? t.exitPrice;
+        // Import-driven: classify against the trade's own plan. Manual: map
+        // straight from the user's CloseReason pick — see classifyExitReason's
+        // doc comment for why these two paths compute this differently.
+        const exitReason: ExitReason =
+          historical?.exitPrice !== undefined
+            ? classifyExitReason(historical.exitPrice, t.targetPrice, t.stopLoss)
+            : closeReason === "target"
+              ? "target"
+              : closeReason === "stoploss"
+                ? "stop_loss"
+                : "manual";
+        return {
+          ...t,
+          status: "closed",
+          closeReason,
+          closeNotes: closeNotes || undefined,
+          exitDate,
+          exitPrice,
+          pnl: historical?.pnl ?? t.pnl,
+          netPnl: historical?.netPnl ?? t.netPnl,
+          charges: historical?.charges ?? t.charges,
+          closeExecutionId: historical?.closeExecutionId ?? t.closeExecutionId,
+          exitReason,
+        };
+      };
       setTrades((s) => s.map((t) => (t.id === id ? patch(t) : t)));
       const existing = stateRef.current.trades.find((t) => t.id === id);
       const sync = getSync();

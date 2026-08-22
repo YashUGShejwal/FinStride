@@ -8,7 +8,7 @@ import {
 import { TradeImportModal } from "@/components/TradeImportModal";
 import {
   useStore,
-  type CloseReason, type PartitionId,
+  type CloseReason, type PartitionId, type Trade, type ExitReason,
 } from "@/lib/store";
 import { FNO_REGEX } from "@/lib/blueprintRules";
 import { inr, fmtDate, todayLocalISO } from "@/lib/format";
@@ -311,6 +311,10 @@ function SwingPage() {
   const equityClosedTrades = closedTrades.filter((t) => t.assetClass !== "fno");
   const fnoOpenTrades = openTrades.filter((t) => t.assetClass === "fno");
   const fnoClosedTrades = closedTrades.filter((t) => t.assetClass === "fno");
+  // Open + closed together, for the Performance Ribbon's charges-paid total
+  // (charges accrue on the entry fill too, before a position ever closes).
+  const equityTrades = trades.filter((t) => t.assetClass !== "fno");
+  const fnoTrades = trades.filter((t) => t.assetClass === "fno");
 
   const handleTickerChange = (raw: string) => {
     const upper = raw.toUpperCase();
@@ -615,6 +619,7 @@ function SwingPage() {
 
       {effectiveDeskView === "equity" && (
       <>
+      <PerformanceRibbon trades={equityTrades} />
       {/* ── Open positions ────────────────────────────────────────────────────── */}
       <section className={`glass rounded-2xl p-5 ${positionsRipple.className}`}>
         <h2 className="font-display font-semibold tracking-tight mb-4">
@@ -759,58 +764,17 @@ function SwingPage() {
             </span>
           </h2>
           <ul className="space-y-2">
-            {equityClosedTrades.map((t) => {
-              const outcomeInfo = CLOSE_REASONS.find((cr) => cr.value === t.closeReason);
-              return (
-                <li
-                  key={t.id}
-                  className="glass rounded-xl p-4 flex items-start gap-3 justify-between opacity-70 hover:opacity-90 transition-opacity"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="font-semibold tracking-wider line-through text-muted-foreground">
-                        {t.ticker}
-                      </p>
-                      {outcomeInfo && (
-                        <span
-                          className={`inline-flex items-center gap-1 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border ${outcomeInfo.color}`}
-                        >
-                          {outcomeInfo.icon} {outcomeInfo.label}
-                        </span>
-                      )}
-                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                        {partitionLabel(t.partition)}
-                      </span>
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      Entry {fmtDate(t.entryDate)}
-                      {t.exitDate ? ` → Closed ${fmtDate(t.exitDate)}` : ""} •{" "}
-                      <Sensitive>
-                        <span className="tnum">
-                          {t.qty} × {inr(t.entryPrice)} • Tgt {inr(t.targetPrice)} • SL{" "}
-                          {inr(t.stopLoss)}
-                        </span>
-                      </Sensitive>
-                    </p>
-                    {t.notes && (
-                      <p className="text-xs text-muted-foreground/60 mt-0.5 italic">{t.notes}</p>
-                    )}
-                    {t.closeNotes && (
-                      <p className="text-xs text-muted-foreground/80 mt-0.5">↳ {t.closeNotes}</p>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => {
-                      deleteTrade(t.id);
-                      toast.success("Trade removed");
-                    }}
-                    className="text-muted-foreground hover:text-destructive p-2 shrink-0"
-                  >
-                    <Trash2 className="size-4" />
-                  </button>
-                </li>
-              );
-            })}
+            {equityClosedTrades.map((t) => (
+              <ClosedTradeCard
+                key={t.id}
+                t={t}
+                partitionName={partitionLabel(t.partition)}
+                onDelete={() => {
+                  deleteTrade(t.id);
+                  toast.success("Trade removed");
+                }}
+              />
+            ))}
           </ul>
         </section>
       )}
@@ -820,6 +784,7 @@ function SwingPage() {
       {/* ── F&O Desk ──────────────────────────────────────────────────────────── */}
       {effectiveDeskView === "fno" && (
         <>
+          <PerformanceRibbon trades={fnoTrades} />
           <section className="glass rounded-2xl p-5">
             <h2 className="font-display font-semibold tracking-tight mb-4">
               F&O open positions
@@ -955,70 +920,24 @@ function SwingPage() {
                 </span>
               </h2>
               <ul className="space-y-2">
-                {fnoClosedTrades.map((t) => {
-                  const outcomeInfo = CLOSE_REASONS.find((cr) => cr.value === t.closeReason);
-                  return (
-                    <li
-                      key={t.id}
-                      className="glass rounded-xl p-4 flex items-start gap-3 justify-between flex-wrap opacity-70 hover:opacity-90 transition-opacity"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <p className="font-semibold tracking-wider line-through text-muted-foreground">
-                            {t.ticker}
-                          </p>
-                          {outcomeInfo && (
-                            <span
-                              className={`inline-flex items-center gap-1 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border ${outcomeInfo.color}`}
-                            >
-                              {outcomeInfo.icon} {outcomeInfo.label}
-                            </span>
-                          )}
-                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                            {partitionLabel(t.partition)}
-                          </span>
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          Entry {fmtDate(t.entryDate)}
-                          {t.exitDate ? ` → Closed ${fmtDate(t.exitDate)}` : ""} •{" "}
-                          <Sensitive>
-                            <span className="tnum">
-                              {t.qty} × {inr(t.entryPrice)}
-                            </span>
-                          </Sensitive>
-                        </p>
-                        {t.closeNotes && (
-                          <p className="text-xs text-muted-foreground/80 mt-0.5">↳ {t.closeNotes}</p>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-4 shrink-0">
+                {fnoClosedTrades.map((t) => (
+                  <ClosedTradeCard
+                    key={t.id}
+                    t={t}
+                    partitionName={partitionLabel(t.partition)}
+                    onDelete={() => {
+                      deleteTrade(t.id);
+                      toast.success("Trade removed");
+                    }}
+                    rightExtra={
+                      <div className="flex items-center gap-3 shrink-0">
                         <FnoStat label="Expiry" value={t.expiry ?? "—"} />
                         <FnoStat label="Strike" value={t.strike !== undefined ? String(t.strike) : "—"} />
                         <FnoStat label="Lot size" value={t.lotSize !== undefined ? String(t.lotSize) : "—"} />
-                        <FnoStat
-                          label="P&L"
-                          value={t.pnl !== undefined ? inr(t.pnl) : "—"}
-                          tone={
-                            t.pnl !== undefined
-                              ? t.pnl >= 0
-                                ? "text-[oklch(0.78_0.16_155)]"
-                                : "text-[oklch(0.78_0.18_25)]"
-                              : undefined
-                          }
-                        />
                       </div>
-                      <button
-                        onClick={() => {
-                          deleteTrade(t.id);
-                          toast.success("Trade removed");
-                        }}
-                        className="text-muted-foreground hover:text-destructive p-2 shrink-0"
-                      >
-                        <Trash2 className="size-4" />
-                      </button>
-                    </li>
-                  );
-                })}
+                    }
+                  />
+                ))}
               </ul>
             </section>
           )}
@@ -1044,6 +963,240 @@ function FnoStat({
       <p className="text-[9px] uppercase tracking-wider text-muted-foreground">{label}</p>
       <p className={`text-xs font-semibold tnum ${tone ?? ""}`}>{value}</p>
     </div>
+  );
+}
+
+// ─── Performance Ribbon ──────────────────────────────────────────────────────
+const PNL_EMERALD = "text-[oklch(0.78_0.16_155)]";
+const PNL_ROSE = "text-[oklch(0.78_0.18_25)]";
+
+/**
+ * KPI strip scoped to whichever desk view (Equity/F&O) is active. P&L-based
+ * stats (Net Realized P&L, Win Rate, Profit Factor) only ever consider
+ * closed trades that HAVE a recorded netPnl/pnl — a trade closed through the
+ * ORIGINAL manual close flow (still the only path for most existing users'
+ * historical trades) never collected an exit price, so there is nothing to
+ * net there; silently treating that as ₹0 would misclassify a real profit or
+ * loss as a scratch. Avg Hold Time and Charges Paid don't have that gap
+ * (hold time only needs entry/exit dates; charges accrue on the entry fill
+ * even for a still-open position), so they're computed more broadly.
+ */
+function PerformanceRibbon({ trades }: { trades: Trade[] }) {
+  const closed = trades.filter((t) => t.status === "closed");
+  if (closed.length === 0) return null;
+
+  const realized = (t: Trade): number | undefined => t.netPnl ?? t.pnl;
+  const withPnl = closed.filter((t) => realized(t) !== undefined);
+  const wins = withPnl.filter((t) => (realized(t) as number) > 0);
+  const losses = withPnl.filter((t) => (realized(t) as number) < 0);
+  const netPnlTotal = withPnl.reduce((s, t) => s + (realized(t) as number), 0);
+  const grossWins = wins.reduce((s, t) => s + (realized(t) as number), 0);
+  const grossLosses = Math.abs(losses.reduce((s, t) => s + (realized(t) as number), 0));
+  const decidedCount = wins.length + losses.length;
+  const winRate = decidedCount > 0 ? (wins.length / decidedCount) * 100 : null;
+  const profitFactor = grossLosses > 0 ? grossWins / grossLosses : grossWins > 0 ? Infinity : null;
+
+  const holdable = closed.filter((t) => t.exitDate);
+  const avgHoldDays =
+    holdable.length > 0
+      ? holdable.reduce(
+          (s, t) => s + Math.max(0, (new Date(t.exitDate!).getTime() - new Date(t.entryDate).getTime()) / 86400000),
+          0,
+        ) / holdable.length
+      : null;
+
+  const totalCharges = trades.reduce((s, t) => s + (t.charges ?? 0), 0);
+
+  return (
+    <section className="glass rounded-2xl p-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <RibbonStat
+          label="Net Realized P&L"
+          value={withPnl.length > 0 ? `${netPnlTotal >= 0 ? "+" : ""}${inr(netPnlTotal)}` : "—"}
+          tone={withPnl.length > 0 ? (netPnlTotal >= 0 ? PNL_EMERALD : PNL_ROSE) : undefined}
+          sensitive
+        />
+        <RibbonStat
+          label="Win Rate"
+          value={winRate !== null ? `${winRate.toFixed(0)}%` : "—"}
+          sub={decidedCount > 0 ? `${wins.length}W · ${losses.length}L` : undefined}
+        />
+        <RibbonStat
+          label="Profit Factor"
+          value={profitFactor === null ? "—" : profitFactor === Infinity ? "∞" : profitFactor.toFixed(2)}
+        />
+        <RibbonStat label="Avg Hold Time" value={avgHoldDays !== null ? `${avgHoldDays.toFixed(1)}d` : "—"} />
+        <RibbonStat label="Charges Paid" value={inr(totalCharges)} sensitive />
+      </div>
+      {closed.length !== withPnl.length && (
+        <p className="text-[10px] text-muted-foreground mt-3">
+          P&L stats based on {withPnl.length} of {closed.length} closed trade
+          {closed.length !== 1 ? "s" : ""} with a recorded exit price — trades closed manually
+          without one aren't counted.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function RibbonStat({
+  label,
+  value,
+  sub,
+  tone,
+  sensitive,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  tone?: string;
+  sensitive?: boolean;
+}) {
+  const val = <span className={`text-lg font-semibold tnum ${tone ?? ""}`}>{value}</span>;
+  return (
+    <div>
+      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
+      <p className="mt-0.5">{sensitive ? <Sensitive>{val}</Sensitive> : val}</p>
+      {sub && <p className="text-[10px] text-muted-foreground mt-0.5">{sub}</p>}
+    </div>
+  );
+}
+
+// ─── Closed position card ────────────────────────────────────────────────────
+const EXIT_REASON_META: Record<ExitReason, { label: string; emoji: string; color: string }> = {
+  target: {
+    label: "Target Hit",
+    emoji: "🎯",
+    color: "border-[oklch(0.72_0.18_155/0.5)] bg-[oklch(0.72_0.18_155/0.1)] text-[oklch(0.82_0.16_155)]",
+  },
+  stop_loss: {
+    label: "Stop Hit",
+    emoji: "🛑",
+    color: "border-[oklch(0.7_0.22_20/0.5)] bg-[oklch(0.7_0.22_20/0.1)] text-[oklch(0.82_0.18_25)]",
+  },
+  tradebook_sync: {
+    label: "Sync Exit",
+    emoji: "⚡",
+    color: "border-[oklch(0.75_0.14_230/0.5)] bg-[oklch(0.75_0.14_230/0.1)] text-[oklch(0.75_0.14_230)]",
+  },
+  manual: {
+    label: "Manual Close",
+    emoji: "✍️",
+    color: "border-glass-border bg-white/5 text-muted-foreground",
+  },
+};
+
+/**
+ * exitReason is a new field — trades closed before it existed only have the
+ * older closeReason (target/stoploss/other from the manual close panel).
+ * Mapped here with the EXACT same rule closeTrade itself uses for a manual
+ * close, so a legacy trade's badge matches what it would have gotten had it
+ * closed today.
+ */
+function resolveExitReason(t: Trade): ExitReason | undefined {
+  if (t.exitReason) return t.exitReason;
+  if (t.closeReason === "target") return "target";
+  if (t.closeReason === "stoploss") return "stop_loss";
+  if (t.closeReason === "other") return "manual";
+  return undefined;
+}
+
+/**
+ * Shared by the equity and F&O closed-position lists. `rightExtra` is where
+ * F&O-specific columns (Expiry/Strike/Lot Size) slot in, ahead of the
+ * performance badge both lists share.
+ */
+function ClosedTradeCard({
+  t,
+  partitionName,
+  rightExtra,
+  onDelete,
+}: {
+  t: Trade;
+  partitionName: string;
+  rightExtra?: React.ReactNode;
+  onDelete: () => void;
+}) {
+  const realizedPnl = t.netPnl ?? t.pnl;
+  const hasExitData = t.exitPrice !== undefined && realizedPnl !== undefined;
+  const roiPct = hasExitData && t.entryPrice > 0 ? realizedPnl! / (t.entryPrice * t.qty) : undefined;
+  const holdDays = t.exitDate
+    ? Math.max(0, Math.round((new Date(t.exitDate).getTime() - new Date(t.entryDate).getTime()) / 86400000))
+    : undefined;
+  const meta = EXIT_REASON_META[resolveExitReason(t) as ExitReason];
+
+  return (
+    <li className="glass rounded-xl p-4 flex items-start gap-3 justify-between flex-wrap opacity-70 hover:opacity-90 transition-opacity">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className="font-semibold tracking-wider line-through text-muted-foreground">{t.ticker}</p>
+          {meta && (
+            <span
+              className={`inline-flex items-center gap-1 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border ${meta.color}`}
+            >
+              {meta.emoji} {meta.label}
+            </span>
+          )}
+          {holdDays !== undefined && (
+            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border border-glass-border text-muted-foreground">
+              {holdDays === 0 ? "Intraday" : `Held ${holdDays}d`}
+            </span>
+          )}
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{partitionName}</span>
+        </div>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          {hasExitData ? (
+            <Sensitive>
+              <span className="tnum">
+                Entry {inr(t.entryPrice)} ➔ Exit {inr(t.exitPrice!)} · {t.qty} qty
+              </span>
+            </Sensitive>
+          ) : (
+            <>
+              Entry {fmtDate(t.entryDate)}
+              {t.exitDate ? ` → Closed ${fmtDate(t.exitDate)}` : ""} •{" "}
+              <Sensitive>
+                <span className="tnum">
+                  {t.qty} × {inr(t.entryPrice)}
+                </span>
+              </Sensitive>{" "}
+              — no exit price recorded
+            </>
+          )}
+        </p>
+        {t.notes && <p className="text-xs text-muted-foreground/60 mt-0.5 italic">{t.notes}</p>}
+        {t.closeNotes && <p className="text-xs text-muted-foreground/80 mt-0.5">↳ {t.closeNotes}</p>}
+      </div>
+      <div className="flex items-center gap-3 shrink-0">
+        {rightExtra}
+        <div
+          className="text-right"
+          title={t.charges !== undefined ? `Charges deducted: ${inr(t.charges)}` : undefined}
+        >
+          {hasExitData ? (
+            <>
+              <p className={`text-sm font-semibold tnum ${realizedPnl! >= 0 ? PNL_EMERALD : PNL_ROSE}`}>
+                <Sensitive>
+                  {realizedPnl! >= 0 ? "+" : ""}
+                  {inr(realizedPnl!)}
+                </Sensitive>
+              </p>
+              {roiPct !== undefined && (
+                <p className={`text-[10px] tnum ${roiPct >= 0 ? PNL_EMERALD : PNL_ROSE}`}>
+                  {roiPct >= 0 ? "+" : ""}
+                  {(roiPct * 100).toFixed(1)}%
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="text-[10px] text-muted-foreground italic">No exit price recorded</p>
+          )}
+        </div>
+        <button onClick={onDelete} className="text-muted-foreground hover:text-destructive p-2">
+          <Trash2 className="size-4" />
+        </button>
+      </div>
+    </li>
   );
 }
 

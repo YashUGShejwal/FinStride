@@ -22,6 +22,10 @@
  * that reports what each row IS (a buy or a sell fill) and leaves the
  * decision of what to DO with that to the import UI, which is where the
  * user's actual open positions are known.
+ *
+ * Each row also carries `charges` (brokerage/STT/stamp duty/GST/etc, summed
+ * from whatever charge columns the export has — 0 when it has none), so the
+ * import UI's P&L math can net them out rather than reporting a gross figure.
  */
 
 import Papa from "papaparse";
@@ -42,6 +46,8 @@ export type ParsedTradeRow = {
   price: number;
   /** The broker's own trade/order id for this fill, when the export has one — used to fingerprint a SELL execution so re-importing an overlapping tradebook can't re-apply the same close twice. Undefined when no such column was found (the importer falls back to a synthetic date+symbol+qty+price key). */
   executionId?: string;
+  /** Sum of every charge column found for this fill (brokerage/STT/stamp duty/GST/etc, or one combined "charges" column) — 0 when the export has no charge data at all, never undefined (see CHARGE_COLUMNS below). */
+  charges: number;
 };
 
 export type TradeColumnMapping = {
@@ -52,6 +58,8 @@ export type TradeColumnMapping = {
   price: number;
   /** Optional — most exports don't carry a distinct trade/order id column, and its absence must never block an otherwise-valid header match. */
   executionId?: number;
+  /** Column indices to SUM for this row's total charges — see mappingFromHeaderRow's doc comment. Empty/undefined when the export has no charge data. */
+  chargeColumns?: number[];
 };
 
 export type TradeParseSuccess = {
@@ -93,6 +101,25 @@ const QUANTITY_HEADERS = ["quantity", "qty", "tradedqty", "filledqty"];
 const PRICE_HEADERS = ["price", "averageprice", "avgprice", "tradeprice", "rate"];
 const TRADE_ID_HEADERS = [
   "tradeid", "orderid", "exchangetradeid", "exchangeorderid", "tradenumber", "orderno", "orderreference",
+];
+
+/**
+ * A single column already holding the COMBINED total (Groww/Dhan sometimes
+ * ship one "Charges"/"Brokerage" figure that already bundles STT/GST/stamp
+ * duty together). Checked FIRST and, if found, used EXCLUSIVELY — see
+ * mappingFromHeaderRow for why itemized columns are never also added on top
+ * of this (double-counting).
+ */
+const TOTAL_CHARGES_HEADERS = ["charges", "totalcharges", "brokerageandtaxes", "totaltax", "totalfees"];
+
+/**
+ * Separate charge-type columns, used only when no combined total column
+ * exists. Matched by EXACT header equality only (not the fuzzy contains-pass
+ * findColumn uses for the other fields) — "stt"/"gst"/"tax" are short enough
+ * that fuzzy containment would false-hit on unrelated columns.
+ */
+const ITEMIZED_CHARGE_HEADERS = [
+  "brokerage", "stt", "stampduty", "gst", "tax", "turnovercharges", "sebicharges", "exchangetxncharges",
 ];
 
 /**
@@ -152,7 +179,24 @@ function mappingFromHeaderRow(row: string[]): TradeColumnMapping | null {
     executionIdCandidate !== undefined && !indices.includes(executionIdCandidate)
       ? executionIdCandidate
       : undefined;
-  return { symbol, date, side, quantity, price, executionId };
+
+  // Charges: a combined total column wins outright when present (summing it
+  // together with itemized columns would double-count — a "Charges" total
+  // already includes whatever STT/GST/stamp-duty columns sit next to it).
+  // Only when no such total exists do we fall back to summing whichever
+  // itemized columns actually appear.
+  const totalChargesCandidate = findColumn(normalized, TOTAL_CHARGES_HEADERS);
+  let chargeColumns: number[] | undefined;
+  if (totalChargesCandidate !== undefined && !indices.includes(totalChargesCandidate)) {
+    chargeColumns = [totalChargesCandidate];
+  } else {
+    const itemized = ITEMIZED_CHARGE_HEADERS.map((h) => normalized.findIndex((n) => n === h)).filter(
+      (idx) => idx >= 0 && !indices.includes(idx),
+    );
+    chargeColumns = itemized.length > 0 ? itemized : undefined;
+  }
+
+  return { symbol, date, side, quantity, price, executionId, chargeColumns };
 }
 
 // ─── Symbol cleaning ─────────────────────────────────────────────────────────
@@ -222,6 +266,13 @@ export function applyTradeMapping(
     const executionIdRaw =
       mapping.executionId !== undefined ? (cells[mapping.executionId] ?? "").trim() : "";
 
+    // Never blocks the row on a malformed/blank charge cell — charges are
+    // best-effort metadata, not a validity gate the way quantity/price are.
+    const charges = (mapping.chargeColumns ?? []).reduce((sum, idx) => {
+      const v = parseStatementAmount(cells[idx] ?? "");
+      return sum + (v !== null ? Math.max(0, v) : 0);
+    }, 0);
+
     rows.push({
       sourceIndex: i,
       dateISO,
@@ -237,6 +288,7 @@ export function applyTradeMapping(
       // Capped for the same reason rawSymbol is — a stray broken-quote row
       // must not be able to smuggle an oversized value into a fingerprint.
       executionId: executionIdRaw ? executionIdRaw.slice(0, 60) : undefined,
+      charges,
     });
   }
 
