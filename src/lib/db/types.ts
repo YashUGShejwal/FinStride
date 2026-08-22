@@ -56,6 +56,8 @@ export type DbUserSettings = {
   hidden_default_account_ids: string[];
   /** Ids of DEFAULT_BROKER_PARTITIONS the user has deleted. */
   hidden_default_partition_ids: string[];
+  /** Opt-in (default false) gating F&O rows in the tradebook importer and the Swing Desk's "F&O Desk" view. */
+  enable_fno_tracking: boolean;
   updated_at: string;
 };
 
@@ -121,6 +123,16 @@ export type DbSwingTradeRow = {
   status: "open" | "closed";
   close_reason: string | null;
   close_notes: string | null;
+  /** Set only when a tradebook SELL row auto-closed this trade — see supabase/migrations/0005. */
+  exit_price: number | null;
+  pnl: number | null;
+  close_execution_id: string | null;
+  /** 'equity' (default) or 'fno' — see supabase/migrations/0005. */
+  asset_class: string;
+  expiry: string | null;
+  strike: number | null;
+  lot_size: number | null;
+  option_type: string | null;
   created_at: string;
 };
 

@@ -56,6 +56,7 @@ export type LocalDataSnapshot = {
   grind: GrindState;
   blueprint: BlueprintSettings;
   showPersonalQuotes: boolean;
+  enableFnoTracking: boolean;
   customAccountModes: AccountMode[];
   customBrokerPartitions: BrokerPartition[];
   customIncomeCategories: string[];
@@ -99,6 +100,7 @@ export async function migrateLocalDataToSupabase(
     await upsertSettings(client, userId, {
       blueprint: local.blueprint,
       showPersonalQuotes: local.showPersonalQuotes,
+      enableFnoTracking: local.enableFnoTracking,
       customAccountModes: local.customAccountModes,
       customBrokerPartitions: local.customBrokerPartitions,
       customIncomeCategories: local.customIncomeCategories,

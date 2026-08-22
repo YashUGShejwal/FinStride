@@ -40,6 +40,8 @@ export type ParsedTradeRow = {
   side: TradeSide;
   quantity: number;
   price: number;
+  /** The broker's own trade/order id for this fill, when the export has one — used to fingerprint a SELL execution so re-importing an overlapping tradebook can't re-apply the same close twice. Undefined when no such column was found (the importer falls back to a synthetic date+symbol+qty+price key). */
+  executionId?: string;
 };
 
 export type TradeColumnMapping = {
@@ -48,6 +50,8 @@ export type TradeColumnMapping = {
   side: number;
   quantity: number;
   price: number;
+  /** Optional — most exports don't carry a distinct trade/order id column, and its absence must never block an otherwise-valid header match. */
+  executionId?: number;
 };
 
 export type TradeParseSuccess = {
@@ -87,6 +91,9 @@ const DATE_HEADERS = [
 const SIDE_HEADERS = ["tradetype", "buysell", "side", "type", "transactiontype", "action"];
 const QUANTITY_HEADERS = ["quantity", "qty", "tradedqty", "filledqty"];
 const PRICE_HEADERS = ["price", "averageprice", "avgprice", "tradeprice", "rate"];
+const TRADE_ID_HEADERS = [
+  "tradeid", "orderid", "exchangetradeid", "exchangeorderid", "tradenumber", "orderno", "orderreference",
+];
 
 /**
  * Headers that CONTAIN a symbol synonym by accident but never hold a ticker —
@@ -136,7 +143,16 @@ function mappingFromHeaderRow(row: string[]): TradeColumnMapping | null {
   }
   const indices = [symbol, date, side, quantity, price];
   if (new Set(indices).size !== indices.length) return null;
-  return { symbol, date, side, quantity, price };
+  // Optional sixth column — a header without one still matches (unlike the
+  // five above, which are all required), and a spurious collision with one
+  // of the required columns is simply dropped rather than rejecting the
+  // whole header.
+  const executionIdCandidate = findColumn(normalized, TRADE_ID_HEADERS);
+  const executionId =
+    executionIdCandidate !== undefined && !indices.includes(executionIdCandidate)
+      ? executionIdCandidate
+      : undefined;
+  return { symbol, date, side, quantity, price, executionId };
 }
 
 // ─── Symbol cleaning ─────────────────────────────────────────────────────────
@@ -203,6 +219,9 @@ export function applyTradeMapping(
       continue;
     }
 
+    const executionIdRaw =
+      mapping.executionId !== undefined ? (cells[mapping.executionId] ?? "").trim() : "";
+
     rows.push({
       sourceIndex: i,
       dateISO,
@@ -215,6 +234,9 @@ export function applyTradeMapping(
       side,
       quantity,
       price,
+      // Capped for the same reason rawSymbol is — a stray broken-quote row
+      // must not be able to smuggle an oversized value into a fingerprint.
+      executionId: executionIdRaw ? executionIdRaw.slice(0, 60) : undefined,
     });
   }
 

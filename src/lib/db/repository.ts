@@ -416,6 +416,7 @@ export async function upsertSettings(
   bundle: {
     blueprint: BlueprintSettings;
     showPersonalQuotes: boolean;
+    enableFnoTracking: boolean;
     customAccountModes: AccountMode[];
     customBrokerPartitions: BrokerPartition[];
     customIncomeCategories: string[];

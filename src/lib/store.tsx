@@ -552,6 +552,13 @@ const HIDDEN_PARTITION_IDS_KEY = "finstride.partitions.hiddenDefaults";
 // else's personal notes without opting in.
 const SHOW_PERSONAL_QUOTES_KEY = "finstride.quotes.showPersonal";
 
+// ─── F&O tracking preference ────────────────────────────────────────────────
+// Opt-in (default off) gating whether the tradebook importer treats an F&O
+// row as importable and whether the Swing Desk shows the "F&O Desk" segmented
+// view. Unlike showPersonalQuotes, this carries no owner-PIN gate — it's a
+// plain trading preference, not something that needs device-level unlocking.
+const ENABLE_FNO_TRACKING_KEY = "finstride.fno.enabled";
+
 // ─── Owner passcode gate ────────────────────────────────────────────────────
 // A lightweight, DEVICE-local speed bump — not real security. This value ships
 // inside the JS bundle like any other `import.meta.env.VITE_*` constant, so
@@ -745,6 +752,22 @@ export type Trade = {
   closeReason?: CloseReason;
   closeNotes?: string;
   exitDate?: string;
+  /** Realized exit price — set only when a tradebook SELL row auto-closed this trade (see closeTrade's `historical` option). Undefined for manually-closed trades. */
+  exitPrice?: number;
+  /** (exitPrice - entryPrice) * matched quantity, stamped at close time — see closeTrade. */
+  pnl?: number;
+  /** Dedup fingerprint of the SELL execution that closed this trade — checked by TradeImportModal so a re-imported/overlapping tradebook can never re-apply the same close twice. */
+  closeExecutionId?: string;
+  /** "fno" for a derivatives contract (created only via tradebook import, never manual entry); undefined/absent means equity — see decodeFnoSymbol in blueprintRules.ts. */
+  assetClass?: "equity" | "fno";
+  /** F&O only — best-effort human string decoded from the tradingsymbol. */
+  expiry?: string;
+  /** F&O only — option strike; absent for futures or an undecodable weekly contract. */
+  strike?: number;
+  /** F&O only — NOT auto-populated (NSE lot sizes change periodically and this app has no current lookup table); reserved for a future manual-edit affordance. */
+  lotSize?: number;
+  /** F&O only. */
+  optionType?: "CE" | "PE" | "FUT";
 };
 
 function normalizeTrade(raw: Record<string, unknown>): Trade {
@@ -764,6 +787,17 @@ function normalizeTrade(raw: Record<string, unknown>): Trade {
     closeReason: (raw.closeReason as CloseReason | undefined) ?? undefined,
     closeNotes: raw.closeNotes ? String(raw.closeNotes) : undefined,
     exitDate: raw.exitDate ? String(raw.exitDate) : raw.closedAt ? String(raw.closedAt) : undefined,
+    exitPrice: typeof raw.exitPrice === "number" ? raw.exitPrice : undefined,
+    pnl: typeof raw.pnl === "number" ? raw.pnl : undefined,
+    closeExecutionId: raw.closeExecutionId ? String(raw.closeExecutionId) : undefined,
+    assetClass: raw.assetClass === "fno" ? "fno" : undefined,
+    expiry: raw.expiry ? String(raw.expiry) : undefined,
+    strike: typeof raw.strike === "number" ? raw.strike : undefined,
+    lotSize: typeof raw.lotSize === "number" ? raw.lotSize : undefined,
+    optionType:
+      raw.optionType === "CE" || raw.optionType === "PE" || raw.optionType === "FUT"
+        ? raw.optionType
+        : undefined,
   };
 }
 
@@ -930,6 +964,9 @@ type StoreCtx = {
   // Quote preferences
   showPersonalQuotes: boolean;
   setShowPersonalQuotes: (v: boolean) => void;
+  // F&O tracking preference (see ENABLE_FNO_TRACKING_KEY doc comment)
+  enableFnoTracking: boolean;
+  setEnableFnoTracking: (v: boolean) => void;
   // Owner passcode gate (see OWNER_REFLECTIONS_PIN doc comment — not real security)
   isOwnerUnlocked: boolean;
   /** Checks pin against the owner passcode; on match sets isOwnerUnlocked and returns true. */
@@ -959,7 +996,17 @@ type StoreCtx = {
   addTrade: (t: Omit<Trade, "id" | "status">) => void;
   /** Batch insert (tradebook CSV imports) — see addTransactions for the identical reasoning. */
   addTrades: (ts: Omit<Trade, "id" | "status">[]) => void;
-  closeTrade: (id: string, closeReason: CloseReason, closeNotes?: string) => void;
+  /**
+   * `historical` carries the real exit data a tradebook SELL row provides
+   * (TradeImportModal) — omit it for the manual close flow, which has never
+   * collected an exit price and keeps stamping exitDate as "now".
+   */
+  closeTrade: (
+    id: string,
+    closeReason: CloseReason,
+    closeNotes?: string,
+    historical?: { exitDate?: string; exitPrice?: number; pnl?: number; closeExecutionId?: string },
+  ) => void;
   deleteTrade: (id: string) => void;
   // Obligations
   toggleObligation: (key: ObligationKey) => void;
@@ -1021,6 +1068,7 @@ export type FinStrideBackup = {
   customObligations: CustomObligation[];
   /** Full multi-month history, not just the current month. */
   customObligationsPendingByMonth: Record<string, Record<string, boolean>>;
+  enableFnoTracking: boolean;
 };
 
 const Ctx = createContext<StoreCtx | null>(null);
@@ -1056,6 +1104,7 @@ const ALL_LOCAL_KEYS = [
   CUSTOM_BROKER_PARTITIONS_KEY,
   HIDDEN_PARTITION_IDS_KEY,
   SHOW_PERSONAL_QUOTES_KEY,
+  ENABLE_FNO_TRACKING_KEY,
   PENDING_KEY,
   PENDING_WRITES_KEY,
   CUSTOM_OBLIGATIONS_KEY,
@@ -1073,6 +1122,7 @@ type LocalState = {
   grind: GrindState;
   blueprint: BlueprintSettings;
   showPersonalQuotes: boolean;
+  enableFnoTracking: boolean;
   customAccountModes: AccountMode[];
   customBrokerPartitions: BrokerPartition[];
   customIncomeCategories: string[];
@@ -1092,6 +1142,7 @@ const EMPTY_LOCAL_STATE: LocalState = {
   grind: EMPTY_GRIND,
   blueprint: DEFAULT_BLUEPRINT,
   showPersonalQuotes: false,
+  enableFnoTracking: false,
   customAccountModes: [],
   customBrokerPartitions: [],
   customIncomeCategories: [],
@@ -1131,6 +1182,12 @@ function readLocalState(): LocalState {
     } catch {
       showPersonal = false;
     }
+    let enableFno = false;
+    try {
+      enableFno = localStorage.getItem(ENABLE_FNO_TRACKING_KEY) === "true";
+    } catch {
+      enableFno = false;
+    }
     return {
       transactions: readJson<Record<string, unknown>[]>(TX_KEY, []).map(normalizeTransaction),
       trades: readJson<Record<string, unknown>[]>(TR_KEY, []).map(normalizeTrade),
@@ -1141,6 +1198,7 @@ function readLocalState(): LocalState {
       // see readOwnerUnlocked()'s doc comment for why this can never be
       // silently true on a device that hasn't itself passed the PIN check.
       showPersonalQuotes: showPersonal && readOwnerUnlocked(),
+      enableFnoTracking: enableFno,
       customAccountModes: normalizeCustomAccountModes(
         readJson<unknown>(CUSTOM_ACCOUNT_MODES_KEY, null),
       ),
@@ -1268,6 +1326,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     {},
   );
   const [showPersonalQuotes, setShowPersonalQuotesState] = useState(false);
+  const [enableFnoTracking, setEnableFnoTrackingState] = useState(false);
   // Always starts false and reads localStorage after mount: SSR has no
   // localStorage, so initializing from it lazily would make the server and
   // first client render disagree on the blur classes (hydration mismatch).
@@ -1410,6 +1469,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setGrind(local.grind);
       setBlueprintSettings(local.blueprint);
       setShowPersonalQuotesState(local.showPersonalQuotes);
+      setEnableFnoTrackingState(local.enableFnoTracking);
       setCustomAccountModes(local.customAccountModes);
       setCustomBrokerPartitions(local.customBrokerPartitions);
       setCustomCategories({
@@ -1522,6 +1582,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // silently turn personal quotes on for every other device/session
           // that syncs this account, with no PIN check on the receiving side.
           setShowPersonalQuotesState(remote.settings.showPersonalQuotes && readOwnerUnlocked());
+          setEnableFnoTrackingState(remote.settings.enableFnoTracking);
           setCustomAccountModes(remote.settings.customAccountModes);
           setCustomBrokerPartitions(remote.settings.customBrokerPartitions);
           setCustomCategories({
@@ -1605,6 +1666,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [hydrated, showPersonalQuotes]);
 
   useEffect(() => {
+    if (hydrated) localStorage.setItem(ENABLE_FNO_TRACKING_KEY, String(enableFnoTracking));
+  }, [hydrated, enableFnoTracking]);
+
+  useEffect(() => {
     if (hydrated) localStorage.setItem(CUSTOM_OBLIGATIONS_KEY, JSON.stringify(customObligations));
   }, [hydrated, customObligations]);
 
@@ -1627,6 +1692,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       dbUpsertSettings(sync.client, sync.userId, {
         blueprint: blueprintSettings,
         showPersonalQuotes,
+        enableFnoTracking,
         customAccountModes,
         customBrokerPartitions,
         customIncomeCategories: customCategories.income,
@@ -1643,6 +1709,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     cloudEnabled,
     blueprintSettings,
     showPersonalQuotes,
+    enableFnoTracking,
     customAccountModes,
     customBrokerPartitions,
     customCategories,
@@ -2087,6 +2154,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       markLocalWrite();
       setShowPersonalQuotesState(v);
     },
+    enableFnoTracking,
+    setEnableFnoTracking: (v) => {
+      markLocalWrite();
+      setEnableFnoTrackingState(v);
+    },
     isOwnerUnlocked,
     unlockOwnerReflections: (pin) => {
       if (pin !== OWNER_REFLECTIONS_PIN) return false;
@@ -2167,16 +2239,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const sync = getSync();
       if (sync) trackedWrite(dbUpsertTrades(sync.client, sync.userId, rows));
     },
-    closeTrade: (id, closeReason, closeNotes) => {
+    closeTrade: (id, closeReason, closeNotes, historical) => {
       markLocalWrite();
       // Compute the exit stamp once so local state and the remote row agree.
-      const exitDate = new Date().toISOString();
+      // `historical` (import-driven closes only) supplies the REAL exit data;
+      // the manual close flow has never collected this, so it keeps
+      // defaulting exitDate to "now" and leaves exitPrice/pnl/closeExecutionId
+      // untouched (undefined, same as before this feature existed).
+      const exitDate = historical?.exitDate ?? new Date().toISOString();
       const patch = (t: Trade): Trade => ({
         ...t,
         status: "closed",
         closeReason,
         closeNotes: closeNotes || undefined,
         exitDate,
+        exitPrice: historical?.exitPrice ?? t.exitPrice,
+        pnl: historical?.pnl ?? t.pnl,
+        closeExecutionId: historical?.closeExecutionId ?? t.closeExecutionId,
       });
       setTrades((s) => s.map((t) => (t.id === id ? patch(t) : t)));
       const existing = stateRef.current.trades.find((t) => t.id === id);
@@ -2329,6 +2408,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           showPersonalQuotes,
           customObligations,
           customObligationsPendingByMonth: loadAllCustomObligationsPending(),
+          enableFnoTracking,
         };
         const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
         const url = URL.createObjectURL(blob);
@@ -2416,6 +2496,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         b.customObligations !== undefined
           ? normalizeCustomObligations(b.customObligations)
           : customObligations;
+      const importedEnableFno =
+        typeof b.enableFnoTracking === "boolean" ? b.enableFnoTracking : enableFnoTracking;
 
       markLocalWrite();
       setTransactions(importedTransactions);
@@ -2431,6 +2513,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setHiddenDefaultPartitionIds(importedHiddenPartitionIds);
       setShowPersonalQuotesState(importedShowPersonal);
       setCustomObligations(importedObligations);
+      setEnableFnoTrackingState(importedEnableFno);
 
       if (b.pendingByMonth && typeof b.pendingByMonth === "object") {
         const monthMap = b.pendingByMonth as Record<string, MonthlyPending>;
@@ -2464,6 +2547,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           dbUpsertSettings(sync.client, sync.userId, {
             blueprint: importedBlueprint,
             showPersonalQuotes: importedShowPersonal,
+            enableFnoTracking: importedEnableFno,
             customAccountModes: importedAccountModes,
             customBrokerPartitions: importedBrokerPartitions,
             customIncomeCategories: importedCats.income,
@@ -2492,6 +2576,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setGrind(EMPTY_GRIND);
       setBlueprintSettings(DEFAULT_BLUEPRINT);
       setShowPersonalQuotesState(false);
+      setEnableFnoTrackingState(false);
       setCustomAccountModes([]);
       setCustomBrokerPartitions([]);
       setCustomCategories(DEFAULT_CUSTOM_CATEGORIES);

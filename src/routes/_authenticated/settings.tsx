@@ -105,6 +105,8 @@ function SettingsPage() {
     partitionLabel,
     showPersonalQuotes,
     setShowPersonalQuotes,
+    enableFnoTracking,
+    setEnableFnoTracking,
     isOwnerUnlocked,
     unlockOwnerReflections,
     exportData,
@@ -466,6 +468,18 @@ function SettingsPage() {
             </p>
           </div>
           <Switch checked={showPersonalQuotes} onCheckedChange={handleToggleQuotes} />
+        </div>
+
+        <div className="flex items-center justify-between gap-4 px-3 py-2.5 rounded-xl border border-glass-border bg-white/3 mt-2.5">
+          <div>
+            <Label className="text-sm">Track F&O contracts</Label>
+            <p className="text-[11px] text-muted-foreground mt-1">
+              When off (default), F&O rows in a tradebook import are skipped (Swing Desk stays
+              equity-only). Turn on to import them into a separate "F&O Desk" view — lot size isn't
+              auto-detected, so treat it as a lightweight log rather than a full derivatives ledger.
+            </p>
+          </div>
+          <Switch checked={enableFnoTracking} onCheckedChange={setEnableFnoTracking} />
         </div>
       </section>
 

@@ -115,6 +115,14 @@ export function tradeToRow(t: Trade, userId: string): DbSwingTradeInsert {
     status: t.status,
     close_reason: t.closeReason ?? null,
     close_notes: t.closeNotes ?? null,
+    exit_price: t.exitPrice ?? null,
+    pnl: t.pnl ?? null,
+    close_execution_id: t.closeExecutionId ?? null,
+    asset_class: t.assetClass ?? "equity",
+    expiry: t.expiry ?? null,
+    strike: t.strike ?? null,
+    lot_size: t.lotSize ?? null,
+    option_type: t.optionType ?? null,
   };
 }
 
@@ -138,6 +146,17 @@ export function rowToTrade(r: DbSwingTradeRow): Trade {
         : undefined,
     closeNotes: r.close_notes ?? undefined,
     exitDate: r.exit_date ? fromDbDate(r.exit_date) : undefined,
+    exitPrice: r.exit_price !== null && r.exit_price !== undefined ? Number(r.exit_price) : undefined,
+    pnl: r.pnl !== null && r.pnl !== undefined ? Number(r.pnl) : undefined,
+    closeExecutionId: r.close_execution_id ?? undefined,
+    assetClass: r.asset_class === "fno" ? "fno" : undefined,
+    expiry: r.expiry ?? undefined,
+    strike: r.strike !== null && r.strike !== undefined ? Number(r.strike) : undefined,
+    lotSize: r.lot_size !== null && r.lot_size !== undefined ? Number(r.lot_size) : undefined,
+    optionType:
+      r.option_type === "CE" || r.option_type === "PE" || r.option_type === "FUT"
+        ? r.option_type
+        : undefined,
   };
 }
 
@@ -243,6 +262,7 @@ export type SettingsBundle = {
   hiddenDefaultCategories: CustomCategories;
   hiddenDefaultAccountIds: string[];
   hiddenDefaultPartitionIds: string[];
+  enableFnoTracking: boolean;
 };
 
 const ACCOUNT_TYPES: readonly string[] = ["bank", "credit_card", "upi", "cash", "wallet"];
@@ -355,6 +375,7 @@ export function settingsToRow(b: SettingsBundle, userId: string): DbUserSettings
     hidden_default_expense_categories: b.hiddenDefaultCategories.expense,
     hidden_default_account_ids: b.hiddenDefaultAccountIds,
     hidden_default_partition_ids: b.hiddenDefaultPartitionIds,
+    enable_fno_tracking: b.enableFnoTracking,
   };
 }
 
@@ -411,6 +432,7 @@ export function rowToSettings(r: DbUserSettings): SettingsBundle {
     } satisfies CustomCategories,
     hiddenDefaultAccountIds: list(r.hidden_default_account_ids),
     hiddenDefaultPartitionIds: list(r.hidden_default_partition_ids),
+    enableFnoTracking: r.enable_fno_tracking === true,
   };
 }
 

@@ -227,7 +227,7 @@ function CapitalSnapshotPanel() {
 function SwingPage() {
   const {
     trades, addTrade, closeTrade, deleteTrade, riskCapCapital, blueprintSettings,
-    brokerPartitions, partitionLabel,
+    brokerPartitions, partitionLabel, enableFnoTracking,
   } = useStore();
   const riskCapPartitionLabel = partitionLabel(blueprintSettings.riskCapPartition);
 
@@ -255,6 +255,15 @@ function SwingPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const positionsRipple = useGlowRipple();
+
+  // ── F&O Desk sub-view (only reachable when enableFnoTracking is on) ──────
+  const [deskView, setDeskView] = useState<"equity" | "fno">("equity");
+  // Derived rather than raw `deskView` everywhere below: if enableFnoTracking
+  // gets turned off elsewhere (Settings) while this page is still mounted
+  // with deskView==="fno", the toggle that would switch it back disappears
+  // too (it's gated on enableFnoTracking) — without this fallback the page
+  // would render neither section, stuck on a view with no way out.
+  const effectiveDeskView = enableFnoTracking ? deskView : "equity";
 
   // Deep-link intent (command palette "New Swing Trade", dashboard quick
   // card): ?action=add expands the drawer, then the param self-clears.
@@ -294,6 +303,14 @@ function SwingPage() {
 
   const openTrades = trades.filter((t) => t.status === "open");
   const closedTrades = trades.filter((t) => t.status === "closed");
+  // Split by asset class so the F&O Desk view (contract columns) and the
+  // equity swing view (targetPrice/stopLoss/R:R) never mix rows that don't
+  // share those metrics — F&O trades only ever enter via tradebook import
+  // (see TradeImportModal), never manual entry.
+  const equityOpenTrades = openTrades.filter((t) => t.assetClass !== "fno");
+  const equityClosedTrades = closedTrades.filter((t) => t.assetClass !== "fno");
+  const fnoOpenTrades = openTrades.filter((t) => t.assetClass === "fno");
+  const fnoClosedTrades = closedTrades.filter((t) => t.assetClass === "fno");
 
   const handleTickerChange = (raw: string) => {
     const upper = raw.toUpperCase();
@@ -358,23 +375,66 @@ function SwingPage() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Module</p>
-        <h1 className="text-3xl md:text-4xl font-display font-semibold tracking-tight mt-1">
-          <span className="text-gradient">Swing</span> trade logger
-        </h1>
-        <p className="text-sm text-muted-foreground mt-2">
-          Rule-enforced. Equity only. 3% risk cap on{" "}
-          <Sensitive>
-            <span className="text-foreground font-medium tnum">{inr(riskCapCapital)}</span>
-          </Sensitive>{" "}
-          {riskCapPartitionLabel} capital → max <Sensitive><span className="tnum">{inr(cap)}</span></Sensitive> per
-          position.
-        </p>
+      <header className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Module</p>
+          <h1 className="text-3xl md:text-4xl font-display font-semibold tracking-tight mt-1">
+            <span className="text-gradient">Swing</span> trade logger
+          </h1>
+          <p className="text-sm text-muted-foreground mt-2">
+            Rule-enforced. Equity only. 3% risk cap on{" "}
+            <Sensitive>
+              <span className="text-foreground font-medium tnum">{inr(riskCapCapital)}</span>
+            </Sensitive>{" "}
+            {riskCapPartitionLabel} capital → max <Sensitive><span className="tnum">{inr(cap)}</span></Sensitive> per
+            position.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setImportOpen(true)}
+            className="border-glass-border gap-2 h-10 hover:border-primary/40"
+          >
+            <FileSpreadsheet className="size-4" /> Import Tradebook
+          </Button>
+        </div>
       </header>
 
+      {/* F&O Desk sub-view toggle — only reachable once the user opts in via Settings */}
+      {enableFnoTracking && (
+        <div className="inline-flex items-center gap-1 p-1 rounded-xl border border-glass-border bg-white/[0.03] w-fit">
+          <button
+            type="button"
+            onClick={() => setDeskView("equity")}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              effectiveDeskView === "equity"
+                ? "gradient-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Equity Swing
+          </button>
+          <button
+            type="button"
+            onClick={() => setDeskView("fno")}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              effectiveDeskView === "fno"
+                ? "gradient-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            F&O Desk
+            {fnoOpenTrades.length > 0 && (
+              <span className="ml-1.5 opacity-70">({fnoOpenTrades.length})</span>
+            )}
+          </button>
+        </div>
+      )}
+
       {/* F&O violation banner */}
-      {fnoBlocked && (
+      {effectiveDeskView === "equity" && fnoBlocked && (
         <div className="rounded-2xl border border-destructive/40 bg-destructive/10 p-4 flex items-start gap-3 animate-in fade-in slide-in-from-top-2">
           <ShieldAlert className="size-5 text-destructive shrink-0 mt-0.5" />
           <div>
@@ -392,9 +452,9 @@ function SwingPage() {
       {/* ── Capital snapshot panel ────────────────────────────────────────────── */}
       <CapitalSnapshotPanel />
 
-      {/* ── Entry form — collapsed by default so open positions lead ─────────── */}
-      <div className="flex items-start gap-3">
-        <QuickLogDrawer label="Quick Log Trade" open={formOpen} onToggle={toggleForm} className="flex-1">
+      {/* ── Entry form — collapsed by default so open positions lead. Equity-only: F&O positions only ever enter via tradebook import. ── */}
+      {effectiveDeskView === "equity" && (
+      <QuickLogDrawer label="Quick Log Trade" open={formOpen} onToggle={toggleForm}>
         <form onSubmit={submit} className="grid grid-cols-2 md:grid-cols-6 gap-3">
           {/* Row 1 */}
           <Field className="col-span-2 md:col-span-2" label="Ticker">
@@ -549,33 +609,27 @@ function SwingPage() {
           </div>
         </form>
       </QuickLogDrawer>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => setImportOpen(true)}
-          className="border-glass-border gap-2 h-[52px] shrink-0 hover:border-primary/40"
-        >
-          <FileSpreadsheet className="size-4" /> Import Tradebook
-        </Button>
-      </div>
+      )}
 
       <TradeImportModal open={importOpen} onOpenChange={setImportOpen} />
 
+      {effectiveDeskView === "equity" && (
+      <>
       {/* ── Open positions ────────────────────────────────────────────────────── */}
       <section className={`glass rounded-2xl p-5 ${positionsRipple.className}`}>
         <h2 className="font-display font-semibold tracking-tight mb-4">
-          Open positions
-          {openTrades.length > 0 && (
+          Open positions{enableFnoTracking ? " (Equity)" : ""}
+          {equityOpenTrades.length > 0 && (
             <span className="ml-2 text-xs text-muted-foreground font-normal">
-              ({openTrades.length})
+              ({equityOpenTrades.length})
             </span>
           )}
         </h2>
-        {openTrades.length === 0 ? (
+        {equityOpenTrades.length === 0 ? (
           <p className="text-sm text-muted-foreground py-6 text-center">No open trades.</p>
         ) : (
           <ul className="space-y-2">
-            {openTrades.map((t) => {
+            {equityOpenTrades.map((t) => {
               const r =
                 (t.targetPrice - t.entryPrice) / (t.entryPrice - t.stopLoss);
               const isClosing = closingId === t.id;
@@ -696,16 +750,16 @@ function SwingPage() {
       </section>
 
       {/* ── Closed positions ─────────────────────────────────────────────────── */}
-      {closedTrades.length > 0 && (
+      {equityClosedTrades.length > 0 && (
         <section className="glass rounded-2xl p-5">
           <h2 className="font-display font-semibold tracking-tight mb-4">
-            Closed positions
+            Closed positions{enableFnoTracking ? " (Equity)" : ""}
             <span className="ml-2 text-xs text-muted-foreground font-normal">
-              ({closedTrades.length})
+              ({equityClosedTrades.length})
             </span>
           </h2>
           <ul className="space-y-2">
-            {closedTrades.map((t) => {
+            {equityClosedTrades.map((t) => {
               const outcomeInfo = CLOSE_REASONS.find((cr) => cr.value === t.closeReason);
               return (
                 <li
@@ -760,6 +814,235 @@ function SwingPage() {
           </ul>
         </section>
       )}
+      </>
+      )}
+
+      {/* ── F&O Desk ──────────────────────────────────────────────────────────── */}
+      {effectiveDeskView === "fno" && (
+        <>
+          <section className="glass rounded-2xl p-5">
+            <h2 className="font-display font-semibold tracking-tight mb-4">
+              F&O open positions
+              {fnoOpenTrades.length > 0 && (
+                <span className="ml-2 text-xs text-muted-foreground font-normal">
+                  ({fnoOpenTrades.length})
+                </span>
+              )}
+            </h2>
+            {fnoOpenTrades.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-6 text-center">
+                No open F&O positions — import a tradebook (with F&O tracking on) to bring
+                contracts in here.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {fnoOpenTrades.map((t) => {
+                  const isClosing = closingId === t.id;
+                  return (
+                    <li key={t.id} className="glass rounded-xl overflow-hidden">
+                      <div className="p-4 flex items-center gap-3 justify-between flex-wrap">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-semibold tracking-wider">{t.ticker}</p>
+                            {t.optionType && (
+                              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[oklch(0.75_0.14_230/0.18)] text-[oklch(0.75_0.14_230)]">
+                                {t.optionType}
+                              </span>
+                            )}
+                            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                              {partitionLabel(t.partition)}
+                            </span>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {fmtDate(t.entryDate)} •{" "}
+                            <Sensitive>
+                              <span className="tnum">
+                                {t.qty} × {inr(t.entryPrice)}
+                              </span>
+                            </Sensitive>
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-4 shrink-0">
+                          <FnoStat label="Expiry" value={t.expiry ?? "—"} />
+                          <FnoStat label="Strike" value={t.strike !== undefined ? String(t.strike) : "—"} />
+                          <FnoStat label="Lot size" value={t.lotSize !== undefined ? String(t.lotSize) : "—"} />
+                          <FnoStat label="P&L" value="—" title="Unrealized — FinStride has no live quote feed" />
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => openClosePanel(t.id)}
+                            className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all ${
+                              isClosing
+                                ? "border-primary/40 bg-primary/10 text-primary"
+                                : "border-glass-border text-muted-foreground hover:text-foreground hover:bg-white/5"
+                            }`}
+                          >
+                            {isClosing ? (
+                              <>
+                                <ChevronUp className="size-3.5" /> Cancel
+                              </>
+                            ) : (
+                              <>
+                                <ChevronDown className="size-3.5" /> Close
+                              </>
+                            )}
+                          </button>
+                          <button
+                            onClick={() => {
+                              deleteTrade(t.id);
+                              toast.success("Trade removed");
+                            }}
+                            className="text-muted-foreground hover:text-destructive p-2"
+                          >
+                            <Trash2 className="size-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {isClosing && (
+                        <div className="border-t border-glass-border px-4 py-4 space-y-3 bg-white/[0.03]">
+                          <p className="text-xs uppercase tracking-wider text-muted-foreground">
+                            How did this position close?
+                          </p>
+                          <div className="flex gap-2 flex-wrap">
+                            {CLOSE_REASONS.map((cr) => (
+                              <button
+                                key={cr.value}
+                                type="button"
+                                onClick={() => setCloseReason(cr.value)}
+                                className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-sm font-medium transition-all ${
+                                  closeReason === cr.value
+                                    ? cr.color + " ring-1 ring-current"
+                                    : "border-glass-border text-muted-foreground hover:bg-white/5"
+                                }`}
+                              >
+                                {cr.icon} {cr.label}
+                              </button>
+                            ))}
+                          </div>
+                          <Textarea
+                            value={closeNotes}
+                            onChange={(e) => setCloseNotes(e.target.value)}
+                            rows={2}
+                            className="bg-input/40 border-glass-border text-sm min-h-[60px]"
+                            placeholder="Exit price, observations, lesson… (optional)"
+                          />
+                          <div className="flex justify-end">
+                            <Button
+                              type="button"
+                              onClick={() => handleClose(t.id)}
+                              disabled={!closeReason}
+                              className="gradient-primary text-primary-foreground border-0 gap-2 h-9 text-sm disabled:opacity-40"
+                            >
+                              Confirm close
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+
+          {fnoClosedTrades.length > 0 && (
+            <section className="glass rounded-2xl p-5">
+              <h2 className="font-display font-semibold tracking-tight mb-4">
+                F&O closed positions
+                <span className="ml-2 text-xs text-muted-foreground font-normal">
+                  ({fnoClosedTrades.length})
+                </span>
+              </h2>
+              <ul className="space-y-2">
+                {fnoClosedTrades.map((t) => {
+                  const outcomeInfo = CLOSE_REASONS.find((cr) => cr.value === t.closeReason);
+                  return (
+                    <li
+                      key={t.id}
+                      className="glass rounded-xl p-4 flex items-start gap-3 justify-between flex-wrap opacity-70 hover:opacity-90 transition-opacity"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-semibold tracking-wider line-through text-muted-foreground">
+                            {t.ticker}
+                          </p>
+                          {outcomeInfo && (
+                            <span
+                              className={`inline-flex items-center gap-1 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border ${outcomeInfo.color}`}
+                            >
+                              {outcomeInfo.icon} {outcomeInfo.label}
+                            </span>
+                          )}
+                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                            {partitionLabel(t.partition)}
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Entry {fmtDate(t.entryDate)}
+                          {t.exitDate ? ` → Closed ${fmtDate(t.exitDate)}` : ""} •{" "}
+                          <Sensitive>
+                            <span className="tnum">
+                              {t.qty} × {inr(t.entryPrice)}
+                            </span>
+                          </Sensitive>
+                        </p>
+                        {t.closeNotes && (
+                          <p className="text-xs text-muted-foreground/80 mt-0.5">↳ {t.closeNotes}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-4 shrink-0">
+                        <FnoStat label="Expiry" value={t.expiry ?? "—"} />
+                        <FnoStat label="Strike" value={t.strike !== undefined ? String(t.strike) : "—"} />
+                        <FnoStat label="Lot size" value={t.lotSize !== undefined ? String(t.lotSize) : "—"} />
+                        <FnoStat
+                          label="P&L"
+                          value={t.pnl !== undefined ? inr(t.pnl) : "—"}
+                          tone={
+                            t.pnl !== undefined
+                              ? t.pnl >= 0
+                                ? "text-[oklch(0.78_0.16_155)]"
+                                : "text-[oklch(0.78_0.18_25)]"
+                              : undefined
+                          }
+                        />
+                      </div>
+                      <button
+                        onClick={() => {
+                          deleteTrade(t.id);
+                          toast.success("Trade removed");
+                        }}
+                        className="text-muted-foreground hover:text-destructive p-2 shrink-0"
+                      >
+                        <Trash2 className="size-4" />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function FnoStat({
+  label,
+  value,
+  tone,
+  title,
+}: {
+  label: string;
+  value: string;
+  tone?: string;
+  title?: string;
+}) {
+  return (
+    <div className="text-right" title={title}>
+      <p className="text-[9px] uppercase tracking-wider text-muted-foreground">{label}</p>
+      <p className={`text-xs font-semibold tnum ${tone ?? ""}`}>{value}</p>
     </div>
   );
 }
