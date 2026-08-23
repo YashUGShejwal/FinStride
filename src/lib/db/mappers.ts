@@ -134,7 +134,7 @@ export function rowToTrade(r: DbSwingTradeRow): Trade {
     id: r.id,
     ticker: r.ticker,
     entryDate: fromDbDate(r.entry_date),
-    direction: "LONG",
+    direction: r.direction === "SHORT" ? "SHORT" : "LONG",
     qty: Number(r.qty),
     entryPrice: Number(r.entry_price),
     targetPrice: Number(r.target_price),

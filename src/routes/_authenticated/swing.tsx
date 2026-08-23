@@ -6,6 +6,7 @@ import {
   Wallet, Pencil, FileSpreadsheet,
 } from "lucide-react";
 import { TradeImportModal } from "@/components/TradeImportModal";
+import { EditTradeModal } from "@/components/EditTradeModal";
 import {
   useStore,
   type CloseReason, type PartitionId, type Trade, type ExitReason,
@@ -254,6 +255,7 @@ function SwingPage() {
   // ── quick-log drawer + logged-trade ripple ───────────────────────────────
   const [formOpen, setFormOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [editingTrade, setEditingTrade] = useState<Trade | null>(null);
   const positionsRipple = useGlowRipple();
 
   // ── F&O Desk sub-view (only reachable when enableFnoTracking is on) ──────
@@ -616,6 +618,13 @@ function SwingPage() {
       )}
 
       <TradeImportModal open={importOpen} onOpenChange={setImportOpen} />
+      <EditTradeModal
+        trade={editingTrade}
+        open={editingTrade !== null}
+        onOpenChange={(v) => {
+          if (!v) setEditingTrade(null);
+        }}
+      />
 
       {effectiveDeskView === "equity" && (
       <>
@@ -644,8 +653,14 @@ function SwingPage() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-semibold tracking-wider">{t.ticker}</p>
-                        <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[oklch(0.72_0.18_155/0.18)] text-[oklch(0.82_0.16_155)]">
-                          LONG
+                        <span
+                          className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                            t.direction === "SHORT"
+                              ? "bg-[oklch(0.7_0.22_20/0.18)] text-[oklch(0.82_0.18_25)]"
+                              : "bg-[oklch(0.72_0.18_155/0.18)] text-[oklch(0.82_0.16_155)]"
+                          }`}
+                        >
+                          {t.direction}
                         </span>
                         <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
                           {t.source}
@@ -693,6 +708,13 @@ function SwingPage() {
                             <ChevronDown className="size-3.5" /> Close
                           </>
                         )}
+                      </button>
+                      <button
+                        onClick={() => setEditingTrade(t)}
+                        className="text-muted-foreground hover:text-foreground p-2"
+                        aria-label="Edit trade"
+                      >
+                        <Pencil className="size-4" />
                       </button>
                       <button
                         onClick={() => {
@@ -769,6 +791,7 @@ function SwingPage() {
                 key={t.id}
                 t={t}
                 partitionName={partitionLabel(t.partition)}
+                onEdit={() => setEditingTrade(t)}
                 onDelete={() => {
                   deleteTrade(t.id);
                   toast.success("Trade removed");
@@ -853,6 +876,13 @@ function SwingPage() {
                             )}
                           </button>
                           <button
+                            onClick={() => setEditingTrade(t)}
+                            className="text-muted-foreground hover:text-foreground p-2"
+                            aria-label="Edit trade"
+                          >
+                            <Pencil className="size-4" />
+                          </button>
+                          <button
                             onClick={() => {
                               deleteTrade(t.id);
                               toast.success("Trade removed");
@@ -925,6 +955,7 @@ function SwingPage() {
                     key={t.id}
                     t={t}
                     partitionName={partitionLabel(t.partition)}
+                    onEdit={() => setEditingTrade(t)}
                     onDelete={() => {
                       deleteTrade(t.id);
                       toast.success("Trade removed");
@@ -1110,11 +1141,13 @@ function ClosedTradeCard({
   t,
   partitionName,
   rightExtra,
+  onEdit,
   onDelete,
 }: {
   t: Trade;
   partitionName: string;
   rightExtra?: React.ReactNode;
+  onEdit: () => void;
   onDelete: () => void;
 }) {
   const realizedPnl = t.netPnl ?? t.pnl;
@@ -1192,6 +1225,9 @@ function ClosedTradeCard({
             <p className="text-[10px] text-muted-foreground italic">No exit price recorded</p>
           )}
         </div>
+        <button onClick={onEdit} className="text-muted-foreground hover:text-foreground p-2" aria-label="Edit trade">
+          <Pencil className="size-4" />
+        </button>
         <button onClick={onDelete} className="text-muted-foreground hover:text-destructive p-2">
           <Trash2 className="size-4" />
         </button>

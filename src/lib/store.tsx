@@ -759,6 +759,18 @@ export function classifyExitReason(
 }
 
 /**
+ * "LONG" for every manually-entered trade (the Blueprint's equity-swing rule
+ * stays long-only there) and for a tradebook BUY that opens a new position
+ * with no matching sell in the file. "SHORT" is recognized ONLY when the
+ * tradebook reconciliation engine's Pass 1 finds a SELL fill followed by a
+ * later BUY for the same ticker within the same file (sell-to-open,
+ * buy-to-cover) — see TradeImportModal's round-trip pairing. There is no
+ * "open a standalone short and leave it open" path: a short only ever exists
+ * as a fully-reconciled round trip.
+ */
+export type TradeDirection = "LONG" | "SHORT";
+
+/**
  * Mirrors swing_trades DB columns (camelCase).
  * direction, partition, closeReason, closeNotes are local-only extensions.
  */
@@ -766,7 +778,7 @@ export type Trade = {
   id: string;
   ticker: string;
   entryDate: string;
-  direction: "LONG";
+  direction: TradeDirection;
   qty: number;
   entryPrice: number;
   targetPrice: number;
@@ -807,7 +819,7 @@ function normalizeTrade(raw: Record<string, unknown>): Trade {
     id: String(raw.id),
     ticker: String(raw.ticker),
     entryDate: String(raw.entryDate),
-    direction: "LONG",
+    direction: raw.direction === "SHORT" ? "SHORT" : "LONG",
     qty: Number(raw.qty ?? raw.quantity ?? 0),
     entryPrice: Number(raw.entryPrice),
     targetPrice: Number(raw.targetPrice),
@@ -1061,6 +1073,8 @@ type StoreCtx = {
       closeExecutionId?: string;
     },
   ) => void;
+  /** Full manual edit (EditTradeModal) — a plain shallow merge, unlike closeTrade's status-transition bookkeeping. Never touched by the import/close flows. */
+  updateTrade: (tradeId: string, updates: Partial<Trade>) => void;
   deleteTrade: (id: string) => void;
   // Obligations
   toggleObligation: (key: ObligationKey) => void;
@@ -2336,6 +2350,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const existing = stateRef.current.trades.find((t) => t.id === id);
       const sync = getSync();
       if (sync && existing) trackedWrite(dbUpsertTrade(sync.client, sync.userId, patch(existing)));
+    },
+    updateTrade: (id, updates) => {
+      markLocalWrite();
+      setTrades((s) => s.map((t) => (t.id === id ? { ...t, ...updates } : t)));
+      const existing = stateRef.current.trades.find((t) => t.id === id);
+      const sync = getSync();
+      if (sync && existing) trackedWrite(dbUpsertTrade(sync.client, sync.userId, { ...existing, ...updates }));
     },
     deleteTrade: (id) => {
       markLocalWrite();

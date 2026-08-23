@@ -26,6 +26,13 @@
  * Each row also carries `charges` (brokerage/STT/stamp duty/GST/etc, summed
  * from whatever charge columns the export has — 0 when it has none), so the
  * import UI's P&L math can net them out rather than reporting a gross figure.
+ *
+ * `dateISO` carries real time-of-day precision when the export provides one
+ * (a dedicated execution-time column, or a combined date+time value in the
+ * date cell itself) — see applyExecutionTime. This is what lets the import
+ * UI's Pass 1 reconciliation tell same-day fills apart in the right order,
+ * which is what separates a LONG round trip (buy-then-sell) from a SHORT one
+ * (sell-then-buy).
  */
 
 import Papa from "papaparse";
@@ -60,6 +67,8 @@ export type TradeColumnMapping = {
   executionId?: number;
   /** Column indices to SUM for this row's total charges — see mappingFromHeaderRow's doc comment. Empty/undefined when the export has no charge data. */
   chargeColumns?: number[];
+  /** Optional dedicated execution-timestamp column — see EXECUTION_TIME_HEADERS. */
+  executionTime?: number;
 };
 
 export type TradeParseSuccess = {
@@ -102,6 +111,16 @@ const PRICE_HEADERS = ["price", "averageprice", "avgprice", "tradeprice", "rate"
 const TRADE_ID_HEADERS = [
   "tradeid", "orderid", "exchangetradeid", "exchangeorderid", "tradenumber", "orderno", "orderreference",
 ];
+
+/**
+ * A dedicated execution-timestamp column, separate from the main date column
+ * — Zerodha's tradebook ships exactly this ("order_execution_time" alongside
+ * a date-only "trade_date"). Checked as its own optional column rather than
+ * folded into DATE_HEADERS: the main `date` resolution must keep picking the
+ * plain calendar-day column when both exist, and this one only ever REFINES
+ * that day with a time-of-day (see applyExecutionTime).
+ */
+const EXECUTION_TIME_HEADERS = ["orderexecutiontime", "executiontimestamp", "exectimestamp", "ordertime"];
 
 /**
  * A single column already holding the COMBINED total (Groww/Dhan sometimes
@@ -196,7 +215,13 @@ function mappingFromHeaderRow(row: string[]): TradeColumnMapping | null {
     chargeColumns = itemized.length > 0 ? itemized : undefined;
   }
 
-  return { symbol, date, side, quantity, price, executionId, chargeColumns };
+  const executionTimeCandidate = findColumn(normalized, EXECUTION_TIME_HEADERS);
+  const executionTime =
+    executionTimeCandidate !== undefined && !indices.includes(executionTimeCandidate)
+      ? executionTimeCandidate
+      : undefined;
+
+  return { symbol, date, side, quantity, price, executionId, chargeColumns, executionTime };
 }
 
 // ─── Symbol cleaning ─────────────────────────────────────────────────────────
@@ -224,6 +249,46 @@ function normalizeSide(raw: string): TradeSide | null {
   if (/^(buy|b|bought|long)$/.test(s)) return "buy";
   if (/^(sell|s|sold|short)$/.test(s)) return "sell";
   return null;
+}
+
+// ─── Execution-time refinement ───────────────────────────────────────────────
+/**
+ * normalizeStatementDate (shared with csvStatementParser.ts) is DAY-only — it
+ * always returns UTC midnight, discarding any time-of-day the source cell
+ * had, since bank-statement dates never need finer precision than a
+ * calendar day. Tradebook reconciliation is different: correctly telling a
+ * LONG round trip (buy-then-sell) apart from a SHORT one (sell-then-buy)
+ * depends on knowing which of two SAME-DAY fills happened first, so this
+ * parser refines the day-level dateISO with a real time-of-day whenever one
+ * is available — from a dedicated execution-time column (Zerodha's
+ * "order_execution_time"), or failing that, from the date cell itself when
+ * the broker already combines date+time in one value (Dhan's "Trade Time").
+ *
+ * Deliberately NOT timezone-aware: the extracted digits are stamped straight
+ * onto the UTC instant (no IST offset applied), matching how
+ * normalizeStatementDate already treats the calendar day. That's fine here —
+ * every ordering/duration comparison this feeds is RELATIVE (which fill was
+ * first, how many days between two fills), and a constant offset shared by
+ * every timestamp never changes relative order.
+ */
+function extractTimeOfDay(raw: string): { h: number; m: number; s: number } | null {
+  const match = /(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(raw);
+  if (!match) return null;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  const s = match[3] !== undefined ? Number(match[3]) : 0;
+  if (h > 23 || m > 59 || s > 59) return null;
+  return { h, m, s };
+}
+
+/** Merges a time-of-day (if one can be found in `raw`) onto `dateISO`'s calendar day. Returns `dateISO` unchanged when `raw` has no recognizable time. */
+function applyExecutionTime(dateISO: string, raw: string): string {
+  const time = extractTimeOfDay(raw);
+  if (!time) return dateISO;
+  const day = dateISO.slice(0, 10);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const merged = new Date(`${day}T${pad(time.h)}:${pad(time.m)}:${pad(time.s)}.000Z`);
+  return Number.isNaN(merged.getTime()) ? dateISO : merged.toISOString();
 }
 
 // ─── Row extraction ──────────────────────────────────────────────────────────
@@ -273,9 +338,17 @@ export function applyTradeMapping(
       return sum + (v !== null ? Math.max(0, v) : 0);
     }, 0);
 
+    // Prefer a dedicated execution-time column; fall back to hunting for a
+    // time-of-day inside the date cell itself (some exports combine
+    // date+time in one value) — see applyExecutionTime's doc comment.
+    const rawExecutionTime =
+      mapping.executionTime !== undefined ? (cells[mapping.executionTime] ?? "").trim() : "";
+    const timeSource = rawExecutionTime || (cells[mapping.date] ?? "");
+    const refinedDateISO = applyExecutionTime(dateISO, timeSource);
+
     rows.push({
       sourceIndex: i,
-      dateISO,
+      dateISO: refinedDateISO,
       rawDate: (cells[mapping.date] ?? "").trim(),
       symbol,
       // Only used for display/tooltip/notes — capped so a malformed row

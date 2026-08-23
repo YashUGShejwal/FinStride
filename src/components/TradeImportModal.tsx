@@ -7,19 +7,29 @@
  * FOUR-PASS RECONCILIATION ENGINE (stageRows below) — deterministic, in this
  * order, each pass only ever seeing what the previous one left unclaimed:
  *
- *   Pass 1 — Intra-CSV round trips. Within the uploaded file itself, a BUY
- *     and a later SELL for the same ticker/contract are paired FIFO
- *     (chronological, oldest buy first) into a single "round trip" that's
- *     imported ALREADY CLOSED — both entry and exit are known from the file,
- *     so this needs no cross-reference to the store at all.
+ *   Pass 1 — Intra-CSV round trips, LONG or SHORT. Within the uploaded file
+ *     itself, two fills for the same ticker/contract are paired FIFO,
+ *     chronologically (by exact execution timestamp when the export has
+ *     one — see tradebookParser's applyExecutionTime — else by date, file
+ *     order preserved for same-instant ties). Whichever fill comes FIRST
+ *     decides the direction: BUY-then-SELL is a LONG round trip, SELL-then-
+ *     BUY is a SHORT one (sold to open, bought to cover). Either way the
+ *     pair imports ALREADY CLOSED — both entry and exit are known from the
+ *     file — EXCEPT an opening SELL is only ever queued as a short-open
+ *     candidate when there's no DB-open position for that ticker already;
+ *     otherwise it's left for Pass 2, which is almost certainly what a sell
+ *     with an existing open position actually means.
  *   Pass 2 — DB open-position matching. A SELL the file couldn't pair with
- *     its own BUY is matched against the OLDEST open trade for the same
- *     ticker in the target partition (FIFO again — there is no per-lot
- *     tracking engine, so this is the standard, defensible convention when
- *     more than one open lot could match) and staged as an auto-close.
- *   Pass 3 — Unpaired BUYs become new open trades, target/stop suggested
- *     from the configured risk cap (same heuristic the manual entry form's
- *     risk meter uses).
+ *     its own BUY (or that Pass 1 deliberately left alone — see above) is
+ *     matched against the OLDEST open trade for the same ticker in the
+ *     target partition (FIFO again — there is no per-lot tracking engine,
+ *     so this is the standard, defensible convention when more than one
+ *     open lot could match) and staged as an auto-close.
+ *   Pass 3 — Unpaired BUYs become new open LONG trades, target/stop
+ *     suggested from the configured risk cap (same heuristic the manual
+ *     entry form's risk meter uses). There is no equivalent "open a new
+ *     standalone short" here — a short only ever exists as a fully-
+ *     reconciled Pass 1 round trip.
  *   Pass 4 — Whatever SELL is left after passes 1-2 is an orphan: no CSV-
  *     side buy, no DB-side open position. Still shown (so the user sees
  *     everything the file contains) but flagged and never actionable.
@@ -83,6 +93,16 @@ type StagedRoundTripRow = {
   selected: boolean;
   symbol: string;
   rawSymbol: string;
+  /**
+   * "long" — the file's earlier fill was a BUY (opened), later a SELL
+   * (closed). "short" — earlier fill was a SELL (sold to open), later a BUY
+   * (bought to cover). entryPrice/entryDate always refer to whichever fill
+   * OPENED the position, exitPrice/exitDate to whichever CLOSED it — the
+   * rest of this row's math and rendering stays side-agnostic because of
+   * that, with the sign flip between long/short folded into netPnl once,
+   * here, at construction time.
+   */
+  side: "long" | "short";
   assetClass: "equity" | "fno";
   fno: FnoContractInfo | null;
   entryDate: string;
@@ -91,7 +111,7 @@ type StagedRoundTripRow = {
   exitPrice: number;
   qty: number;
   charges: number;
-  /** (exitPrice - entryPrice) * qty - charges. */
+  /** LONG: (exitPrice - entryPrice) * qty - charges. SHORT: (entryPrice - exitPrice) * qty - charges. */
   netPnl: number;
   /** netPnl / (entryPrice * qty). */
   roiPct: number;
@@ -270,13 +290,40 @@ export function TradeImportModal({
         .map((t) => t.closeExecutionId as string),
     );
 
-    // ── Pass 1: intra-CSV round-trip matching ──────────────────────────────
+    // FIFO pool of DB-open trades per ticker, oldest first — built BEFORE
+    // Pass 1 runs (not just before Pass 2) because Pass 1 needs to consult
+    // its EXISTENCE, not just Pass 2 its contents: see the sell-queue guard
+    // below for why. Consumption (`.shift()`) still only ever happens in
+    // Pass 2 — Pass 1 only ever reads `.length`, never claims a lot from it.
+    const openByTicker = new Map<string, Trade[]>();
+    for (const t of trades) {
+      if (t.status !== "open" || t.partition !== partition) continue;
+      const list = openByTicker.get(t.ticker) ?? [];
+      list.push(t);
+      openByTicker.set(t.ticker, list);
+    }
+    for (const list of openByTicker.values()) {
+      list.sort((a, b) => a.entryDate.localeCompare(b.entryDate));
+    }
+
+    // ── Pass 1: intra-CSV round-trip matching (LONG and SHORT) ─────────────
     // Grouped by symbol, then sorted CHRONOLOGICALLY within each group
     // (not left in file order) — some broker exports list newest-first, and
-    // pairing off raw file order in that case would match a later buy to an
-    // earlier sell, producing a negative-duration "round trip". FIFO per
-    // symbol: the oldest still-unclaimed buy in the file pairs with the next
-    // sell for that same symbol.
+    // pairing off raw file order in that case would match a later fill to
+    // an earlier one, producing a negative-duration "round trip" AND could
+    // misclassify a long as a short (or vice versa) by getting which fill
+    // came first backwards. dateISO carries real time-of-day precision when
+    // the export has it (see tradebookParser's applyExecutionTime), so
+    // same-day fills sort correctly too, not just same-day-arbitrarily.
+    //
+    // Two FIFO queues per symbol, not one: a BUY first tries to COVER the
+    // oldest still-open SHORT (an earlier unclaimed SELL); only when there
+    // isn't one does it become a new LONG-opening fill waiting for its own
+    // sell. Symmetrically a SELL first tries to CLOSE the oldest open LONG;
+    // only then does it become a new SHORT-opening fill waiting for a cover.
+    // By construction at most one of the two queues is ever non-empty for a
+    // given symbol at any point — this models a single running position that
+    // flips between flat/long/short, never both directions at once.
     const bySymbol = new Map<string, ParsedTradeRow[]>();
     for (const r of workingRows) {
       const list = bySymbol.get(r.symbol) ?? [];
@@ -284,54 +331,84 @@ export function TradeImportModal({
       bySymbol.set(r.symbol, list);
     }
 
+    const buildRoundTrip = (
+      entryLeg: ParsedTradeRow,
+      exitLeg: ParsedTradeRow,
+      side: "long" | "short",
+      symbol: string,
+    ): StagedRoundTripRow => {
+      const matchedQty = Math.min(entryLeg.quantity, exitLeg.quantity);
+      const qtyMismatch = entryLeg.quantity !== exitLeg.quantity;
+      const charges = entryLeg.charges + exitLeg.charges;
+      const grossDelta = side === "long" ? exitLeg.price - entryLeg.price : entryLeg.price - exitLeg.price;
+      const netPnl = grossDelta * matchedQty - charges;
+      const roiPct = entryLeg.price > 0 ? netPnl / (entryLeg.price * matchedQty) : 0;
+      const durationDays = Math.max(
+        0,
+        Math.round((new Date(exitLeg.dateISO).getTime() - new Date(entryLeg.dateISO).getTime()) / 86400000),
+      );
+      const isFno = FNO_REGEX.test(symbol);
+      const fp = executionFingerprint(exitLeg, partition);
+      return {
+        kind: "round-trip",
+        key: exitLeg.sourceIndex,
+        selected: !qtyMismatch && !closedFingerprints.has(fp),
+        symbol,
+        rawSymbol: exitLeg.rawSymbol,
+        side,
+        assetClass: isFno ? "fno" : "equity",
+        fno: isFno ? decodeFnoSymbol(symbol) : null,
+        entryDate: entryLeg.dateISO,
+        exitDate: exitLeg.dateISO,
+        entryPrice: entryLeg.price,
+        exitPrice: exitLeg.price,
+        qty: matchedQty,
+        charges,
+        netPnl,
+        roiPct,
+        durationDays,
+        qtyMismatch,
+        isDuplicate: closedFingerprints.has(fp),
+        closeExecutionId: fp,
+      };
+    };
+
     const roundTripRows: StagedRoundTripRow[] = [];
     const consumed = new Set<number>();
 
     for (const [symbol, group] of bySymbol) {
       const chronological = [...group].sort((a, b) => a.dateISO.localeCompare(b.dateISO));
       const buyQueue: ParsedTradeRow[] = [];
+      const sellQueue: ParsedTradeRow[] = [];
       for (const r of chronological) {
         if (r.side === "buy") {
-          buyQueue.push(r);
+          const shortEntryLeg = sellQueue.shift();
+          if (shortEntryLeg) {
+            roundTripRows.push(buildRoundTrip(shortEntryLeg, r, "short", symbol));
+            consumed.add(shortEntryLeg.sourceIndex);
+            consumed.add(r.sourceIndex);
+            continue;
+          }
+          buyQueue.push(r); // no short to cover — opens/extends a potential LONG
           continue;
         }
-        const buyLeg = buyQueue.shift();
-        if (!buyLeg) continue; // no CSV-side buy available yet — leaves for Pass 2/4
-        const sellLeg = r;
-        const matchedQty = Math.min(buyLeg.quantity, sellLeg.quantity);
-        const qtyMismatch = buyLeg.quantity !== sellLeg.quantity;
-        const charges = buyLeg.charges + sellLeg.charges;
-        const netPnl = (sellLeg.price - buyLeg.price) * matchedQty - charges;
-        const roiPct = buyLeg.price > 0 ? netPnl / (buyLeg.price * matchedQty) : 0;
-        const durationDays = Math.max(
-          0,
-          Math.round((new Date(sellLeg.dateISO).getTime() - new Date(buyLeg.dateISO).getTime()) / 86400000),
-        );
-        const isFno = FNO_REGEX.test(symbol);
-        const fp = executionFingerprint(sellLeg, partition);
-        roundTripRows.push({
-          kind: "round-trip",
-          key: sellLeg.sourceIndex,
-          selected: !qtyMismatch && !closedFingerprints.has(fp),
-          symbol,
-          rawSymbol: sellLeg.rawSymbol,
-          assetClass: isFno ? "fno" : "equity",
-          fno: isFno ? decodeFnoSymbol(symbol) : null,
-          entryDate: buyLeg.dateISO,
-          exitDate: sellLeg.dateISO,
-          entryPrice: buyLeg.price,
-          exitPrice: sellLeg.price,
-          qty: matchedQty,
-          charges,
-          netPnl,
-          roiPct,
-          durationDays,
-          qtyMismatch,
-          isDuplicate: closedFingerprints.has(fp),
-          closeExecutionId: fp,
-        });
-        consumed.add(buyLeg.sourceIndex);
-        consumed.add(sellLeg.sourceIndex);
+        const longEntryLeg = buyQueue.shift();
+        if (longEntryLeg) {
+          roundTripRows.push(buildRoundTrip(longEntryLeg, r, "long", symbol));
+          consumed.add(longEntryLeg.sourceIndex);
+          consumed.add(r.sourceIndex);
+          continue;
+        }
+        // No file-side buy to close. Only treat this as a SHORT-opening fill
+        // when there is genuinely no DB-open position for this ticker —
+        // otherwise a sell that closes an EXISTING (not-in-this-file) long,
+        // followed later in the file by an unrelated fresh buy of the same
+        // ticker, would get wrongly paired into a short round trip instead
+        // of leaving the sell for Pass 2 to correctly close that DB position
+        // and the later buy to correctly open its own new long in Pass 3.
+        if (!openByTicker.get(r.symbol)?.length) {
+          sellQueue.push(r);
+        }
       }
     }
 
@@ -355,23 +432,13 @@ export function TradeImportModal({
       buyDupCounts.set(k, (buyDupCounts.get(k) ?? 0) + 1);
     }
 
-    // FIFO pool of open trades per ticker, oldest first — consumed as SELL
-    // rows below claim a match, so two sells for the same ticker in one file
-    // each close a DIFFERENT lot rather than double-matching the same one.
-    // This is a per-ticker queue, not a full lot-accounting engine: a SELL
-    // always matches exactly one open trade (the oldest), never splits
-    // across several — see qtyMismatch below for when that doesn't line up.
-    const openByTicker = new Map<string, Trade[]>();
-    for (const t of trades) {
-      if (t.status !== "open" || t.partition !== partition) continue;
-      const list = openByTicker.get(t.ticker) ?? [];
-      list.push(t);
-      openByTicker.set(t.ticker, list);
-    }
-    for (const list of openByTicker.values()) {
-      list.sort((a, b) => a.entryDate.localeCompare(b.entryDate));
-    }
-
+    // openByTicker (FIFO pool of open trades per ticker) was already built
+    // above, before Pass 1 — consumed here via `.shift()` as SELL rows below
+    // claim a match, so two sells for the same ticker in one file each close
+    // a DIFFERENT lot rather than double-matching the same one. Still just a
+    // per-ticker queue, not a full lot-accounting engine: a SELL always
+    // matches exactly one open trade (the oldest), never splits across
+    // several — see qtyMismatch below for when that doesn't line up.
     const rest: StagedTradeRow[] = [];
     for (const r of remainingRows) {
       if (r.side === "sell") {
@@ -587,15 +654,17 @@ export function TradeImportModal({
       const entries = selectedRoundTrips.map((r) => ({
         ticker: r.symbol,
         entryDate: r.entryDate,
-        direction: "LONG" as const,
+        direction: r.side === "short" ? ("SHORT" as const) : ("LONG" as const),
         qty: r.qty,
         entryPrice: r.entryPrice,
         // Structural filler, not a real plan: the position is already
         // closed by the time this exists, so target/stop can never be
         // tested again — the closed-card UI leads with entry/exit/P&L
-        // instead of these. Kept only because Trade requires them.
-        targetPrice: Number(suggestTarget(r.entryPrice)),
-        stopLoss: Number(suggestStop(r.entryPrice)),
+        // instead of these. Kept only because Trade requires them. Flipped
+        // for a short (target below entry, stop above) so they at least
+        // read correctly if ever inspected — e.g. via the edit modal.
+        targetPrice: Number(r.side === "short" ? suggestStop(r.entryPrice) : suggestTarget(r.entryPrice)),
+        stopLoss: Number(r.side === "short" ? suggestTarget(r.entryPrice) : suggestStop(r.entryPrice)),
         source: "Self" as const,
         partition,
         notes: `Round-trip from tradebook (${r.rawSymbol})`.slice(0, 140),
@@ -852,10 +921,12 @@ export function TradeImportModal({
                 </p>
               )}
               <p className="text-[11px] text-muted-foreground">
-                <span className={CYAN}>ROUND-TRIP</span> pairs a BUY and SELL found in this file into
-                one already-closed trade. <span className={SKY}>CLOSE</span> matches a SELL to an
-                existing open position. Unpaired <span className={EMERALD}>BUY</span> rows open new
-                trades. Orphan sells (no match anywhere) are shown for context only.
+                <span className={CYAN}>ROUND-TRIP</span> pairs two fills for the same ticker found in
+                this file into one already-closed trade — buy-then-sell is <span className={EMERALD}>LONG</span>,
+                sell-then-buy is <span className={ROSE}>SHORT</span>.{" "}
+                <span className={SKY}>CLOSE</span> matches a SELL to an existing open position.
+                Unpaired <span className={EMERALD}>BUY</span> rows open new trades. Orphan sells (no
+                match anywhere) are shown for context only.
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 <div className="relative flex-1 min-w-[10rem]">
@@ -964,6 +1035,20 @@ export function TradeImportModal({
                             className={`text-[9px] font-semibold tracking-wider px-1.5 py-0.5 rounded-md shrink-0 border border-[oklch(0.76_0.13_195_/_0.4)] ${CYAN}`}
                           >
                             ROUND-TRIP
+                          </span>
+                          <span
+                            className={`text-[9px] font-semibold tracking-wider px-1.5 py-0.5 rounded-md shrink-0 border ${
+                              r.side === "short"
+                                ? `border-[oklch(0.7_0.22_20_/_0.4)] ${ROSE}`
+                                : `border-[oklch(0.72_0.18_155_/_0.4)] ${EMERALD}`
+                            }`}
+                            title={
+                              r.side === "short"
+                                ? "Sold to open, bought to cover"
+                                : "Bought to open, sold to close"
+                            }
+                          >
+                            {r.side === "short" ? "SHORT" : "LONG"}
                           </span>
                           {r.assetClass === "fno" && (
                             <span
