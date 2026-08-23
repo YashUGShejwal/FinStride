@@ -158,66 +158,93 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
     );
   }
 
+  const lastCol = grid.weeks.length - 1;
+
   return (
     <section className="glass rounded-2xl p-5">
       <h2 className="font-display font-semibold tracking-tight mb-4">Trading Activity</h2>
       <div className="flex flex-col lg:flex-row lg:items-start gap-5">
-        <div className="overflow-x-auto pb-1">
-          <div className="flex gap-1 mb-1">
-            {grid.weeks.map((week, wi) => {
-              const month = week[0].key.slice(0, 7);
-              const prevMonth = wi > 0 ? grid.weeks[wi - 1][0].key.slice(0, 7) : "";
-              const label = month !== prevMonth ? fmtDate(week[0].key).split(" ")[1] : "";
-              return (
-                <div key={wi} className="w-3 shrink-0 text-[9px] text-muted-foreground">
-                  {label}
-                </div>
-              );
-            })}
-          </div>
-          <div className="flex gap-1">
-            {grid.weeks.map((week, wi) => (
-              <div key={wi} className="flex flex-col gap-1">
-                {week.map((day) => {
-                  const color = day.bucket ? cellColor(day.bucket.netPnl, grid.maxAbs) : undefined;
-                  const isToday = day.key === todayKey;
-                  return (
-                    <div key={day.key} className="relative group">
-                      <div
-                        className={`size-3 rounded-[2px] ${
-                          color ? "" : "bg-white/[0.02] border border-white/[0.04]"
-                        } ${isToday ? "ring-1 ring-white/40" : ""}`}
-                        style={color ? { backgroundColor: color } : undefined}
-                      />
-                      {day.bucket && (
-                        <div className="pointer-events-none absolute z-20 hidden group-hover:flex flex-col gap-0.5 bottom-full left-1/2 -translate-x-1/2 mb-1.5 w-max max-w-[13rem] rounded-lg border border-glass-border bg-[#05070a] px-2.5 py-2 text-[10px] shadow-lg">
-                          <span className="font-semibold whitespace-nowrap">
-                            {fmtDate(day.bucket.key)}
-                          </span>
-                          <Sensitive>
-                            <span
-                              className={`tnum font-semibold ${
-                                day.bucket.netPnl >= 0 ? EMERALD_TEXT : ROSE_TEXT
-                              }`}
+        {/* Left: header already above, grid below — sized to occupy ~55-60%
+            of the row so it never has to fight the stat grid for space. */}
+        <div className="lg:w-[58%] min-w-0">
+          <div className="overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex gap-1 mb-1">
+              {grid.weeks.map((week, wi) => {
+                const month = week[0].key.slice(0, 7);
+                const prevMonth = wi > 0 ? grid.weeks[wi - 1][0].key.slice(0, 7) : "";
+                const label = month !== prevMonth ? fmtDate(week[0].key).split(" ")[1] : "";
+                return (
+                  <div key={wi} className="w-3 h-3 shrink-0 text-[9px] leading-3 text-muted-foreground">
+                    {label}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex gap-1">
+              {grid.weeks.map((week, wi) => {
+                // Edge-aware tooltip anchoring, sized to the ACTUAL numbers:
+                // each column is 16px (size-3 cell + gap-1), 14 of them is a
+                // ~220px-wide grid, and the tooltip is a fixed 7rem (112px).
+                // A plain centered tooltip overflows the grid's own footprint
+                // for almost every column here — half its own width (56px)
+                // is more than 3 whole columns — so instead: the first half
+                // of columns anchor their tooltip's LEFT edge to the cell
+                // (extends rightward, so it can never start before x=0), the
+                // second half anchor the RIGHT edge (extends leftward, so it
+                // can never end past the grid's own right edge at x≈220).
+                // Splitting exactly at the midpoint is what keeps BOTH
+                // boundary columns (last-of-first-half, first-of-second-half)
+                // inside [0, 220] — anything looser re-introduces the
+                // negative-x/past-edge overflow this whole fix exists for.
+                const hAlign = wi <= Math.floor(lastCol / 2) ? "left-0" : "right-0";
+                return (
+                  <div key={wi} className="flex flex-col gap-1">
+                    {week.map((day, di) => {
+                      const color = day.bucket ? cellColor(day.bucket.netPnl, grid.maxAbs) : undefined;
+                      const isToday = day.key === todayKey;
+                      // Rows 0-1 (Sun/Mon) flip the tooltip BELOW the cell —
+                      // ABOVE would push it past the grid's own top edge.
+                      const vAlign = di < 2 ? "top-full mt-1.5" : "bottom-full mb-1.5";
+                      return (
+                        <div key={day.key} className="relative group">
+                          <div
+                            className={`size-3 rounded-[2px] ${
+                              color ? "" : "bg-white/[0.02] border border-white/[0.04]"
+                            } ${isToday ? "ring-1 ring-white/40" : ""}`}
+                            style={color ? { backgroundColor: color } : undefined}
+                          />
+                          {day.bucket && (
+                            <div
+                              className={`pointer-events-none absolute z-50 hidden group-hover:flex flex-col gap-0.5 ${vAlign} ${hAlign} w-[7rem] rounded-lg border border-glass-border bg-[#05070a] px-2 py-1.5 text-[10px] leading-tight shadow-lg`}
                             >
-                              {signed(day.bucket.netPnl)}
-                            </span>
-                          </Sensitive>
-                          <span className="text-muted-foreground whitespace-nowrap">
-                            {day.bucket.trades} trade{day.bucket.trades !== 1 ? "s" : ""} ·{" "}
-                            {day.bucket.wins}W · {day.bucket.losses}L
-                          </span>
+                              <span className="font-semibold">{fmtDate(day.bucket.key)}</span>
+                              <Sensitive>
+                                <span
+                                  className={`tnum font-semibold ${
+                                    day.bucket.netPnl >= 0 ? EMERALD_TEXT : ROSE_TEXT
+                                  }`}
+                                >
+                                  {signed(day.bucket.netPnl)}
+                                </span>
+                              </Sensitive>
+                              <span className="text-muted-foreground">
+                                {day.bucket.trades} trade{day.bucket.trades !== 1 ? "s" : ""} ·{" "}
+                                {day.bucket.wins}W · {day.bucket.losses}L
+                              </span>
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2 shrink-0">
+        {/* Right: 2x2 stat grid, ~40-45% of the row. */}
+        <div className="lg:w-[42%] grid grid-cols-2 gap-2">
           <HeatmapStat
             label="Streak"
             value={grid.streak > 0 ? `${grid.streak} day${grid.streak !== 1 ? "s" : ""}` : "—"}
@@ -259,10 +286,10 @@ function HeatmapStat({
 }) {
   const val = <span className={`text-sm font-semibold tnum ${tone ?? ""}`}>{value}</span>;
   return (
-    <div className="rounded-xl border border-glass-border bg-white/[0.02] px-3 py-2 min-w-[6.5rem]">
+    <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5">
       <p className="text-[9px] uppercase tracking-wider text-muted-foreground">{label}</p>
       <p className="mt-0.5">{sensitive ? <Sensitive>{val}</Sensitive> : val}</p>
-      {sub && <p className="text-[9px] text-muted-foreground mt-0.5">{sub}</p>}
+      {sub && <p className="text-[9px] text-muted-foreground mt-0.5 truncate">{sub}</p>}
     </div>
   );
 }

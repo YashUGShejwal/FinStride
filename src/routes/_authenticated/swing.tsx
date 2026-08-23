@@ -1402,27 +1402,31 @@ function GroupedClosedTrades({
         }
         const sessionKeys = [...sessions.keys()].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
         return (
-          <div key={symbol} className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
+          <div key={symbol} className="rounded-2xl border border-white/[0.08] bg-white/[0.02] p-4">
             <div className="flex items-center justify-between gap-3 flex-wrap mb-3 pb-3 border-b border-white/[0.06]">
-              <p className="text-sm font-display font-semibold tracking-wider">{symbol}</p>
-              <div className="flex items-center gap-3">
-                <span className="text-[11px] text-muted-foreground">
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="text-sm font-display font-semibold tracking-wider">{symbol}</p>
+                <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border border-white/[0.08] bg-white/[0.03] text-muted-foreground">
                   {symbolStats.count} trade{symbolStats.count !== 1 ? "s" : ""}
                 </span>
-                <span
-                  className={`tnum text-sm font-semibold ${
-                    symbolStats.hasPnl
-                      ? symbolStats.netPnl >= 0
-                        ? PNL_EMERALD
-                        : PNL_ROSE
-                      : "text-muted-foreground"
-                  }`}
-                >
-                  <Sensitive>{symbolStats.hasPnl ? signedInr(symbolStats.netPnl) : "—"}</Sensitive>
-                </span>
               </div>
+              <span
+                className={`tnum text-sm font-semibold ${
+                  symbolStats.hasPnl
+                    ? symbolStats.netPnl >= 0
+                      ? PNL_EMERALD
+                      : PNL_ROSE
+                    : "text-muted-foreground"
+                }`}
+              >
+                <Sensitive>{symbolStats.hasPnl ? signedInr(symbolStats.netPnl) : "—"}</Sensitive>
+              </span>
             </div>
-            <div className="space-y-2">
+            {/* space-y-3 (not -2, like every other list in this file) —
+                each SessionBlock is its own bordered box, so a distinct
+                trading day needs enough air around it to read as separate
+                from its neighbor rather than looking like one tall stack. */}
+            <div className="space-y-3">
               {sessionKeys.map((day) => (
                 <SessionBlock key={day || "unknown"} day={day} trades={sessions.get(day)!} renderCard={card} />
               ))}
@@ -1499,7 +1503,7 @@ function SessionBlock({
 }) {
   const stats = summarizeSession(trades);
   return (
-    <div className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-3">
+    <div className="rounded-lg border border-white/[0.04] bg-white/[0.015] p-3">
       <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
         {/* Lighter weight + smaller than the master symbol header on purpose —
             this is a sub-header one level down, not a second title. */}
