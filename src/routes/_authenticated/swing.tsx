@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { TradeImportModal } from "@/components/TradeImportModal";
 import { EditTradeModal } from "@/components/EditTradeModal";
+import { PnlHeatmap } from "@/components/PnlHeatmap";
 import {
   useStore,
   type CloseReason, type PartitionId, type Trade, type ExitReason,
@@ -266,6 +267,13 @@ function SwingPage() {
   // too (it's gated on enableFnoTracking) — without this fallback the page
   // would render neither section, stuck on a view with no way out.
   const effectiveDeskView = enableFnoTracking ? deskView : "equity";
+
+  // ── Closed-trade grouping (independent per desk view — F&O day-trading
+  // review and equity swing review call for different default shapes) ──────
+  const [equityGroupBy, setEquityGroupBy] = useState<GroupBy>("flat");
+  const [fnoGroupBy, setFnoGroupBy] = useState<GroupBy>("date");
+  const groupBy = effectiveDeskView === "equity" ? equityGroupBy : fnoGroupBy;
+  const setGroupBy = effectiveDeskView === "equity" ? setEquityGroupBy : setFnoGroupBy;
 
   // Deep-link intent (command palette "New Swing Trade", dashboard quick
   // card): ?action=add expands the drawer, then the param self-clears.
@@ -629,6 +637,7 @@ function SwingPage() {
       {effectiveDeskView === "equity" && (
       <>
       <PerformanceRibbon trades={equityTrades} />
+      <PnlHeatmap trades={equityTrades} />
       {/* ── Open positions ────────────────────────────────────────────────────── */}
       <section className={`glass rounded-2xl p-5 ${positionsRipple.className}`}>
         <h2 className="font-display font-semibold tracking-tight mb-4">
@@ -779,26 +788,25 @@ function SwingPage() {
       {/* ── Closed positions ─────────────────────────────────────────────────── */}
       {equityClosedTrades.length > 0 && (
         <section className="glass rounded-2xl p-5">
-          <h2 className="font-display font-semibold tracking-tight mb-4">
-            Closed positions{enableFnoTracking ? " (Equity)" : ""}
-            <span className="ml-2 text-xs text-muted-foreground font-normal">
-              ({equityClosedTrades.length})
-            </span>
-          </h2>
-          <ul className="space-y-2">
-            {equityClosedTrades.map((t) => (
-              <ClosedTradeCard
-                key={t.id}
-                t={t}
-                partitionName={partitionLabel(t.partition)}
-                onEdit={() => setEditingTrade(t)}
-                onDelete={() => {
-                  deleteTrade(t.id);
-                  toast.success("Trade removed");
-                }}
-              />
-            ))}
-          </ul>
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+            <h2 className="font-display font-semibold tracking-tight">
+              Closed positions{enableFnoTracking ? " (Equity)" : ""}
+              <span className="ml-2 text-xs text-muted-foreground font-normal">
+                ({equityClosedTrades.length})
+              </span>
+            </h2>
+            <GroupBySwitcher value={groupBy} onChange={setGroupBy} />
+          </div>
+          <GroupedClosedTrades
+            trades={equityClosedTrades}
+            groupBy={groupBy}
+            partitionLabel={partitionLabel}
+            onEdit={setEditingTrade}
+            onDelete={(t) => {
+              deleteTrade(t.id);
+              toast.success("Trade removed");
+            }}
+          />
         </section>
       )}
       </>
@@ -808,6 +816,7 @@ function SwingPage() {
       {effectiveDeskView === "fno" && (
         <>
           <PerformanceRibbon trades={fnoTrades} />
+          <PnlHeatmap trades={fnoTrades} />
           <section className="glass rounded-2xl p-5">
             <h2 className="font-display font-semibold tracking-tight mb-4">
               F&O open positions
@@ -943,33 +952,32 @@ function SwingPage() {
 
           {fnoClosedTrades.length > 0 && (
             <section className="glass rounded-2xl p-5">
-              <h2 className="font-display font-semibold tracking-tight mb-4">
-                F&O closed positions
-                <span className="ml-2 text-xs text-muted-foreground font-normal">
-                  ({fnoClosedTrades.length})
-                </span>
-              </h2>
-              <ul className="space-y-2">
-                {fnoClosedTrades.map((t) => (
-                  <ClosedTradeCard
-                    key={t.id}
-                    t={t}
-                    partitionName={partitionLabel(t.partition)}
-                    onEdit={() => setEditingTrade(t)}
-                    onDelete={() => {
-                      deleteTrade(t.id);
-                      toast.success("Trade removed");
-                    }}
-                    rightExtra={
-                      <div className="flex items-center gap-3 shrink-0">
-                        <FnoStat label="Expiry" value={t.expiry ?? "—"} />
-                        <FnoStat label="Strike" value={t.strike !== undefined ? String(t.strike) : "—"} />
-                        <FnoStat label="Lot size" value={t.lotSize !== undefined ? String(t.lotSize) : "—"} />
-                      </div>
-                    }
-                  />
-                ))}
-              </ul>
+              <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+                <h2 className="font-display font-semibold tracking-tight">
+                  F&O closed positions
+                  <span className="ml-2 text-xs text-muted-foreground font-normal">
+                    ({fnoClosedTrades.length})
+                  </span>
+                </h2>
+                <GroupBySwitcher value={groupBy} onChange={setGroupBy} />
+              </div>
+              <GroupedClosedTrades
+                trades={fnoClosedTrades}
+                groupBy={groupBy}
+                partitionLabel={partitionLabel}
+                onEdit={setEditingTrade}
+                onDelete={(t) => {
+                  deleteTrade(t.id);
+                  toast.success("Trade removed");
+                }}
+                fnoExtra={(t) => (
+                  <div className="flex items-center gap-3 shrink-0">
+                    <FnoStat label="Expiry" value={t.expiry ?? "—"} />
+                    <FnoStat label="Strike" value={t.strike !== undefined ? String(t.strike) : "—"} />
+                    <FnoStat label="Lot size" value={t.lotSize !== undefined ? String(t.lotSize) : "—"} />
+                  </div>
+                )}
+              />
             </section>
           )}
         </>
@@ -1233,6 +1241,240 @@ function ClosedTradeCard({
         </button>
       </div>
     </li>
+  );
+}
+
+// ─── Closed-trade grouping ───────────────────────────────────────────────────
+type GroupBy = "date" | "symbol-date" | "flat";
+
+const signedInr = (n: number) => `${n >= 0 ? "+" : ""}${inr(n)}`;
+
+const GROUP_BY_OPTIONS: { value: GroupBy; label: string }[] = [
+  { value: "date", label: "📅 By Date" },
+  { value: "symbol-date", label: "🏷️ By Symbol & Date" },
+  { value: "flat", label: "📋 Flat List" },
+];
+
+function GroupBySwitcher({ value, onChange }: { value: GroupBy; onChange: (v: GroupBy) => void }) {
+  return (
+    <div className="inline-flex items-center gap-1 p-1 rounded-xl border border-glass-border bg-white/[0.03] w-fit flex-wrap">
+      {GROUP_BY_OPTIONS.map((opt) => (
+        <button
+          key={opt.value}
+          type="button"
+          onClick={() => onChange(opt.value)}
+          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap ${
+            value === opt.value
+              ? "gradient-primary text-primary-foreground"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Wins/losses only ever count trades WITH realized P&L data — same convention as PerformanceRibbon, for the same reason (a manually-closed trade with no exit price recorded has nothing to net). */
+function summarizeSession(trades: Trade[]) {
+  const realized = (t: Trade) => t.netPnl ?? t.pnl;
+  const withPnl = trades.filter((t) => realized(t) !== undefined);
+  const netPnl = withPnl.reduce((s, t) => s + (realized(t) as number), 0);
+  const wins = withPnl.filter((t) => (realized(t) as number) > 0).length;
+  const losses = withPnl.filter((t) => (realized(t) as number) < 0).length;
+  const charges = trades.reduce((s, t) => s + (t.charges ?? 0), 0);
+  return { count: trades.length, hasPnl: withPnl.length > 0, netPnl, wins, losses, charges };
+}
+
+/** "" (no exit date recorded) -> a fallback label; otherwise "21 Aug 2026 · Thursday". */
+function sessionDateLabel(day: string): string {
+  if (!day) return "No exit date recorded";
+  const weekday = new Date(`${day}T00:00:00.000Z`).toLocaleDateString("en-IN", { weekday: "long" });
+  return `${fmtDate(day)} · ${weekday}`;
+}
+
+/**
+ * Dispatches to one of the three grouping shapes. `trades` is expected
+ * already scoped to one desk view (equity or F&O) by the caller — this
+ * component only ever groups/sorts what it's handed, never filters by
+ * asset class itself.
+ */
+function GroupedClosedTrades({
+  trades,
+  groupBy,
+  partitionLabel,
+  onEdit,
+  onDelete,
+  fnoExtra,
+}: {
+  trades: Trade[];
+  groupBy: GroupBy;
+  partitionLabel: (id: string) => string;
+  onEdit: (t: Trade) => void;
+  onDelete: (t: Trade) => void;
+  fnoExtra?: (t: Trade) => React.ReactNode;
+}) {
+  const card = (t: Trade) => (
+    <ClosedTradeCard
+      key={t.id}
+      t={t}
+      partitionName={partitionLabel(t.partition)}
+      onEdit={() => onEdit(t)}
+      onDelete={() => onDelete(t)}
+      rightExtra={fnoExtra?.(t)}
+    />
+  );
+
+  if (groupBy === "flat") {
+    return <ul className="space-y-2">{trades.map(card)}</ul>;
+  }
+
+  // Exit day, UTC-sliced — same convention PnlHeatmap and TradeImportModal's
+  // dupKey already use, so a trade lands in the same "day" everywhere it's
+  // grouped across the app. "" (no exitDate) buckets separately rather than
+  // being dropped, so a data gap is visible instead of silently vanishing.
+  const exitDay = (t: Trade) => (t.exitDate ? t.exitDate.slice(0, 10) : "");
+
+  if (groupBy === "date") {
+    const groups = new Map<string, Trade[]>();
+    for (const t of trades) {
+      const k = exitDay(t);
+      const list = groups.get(k) ?? [];
+      list.push(t);
+      groups.set(k, list);
+    }
+    const sortedKeys = [...groups.keys()].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+    return (
+      <div className="space-y-3">
+        {sortedKeys.map((day) => (
+          <DaySessionCard key={day || "unknown"} day={day} trades={groups.get(day)!} renderCard={card} />
+        ))}
+      </div>
+    );
+  }
+
+  // "symbol-date" — symbol groups first (most-recently-traded symbol first),
+  // each one split into its own per-day session blocks underneath.
+  const bySymbol = new Map<string, Trade[]>();
+  for (const t of trades) {
+    const list = bySymbol.get(t.ticker) ?? [];
+    list.push(t);
+    bySymbol.set(t.ticker, list);
+  }
+  const latestExit = (list: Trade[]) =>
+    list.reduce((m, t) => (t.exitDate && t.exitDate > m ? t.exitDate : m), "");
+  const symbolKeys = [...bySymbol.keys()].sort((a, b) =>
+    latestExit(bySymbol.get(b)!).localeCompare(latestExit(bySymbol.get(a)!)),
+  );
+
+  return (
+    <div className="space-y-3">
+      {symbolKeys.map((symbol) => {
+        const symbolTrades = bySymbol.get(symbol)!;
+        const sessions = new Map<string, Trade[]>();
+        for (const t of symbolTrades) {
+          const k = exitDay(t);
+          const list = sessions.get(k) ?? [];
+          list.push(t);
+          sessions.set(k, list);
+        }
+        const sessionKeys = [...sessions.keys()].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+        return (
+          <div key={symbol} className="rounded-2xl border border-glass-border bg-white/[0.02] p-4">
+            <p className="text-sm font-semibold tracking-wider mb-3">{symbol}</p>
+            <div className="space-y-2">
+              {sessionKeys.map((day) => (
+                <SessionBlock key={day || "unknown"} day={day} trades={sessions.get(day)!} renderCard={card} />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** "By Date" mode's per-day container — collapsible, full session stats in the header. */
+function DaySessionCard({
+  day,
+  trades,
+  renderCard,
+}: {
+  day: string;
+  trades: Trade[];
+  renderCard: (t: Trade) => React.ReactNode;
+}) {
+  const [open, setOpen] = useState(true);
+  const stats = summarizeSession(trades);
+  return (
+    <section className="glass rounded-2xl overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between gap-3 p-4 hover:bg-white/5 transition-colors flex-wrap text-left"
+      >
+        <div>
+          <p className="text-sm font-display font-semibold tracking-tight">{sessionDateLabel(day)}</p>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            {stats.count} trade{stats.count !== 1 ? "s" : ""} · {stats.wins}W · {stats.losses}L
+            {stats.charges > 0 && (
+              <>
+                {" "}
+                · Charges <Sensitive>{inr(stats.charges)}</Sensitive>
+              </>
+            )}
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <span
+            className={`tnum text-sm font-semibold ${
+              stats.hasPnl ? (stats.netPnl >= 0 ? PNL_EMERALD : PNL_ROSE) : "text-muted-foreground"
+            }`}
+          >
+            <Sensitive>{stats.hasPnl ? signedInr(stats.netPnl) : "—"}</Sensitive>
+          </span>
+          {open ? (
+            <ChevronUp className="size-4 text-muted-foreground" />
+          ) : (
+            <ChevronDown className="size-4 text-muted-foreground" />
+          )}
+        </div>
+      </button>
+      {open && (
+        <ul className="space-y-2 px-4 pb-4 pt-1 border-t border-glass-border">{trades.map(renderCard)}</ul>
+      )}
+    </section>
+  );
+}
+
+/** "By Symbol & Date" mode's per-session block, nested under a symbol group — lighter weight than DaySessionCard since the ticker badge already lives one level up. */
+function SessionBlock({
+  day,
+  trades,
+  renderCard,
+}: {
+  day: string;
+  trades: Trade[];
+  renderCard: (t: Trade) => React.ReactNode;
+}) {
+  const stats = summarizeSession(trades);
+  return (
+    <div className="rounded-xl border border-glass-border/60 bg-white/[0.02] p-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
+        <p className="text-xs text-muted-foreground">
+          {day ? fmtDate(day) : "No exit date recorded"} · {stats.count} trade{stats.count !== 1 ? "s" : ""}
+        </p>
+        <span
+          className={`tnum text-xs font-semibold ${
+            stats.hasPnl ? (stats.netPnl >= 0 ? PNL_EMERALD : PNL_ROSE) : "text-muted-foreground"
+          }`}
+        >
+          <Sensitive>{stats.hasPnl ? signedInr(stats.netPnl) : "—"}</Sensitive>
+        </span>
+      </div>
+      <ul className="space-y-2">{trades.map(renderCard)}</ul>
+    </div>
   );
 }
 
