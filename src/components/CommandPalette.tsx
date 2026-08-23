@@ -1,6 +1,6 @@
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
-  LayoutDashboard, Wallet, TrendingUp, PieChart, Settings, User,
+  LayoutDashboard, Wallet, TrendingUp, PieChart, Rocket, Settings, User,
   Plus, Camera, Download, Eye, EyeOff,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -52,6 +52,9 @@ export function CommandPalette({
           </CommandItem>
           <CommandItem onSelect={() => run(() => nav({ to: "/analytics" }))}>
             <PieChart /> Portfolio
+          </CommandItem>
+          <CommandItem onSelect={() => run(() => nav({ to: "/wealth" }))}>
+            <Rocket /> Wealth
           </CommandItem>
           <CommandItem onSelect={() => run(() => nav({ to: "/settings" }))}>
             <Settings /> Settings

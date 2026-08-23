@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Bell, Command as CommandIcon, Eye, EyeOff, LayoutDashboard, LogOut,
-  PieChart, Settings, TrendingUp, User, Wallet, WifiOff,
+  PieChart, Rocket, Settings, TrendingUp, User, Wallet, WifiOff,
 } from "lucide-react";
 import { getStoredAuthUser, useAuth } from "@/lib/auth";
 import { useStore } from "@/lib/store";
@@ -69,12 +69,13 @@ function Layout() {
   return <WorkstationShell />;
 }
 
-// ─── The 4 primary hubs — the ONLY top-level navigation ─────────────────────
+// ─── The 5 primary hubs — the ONLY top-level navigation ─────────────────────
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/cashflow", label: "Cash Flow", icon: Wallet },
   { to: "/swing", label: "Swing Desk", icon: TrendingUp },
   { to: "/analytics", label: "Portfolio", icon: PieChart },
+  { to: "/wealth", label: "Wealth", icon: Rocket },
 ] as const;
 
 const TAB_SPRING = { type: "spring", stiffness: 420, damping: 34 } as const;
@@ -296,7 +297,7 @@ function WorkstationShell() {
 
       {/* ── Mobile bottom tab bar (same 4 hubs) ───────────────────────────── */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 glass-strong border-t border-glass-border safe-bottom">
-        <div className="grid grid-cols-4">
+        <div className="grid grid-cols-5">
           {NAV.map((n) => {
             const active = path.startsWith(n.to);
             const Icon = n.icon;

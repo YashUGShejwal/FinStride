@@ -14,6 +14,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthCallbackRouteImport } from './routes/auth/callback'
+import { Route as AuthenticatedWealthRouteImport } from './routes/_authenticated/wealth'
 import { Route as AuthenticatedSwingRouteImport } from './routes/_authenticated/swing'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
 import { Route as AuthenticatedProfileRouteImport } from './routes/_authenticated/profile'
@@ -46,6 +47,11 @@ const AuthCallbackRoute = AuthCallbackRouteImport.update({
   id: '/auth/callback',
   path: '/auth/callback',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AuthenticatedWealthRoute = AuthenticatedWealthRouteImport.update({
+  id: '/wealth',
+  path: '/wealth',
+  getParentRoute: () => AuthenticatedRoute,
 } as any)
 const AuthenticatedSwingRoute = AuthenticatedSwingRouteImport.update({
   id: '/swing',
@@ -100,6 +106,7 @@ export interface FileRoutesByFullPath {
   '/profile': typeof AuthenticatedProfileRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/swing': typeof AuthenticatedSwingRoute
+  '/wealth': typeof AuthenticatedWealthRoute
   '/auth/callback': typeof AuthCallbackRoute
 }
 export interface FileRoutesByTo {
@@ -114,6 +121,7 @@ export interface FileRoutesByTo {
   '/profile': typeof AuthenticatedProfileRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/swing': typeof AuthenticatedSwingRoute
+  '/wealth': typeof AuthenticatedWealthRoute
   '/auth/callback': typeof AuthCallbackRoute
 }
 export interface FileRoutesById {
@@ -130,6 +138,7 @@ export interface FileRoutesById {
   '/_authenticated/profile': typeof AuthenticatedProfileRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/_authenticated/swing': typeof AuthenticatedSwingRoute
+  '/_authenticated/wealth': typeof AuthenticatedWealthRoute
   '/auth/callback': typeof AuthCallbackRoute
 }
 export interface FileRouteTypes {
@@ -146,6 +155,7 @@ export interface FileRouteTypes {
     | '/profile'
     | '/settings'
     | '/swing'
+    | '/wealth'
     | '/auth/callback'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -160,6 +170,7 @@ export interface FileRouteTypes {
     | '/profile'
     | '/settings'
     | '/swing'
+    | '/wealth'
     | '/auth/callback'
   id:
     | '__root__'
@@ -175,6 +186,7 @@ export interface FileRouteTypes {
     | '/_authenticated/profile'
     | '/_authenticated/settings'
     | '/_authenticated/swing'
+    | '/_authenticated/wealth'
     | '/auth/callback'
   fileRoutesById: FileRoutesById
 }
@@ -222,6 +234,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/auth/callback'
       preLoaderRoute: typeof AuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_authenticated/wealth': {
+      id: '/_authenticated/wealth'
+      path: '/wealth'
+      fullPath: '/wealth'
+      preLoaderRoute: typeof AuthenticatedWealthRouteImport
+      parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/swing': {
       id: '/_authenticated/swing'
@@ -291,6 +310,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedProfileRoute: typeof AuthenticatedProfileRoute
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
   AuthenticatedSwingRoute: typeof AuthenticatedSwingRoute
+  AuthenticatedWealthRoute: typeof AuthenticatedWealthRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
@@ -302,6 +322,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedProfileRoute: AuthenticatedProfileRoute,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
   AuthenticatedSwingRoute: AuthenticatedSwingRoute,
+  AuthenticatedWealthRoute: AuthenticatedWealthRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

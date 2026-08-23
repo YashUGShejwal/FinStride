@@ -405,6 +405,109 @@ function normalizeBlueprint(raw: unknown): BlueprintSettings {
   };
 }
 
+// ─── Net Worth Projection & Milestones ─────────────────────────────────────
+// Local-only, for the same reason as CustomObligation above: user_settings
+// has no jsonb column for this (see supabase/migrations/0001_initial_schema.sql),
+// so there's nowhere to sync it to without a schema migration. Kept fully
+// functional device-locally rather than blocked on that.
+export type Scenario = "conservative" | "base" | "aggressive";
+
+export type ProjectionSettings = {
+  /**
+   * Monthly SIP the projection assumes, ₹. Auto-seeded ONCE from
+   * blueprintSettings.growwMfSip the first time projection settings are
+   * read (see normalizeProjectionSettings) — after that it's a plain
+   * user-editable override that no longer tracks growwMfSip live.
+   */
+  monthlySip: number;
+  /** Annual step-up applied to monthlySip every 12 months, e.g. 10 = 10%. */
+  stepUpPercent: number;
+  /** Expected annual return (%), nominal, compounded monthly — see projectionEngine.ts. */
+  expectedCagr: number;
+  /** Annual inflation rate (%) driving the real (purchasing-power) curve. */
+  inflationRate: number;
+  /** Projection horizon, in years. */
+  horizonYears: number;
+  /** Which preset button last set expectedCagr — see SCENARIO_CAGR in projectionEngine.ts. */
+  scenario: Scenario;
+  /** Whether the chart's headline figure defaults to the inflation-adjusted (real) value. */
+  adjustForInflation: boolean;
+};
+
+export const DEFAULT_PROJECTION_SETTINGS: ProjectionSettings = {
+  monthlySip: 0,
+  stepUpPercent: 10,
+  expectedCagr: 12,
+  inflationRate: 6,
+  horizonYears: 15,
+  scenario: "base",
+  adjustForInflation: false,
+};
+
+const PROJECTION_SETTINGS_KEY = "finstride.projection.settings";
+
+function normalizeProjectionSettings(raw: unknown, autoMonthlySip: number): ProjectionSettings {
+  if (!raw || typeof raw !== "object") {
+    return { ...DEFAULT_PROJECTION_SETTINGS, monthlySip: autoMonthlySip };
+  }
+  const r = raw as Record<string, unknown>;
+  const scenario: Scenario =
+    r.scenario === "conservative" || r.scenario === "base" || r.scenario === "aggressive"
+      ? r.scenario
+      : DEFAULT_PROJECTION_SETTINGS.scenario;
+  return {
+    monthlySip: typeof r.monthlySip === "number" ? r.monthlySip : autoMonthlySip,
+    stepUpPercent:
+      typeof r.stepUpPercent === "number" ? r.stepUpPercent : DEFAULT_PROJECTION_SETTINGS.stepUpPercent,
+    expectedCagr:
+      typeof r.expectedCagr === "number" ? r.expectedCagr : DEFAULT_PROJECTION_SETTINGS.expectedCagr,
+    inflationRate:
+      typeof r.inflationRate === "number" ? r.inflationRate : DEFAULT_PROJECTION_SETTINGS.inflationRate,
+    horizonYears:
+      typeof r.horizonYears === "number" ? r.horizonYears : DEFAULT_PROJECTION_SETTINGS.horizonYears,
+    scenario,
+    adjustForInflation:
+      typeof r.adjustForInflation === "boolean"
+        ? r.adjustForInflation
+        : DEFAULT_PROJECTION_SETTINGS.adjustForInflation,
+  };
+}
+
+/** A wealth target the Milestone Tracker watches for. Fully editable/deletable, defaults included — same shape as CustomObligation. */
+export type Milestone = {
+  id: string;
+  targetAmount: number;
+  /** Optional custom name (e.g. "House Downpayment"). Defaults render as their compact ₹ amount (inrCompact) when absent. */
+  label?: string;
+};
+
+export const DEFAULT_MILESTONES: readonly Milestone[] = [
+  { id: "milestone-25l", targetAmount: 2_500_000 },
+  { id: "milestone-50l", targetAmount: 5_000_000 },
+  { id: "milestone-1cr", targetAmount: 10_000_000 },
+  { id: "milestone-2.5cr", targetAmount: 25_000_000 },
+  { id: "milestone-5cr", targetAmount: 50_000_000 },
+  { id: "milestone-10cr", targetAmount: 100_000_000 },
+];
+
+const MILESTONES_KEY = "finstride.milestones";
+
+// raw === null means "never saved" (fresh install) -> seed the defaults.
+// A saved-but-empty array means the user deliberately deleted every
+// milestone, which must round-trip as empty rather than resurrecting
+// defaults on every reload.
+function normalizeMilestones(raw: unknown): Milestone[] {
+  if (raw === null || raw === undefined || !Array.isArray(raw)) return [...DEFAULT_MILESTONES];
+  return raw
+    .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
+    .map((r) => ({
+      id: String(r.id ?? ""),
+      targetAmount: Number(r.targetAmount) || 0,
+      label: typeof r.label === "string" && r.label.trim() ? r.label.trim() : undefined,
+    }))
+    .filter((m) => m.id.trim() !== "" && m.targetAmount > 0);
+}
+
 // ─── Dynamic Categories ────────────────────────────────────────────────────
 export const DEFAULT_INCOME_CATEGORIES: readonly string[] = [
   "Salary",
@@ -977,9 +1080,18 @@ type StoreCtx = {
   latestSnapshotValues: Partial<Record<PartitionId, number>>;
   /** Latest snapshot value for blueprintSettings.riskCapPartition; 0 if none recorded yet. */
   riskCapCapital: number;
+  /** Sum of latestSnapshotValues across every partition — the Wealth page's starting principal. */
+  currentNetWorth: number;
   // Blueprint — user-editable
   blueprintSettings: BlueprintSettings;
   updateBlueprintSettings: (patch: Partial<BlueprintSettings>) => void;
+  // Net worth projection settings (local-only — see comment above ProjectionSettings)
+  projectionSettings: ProjectionSettings;
+  updateProjectionSettings: (patch: Partial<ProjectionSettings>) => void;
+  // Wealth milestones — fully editable/deletable, defaults included (local-only)
+  milestones: Milestone[];
+  addMilestone: (targetAmount: number, label?: string) => void;
+  deleteMilestone: (id: string) => void;
   // Dynamic categories — fully editable/deletable, defaults included
   incomeCategories: string[];
   expenseCategories: string[];
@@ -1137,6 +1249,8 @@ export type FinStrideBackup = {
   /** Full multi-month history, not just the current month. */
   customObligationsPendingByMonth: Record<string, Record<string, boolean>>;
   enableFnoTracking: boolean;
+  projectionSettings: ProjectionSettings;
+  milestones: Milestone[];
 };
 
 const Ctx = createContext<StoreCtx | null>(null);
@@ -1177,6 +1291,8 @@ const ALL_LOCAL_KEYS = [
   PENDING_WRITES_KEY,
   CUSTOM_OBLIGATIONS_KEY,
   CUSTOM_OBLIGATIONS_PENDING_KEY,
+  PROJECTION_SETTINGS_KEY,
+  MILESTONES_KEY,
   // Not a UI-only preference like isStealthMode: after a full data wipe,
   // re-showing onboarding matches the "fresh start" intent of that action.
   ONBOARDING_KEY,
@@ -1201,6 +1317,8 @@ type LocalState = {
   pending: MonthlyPending;
   customObligations: CustomObligation[];
   customObligationsPending: Record<string, boolean>;
+  projectionSettings: ProjectionSettings;
+  milestones: Milestone[];
 };
 
 const EMPTY_LOCAL_STATE: LocalState = {
@@ -1221,6 +1339,8 @@ const EMPTY_LOCAL_STATE: LocalState = {
   pending: {},
   customObligations: [],
   customObligationsPending: {},
+  projectionSettings: DEFAULT_PROJECTION_SETTINGS,
+  milestones: [...DEFAULT_MILESTONES],
 };
 
 function readJson<T>(key: string, fallback: T): T {
@@ -1256,12 +1376,13 @@ function readLocalState(): LocalState {
     } catch {
       enableFno = false;
     }
+    const blueprint = normalizeBlueprint(readJson<unknown>(BLUEPRINT_KEY, null));
     return {
       transactions: readJson<Record<string, unknown>[]>(TX_KEY, []).map(normalizeTransaction),
       trades: readJson<Record<string, unknown>[]>(TR_KEY, []).map(normalizeTrade),
       portfolioSnapshots: snapshots,
       grind: normalizeGrindState(readJson<unknown>(GRIND_KEY, null)),
-      blueprint: normalizeBlueprint(readJson<unknown>(BLUEPRINT_KEY, null)),
+      blueprint,
       // Clamped by the owner-unlock gate, not just the raw persisted toggle —
       // see readOwnerUnlocked()'s doc comment for why this can never be
       // silently true on a device that hasn't itself passed the PIN check.
@@ -1283,6 +1404,11 @@ function readLocalState(): LocalState {
       pending: loadAllPending()[currentMonthKey()] ?? {},
       customObligations: normalizeCustomObligations(readJson<unknown>(CUSTOM_OBLIGATIONS_KEY, null)),
       customObligationsPending: loadAllCustomObligationsPending()[currentMonthKey()] ?? {},
+      projectionSettings: normalizeProjectionSettings(
+        readJson<unknown>(PROJECTION_SETTINGS_KEY, null),
+        blueprint.growwMfSip,
+      ),
+      milestones: normalizeMilestones(readJson<unknown>(MILESTONES_KEY, null)),
     };
   } catch {
     return EMPTY_LOCAL_STATE;
@@ -1393,6 +1519,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [customObligationsPending, setCustomObligationsPending] = useState<Record<string, boolean>>(
     {},
   );
+  const [projectionSettings, setProjectionSettings] =
+    useState<ProjectionSettings>(DEFAULT_PROJECTION_SETTINGS);
+  const [milestones, setMilestones] = useState<Milestone[]>([...DEFAULT_MILESTONES]);
   const [showPersonalQuotes, setShowPersonalQuotesState] = useState(false);
   const [enableFnoTracking, setEnableFnoTrackingState] = useState(false);
   // Always starts false and reads localStorage after mount: SSR has no
@@ -1550,6 +1679,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setPendingChecklist(local.pending);
       setCustomObligations(local.customObligations);
       setCustomObligationsPending(local.customObligationsPending);
+      setProjectionSettings(local.projectionSettings);
+      setMilestones(local.milestones);
 
       // Auth is still resolving — the initial getSession() restore, or an
       // active OAuth code exchange on /auth/callback. `userId` here could be
@@ -1748,6 +1879,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(CUSTOM_OBLIGATIONS_PENDING_KEY, JSON.stringify(all));
   }, [hydrated, customObligationsPending]);
 
+  useEffect(() => {
+    if (hydrated) localStorage.setItem(PROJECTION_SETTINGS_KEY, JSON.stringify(projectionSettings));
+  }, [hydrated, projectionSettings]);
+
+  useEffect(() => {
+    if (hydrated) localStorage.setItem(MILESTONES_KEY, JSON.stringify(milestones));
+  }, [hydrated, milestones]);
+
   // ── Remote sync for the single-row tables ────────────────────────────────
   // Settings live in one row, so the whole bundle is upserted whenever any
   // part changes — simpler and cheaper than threading a write through each
@@ -1856,6 +1995,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const riskCapCapital = latestSnapshotValues[blueprintSettings.riskCapPartition] ?? 0;
 
+  // Same "sum every partition's latest snapshot" reduce analytics.tsx uses for
+  // its Total Capital figure — kept here too since the Wealth page's
+  // projection engine needs it as a plain number, not JSX.
+  const currentNetWorth = Object.values(latestSnapshotValues).reduce<number>(
+    (sum, v) => sum + (v ?? 0),
+    0,
+  );
+
   const partitionLabel = (id: string): string =>
     brokerPartitions.find((p) => p.id === id)?.name ?? id;
 
@@ -1880,10 +2027,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     portfolioSnapshots,
     latestSnapshotValues,
     riskCapCapital,
+    currentNetWorth,
     blueprintSettings,
     updateBlueprintSettings: (patch) => {
       markLocalWrite();
       setBlueprintSettings((prev) => ({ ...prev, ...patch }));
+    },
+    projectionSettings,
+    updateProjectionSettings: (patch) => {
+      markLocalWrite();
+      setProjectionSettings((prev) => ({ ...prev, ...patch }));
+    },
+    milestones,
+    addMilestone: (targetAmount, label) => {
+      if (!(targetAmount > 0)) return;
+      markLocalWrite();
+      setMilestones((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), targetAmount, label: label?.trim() || undefined },
+      ]);
+    },
+    deleteMilestone: (id) => {
+      markLocalWrite();
+      setMilestones((prev) => prev.filter((m) => m.id !== id));
     },
     incomeCategories,
     expenseCategories,
@@ -2505,6 +2671,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           customObligations,
           customObligationsPendingByMonth: loadAllCustomObligationsPending(),
           enableFnoTracking,
+          projectionSettings,
+          milestones,
         };
         const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
         const url = URL.createObjectURL(blob);
@@ -2594,6 +2762,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           : customObligations;
       const importedEnableFno =
         typeof b.enableFnoTracking === "boolean" ? b.enableFnoTracking : enableFnoTracking;
+      const importedProjectionSettings =
+        b.projectionSettings !== undefined
+          ? normalizeProjectionSettings(b.projectionSettings, projectionSettings.monthlySip)
+          : projectionSettings;
+      const importedMilestones =
+        b.milestones !== undefined ? normalizeMilestones(b.milestones) : milestones;
 
       markLocalWrite();
       setTransactions(importedTransactions);
@@ -2610,6 +2784,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setShowPersonalQuotesState(importedShowPersonal);
       setCustomObligations(importedObligations);
       setEnableFnoTrackingState(importedEnableFno);
+      setProjectionSettings(importedProjectionSettings);
+      setMilestones(importedMilestones);
 
       if (b.pendingByMonth && typeof b.pendingByMonth === "object") {
         const monthMap = b.pendingByMonth as Record<string, MonthlyPending>;
@@ -2682,6 +2858,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setPendingChecklist({});
       setCustomObligations([]);
       setCustomObligationsPending({});
+      setProjectionSettings(DEFAULT_PROJECTION_SETTINGS);
+      setMilestones([...DEFAULT_MILESTONES]);
       setOnboardingCompleted(false);
       // Deliberately does NOT touch remote Supabase rows or sign the user out —
       // this clears the LOCAL cache only. For a cloud-synced account, the next
