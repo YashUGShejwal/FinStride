@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Rocket } from "lucide-react";
+import { useState } from "react";
+import { BarChart3, LineChart, Rocket } from "lucide-react";
 import { SCENARIO_CAGR, type Scenario } from "@/lib/projectionEngine";
 import { useStore } from "@/lib/store";
 import { inr } from "@/lib/format";
@@ -7,6 +8,7 @@ import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { Sensitive } from "@/components/Sensitive";
 import { MilestoneTracker } from "@/components/MilestoneTracker";
 import { NetWorthProjectionChart } from "@/components/NetWorthProjectionChart";
+import { CompoundingBreakdownChart } from "@/components/CompoundingBreakdownChart";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -19,10 +21,17 @@ const SCENARIOS: readonly { key: Scenario; label: string }[] = [
   { key: "aggressive", label: `Aggressive ${SCENARIO_CAGR.aggressive}%` },
 ];
 
+type ChartView = "trajectory" | "breakdown";
+const CHART_VIEWS: readonly { key: ChartView; label: string; icon: typeof LineChart }[] = [
+  { key: "trajectory", label: "Growth Trajectory Curve", icon: LineChart },
+  { key: "breakdown", label: "5-Year Compounding Split", icon: BarChart3 },
+];
+
 function WealthPage() {
   const { currentNetWorth, projectionSettings, updateProjectionSettings } = useStore();
   const { monthlySip, stepUpPercent, expectedCagr, inflationRate, horizonYears, scenario, adjustForInflation } =
     projectionSettings;
+  const [chartView, setChartView] = useState<ChartView>("trajectory");
 
   return (
     <div className="space-y-6">
@@ -142,7 +151,33 @@ function WealthPage() {
       </section>
 
       <MilestoneTracker />
-      <NetWorthProjectionChart />
+
+      <div className="flex justify-center">
+        <div className="inline-flex items-center gap-1 rounded-lg border border-glass-border p-1">
+          {CHART_VIEWS.map((v) => {
+            const Icon = v.icon;
+            const active = chartView === v.key;
+            return (
+              <button
+                key={v.key}
+                type="button"
+                onClick={() => setChartView(v.key)}
+                aria-pressed={active}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-md text-sm transition-colors ${
+                  active
+                    ? "bg-white/[0.08] text-foreground font-medium"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Icon className="size-4" />
+                {v.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {chartView === "trajectory" ? <NetWorthProjectionChart /> : <CompoundingBreakdownChart />}
     </div>
   );
 }

@@ -158,6 +158,32 @@ export function generateProjectionSeries(
 }
 
 /**
+ * Samples generateProjectionSeries at fixed year intervals (Year 0, 5, 10, ...)
+ * for the Principal-vs-Compounding stacked-bar breakdown. Always includes the
+ * final horizon point even when horizonYears isn't a clean multiple of
+ * intervalYears (e.g. a 22-year horizon with the default 5-year interval
+ * yields checkpoints at 0, 5, 10, 15, 20, 22 — never silently dropping the
+ * last few years' growth from the chart).
+ */
+export function getCompoundingCheckpoints(
+  inputs: ProjectionInputs,
+  opts?: { startDate?: Date; intervalYears?: number },
+): ProjectionPoint[] {
+  const intervalYears = opts?.intervalYears ?? 5;
+  const series = generateProjectionSeries(inputs, opts);
+  const stepMonths = Math.max(1, Math.round(intervalYears * 12));
+
+  const checkpoints: ProjectionPoint[] = [];
+  for (let m = 0; m < series.length; m += stepMonths) checkpoints.push(series[m]);
+
+  const last = series[series.length - 1];
+  if (checkpoints[checkpoints.length - 1]?.monthIndex !== last.monthIndex) {
+    checkpoints.push(last);
+  }
+  return checkpoints;
+}
+
+/**
  * How many times the original money has multiplied: nominalValue / principal.
  * Returns 1 for a zero/negative principal (nothing invested yet to multiply).
  */

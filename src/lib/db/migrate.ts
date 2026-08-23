@@ -14,14 +14,17 @@ import type {
   BrokerPartition,
   CustomCategories,
   GrindState,
+  Milestone,
   MonthlyPending,
   PortfolioSnapshot,
+  ProjectionSettings,
   Trade,
   Transaction,
 } from "@/lib/store";
 import {
   upsertGrindLog,
   upsertHustleEntry,
+  upsertMilestone,
   upsertPendingObligations,
   upsertSettings,
   upsertSnapshots,
@@ -65,6 +68,8 @@ export type LocalDataSnapshot = {
   hiddenDefaultAccountIds: string[];
   hiddenDefaultPartitionIds: string[];
   pending: MonthlyPending;
+  projectionSettings: ProjectionSettings;
+  milestones: Milestone[];
 };
 
 export type MigrationResult = {
@@ -108,6 +113,7 @@ export async function migrateLocalDataToSupabase(
       hiddenDefaultCategories: local.hiddenDefaultCategories,
       hiddenDefaultAccountIds: local.hiddenDefaultAccountIds,
       hiddenDefaultPartitionIds: local.hiddenDefaultPartitionIds,
+      projectionSettings: local.projectionSettings,
     }),
   );
 
@@ -119,6 +125,7 @@ export async function migrateLocalDataToSupabase(
   // per-row so a single bad record can't abort the whole migration.
   for (const t of local.transactions) track(await upsertTransaction(client, userId, t));
   for (const t of local.trades) track(await upsertTrade(client, userId, t));
+  for (const m of local.milestones) track(await upsertMilestone(client, userId, m));
 
   if (local.portfolioSnapshots.length > 0) {
     track(await upsertSnapshots(client, userId, local.portfolioSnapshots));

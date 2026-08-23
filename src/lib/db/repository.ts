@@ -17,17 +17,21 @@ import type {
   GrindMetricKey,
   GrindState,
   HustleEntry,
+  Milestone,
   MonthlyPending,
   PortfolioSnapshot,
+  ProjectionSettings,
   Trade,
   Transaction,
 } from "@/lib/store";
 import {
   grindLogToRow,
   hustleToRow,
+  milestoneToRow,
   pendingToRow,
   rowToGrindLog,
   rowToHustle,
+  rowToMilestone,
   rowToPending,
   rowToSettings,
   rowToSnapshot,
@@ -48,6 +52,8 @@ export type RemoteBundle = {
   grind: GrindState;
   settings: SettingsBundle | null;
   pending: MonthlyPending | null;
+  /** Null means the read failed (see fetchAllUserData's SOFT vs HARD note) — callers must NOT treat that as "the user has zero milestones." */
+  milestones: Milestone[] | null;
 };
 
 function logFailure(op: string, error: unknown): void {
@@ -121,12 +127,19 @@ async function fetchAllTables(client: FinStrideClient, userId: string, yearMonth
       .eq("user_id", userId)
       .eq("year_month", yearMonth)
       .maybeSingle(),
+    client
+      .from("user_milestones")
+      .select("*")
+      .eq("user_id", userId)
+      .order("target_amount", { ascending: true }),
   ]);
 }
 
 type TableResults = Awaited<ReturnType<typeof fetchAllTables>>;
 
-const TABLE_NAMES = [
+// user_milestones is deliberately NOT in this list — see the "SOFT vs HARD
+// table failures" note on fetchAllUserData below.
+const HARD_TABLE_NAMES = [
   "cashflow_ledger",
   "swing_trades",
   "portfolio_snapshots",
@@ -135,6 +148,12 @@ const TABLE_NAMES = [
   "user_settings",
   "pending_obligations",
 ] as const;
+
+const TABLE_NAMES = [...HARD_TABLE_NAMES, "user_milestones"] as const;
+
+function isHardTable(name: string): boolean {
+  return (HARD_TABLE_NAMES as readonly string[]).includes(name);
+}
 
 /** First table (in fetch order) whose response resolved with an error, if any. */
 function pickFailure(
@@ -168,6 +187,15 @@ function pickFailure(
  * client's stored session in place, so simply re-running the identical
  * queries afterward picks up the new token automatically — no need to thread
  * a new client/token through by hand.
+ *
+ * SOFT vs HARD table failures — user_milestones is exempt from the
+ * whole-bundle-fails rule above. It ships its own migration
+ * (0007_wealth_milestones.sql) independently of the 7 tables that have
+ * existed since 0001, so a project where that migration hasn't been applied
+ * yet (PGRST205 "table not found") would otherwise fail EVERY read —
+ * transactions, trades, settings, all of it — for a reason that has nothing
+ * to do with any of them. A failed milestones read degrades to an empty
+ * list instead; everything else still loads normally.
  */
 export async function fetchAllUserData(
   client: FinStrideClient,
@@ -184,7 +212,7 @@ export async function fetchAllUserData(
         results = await fetchAllTables(client, userId, yearMonth);
         failed = pickFailure(results);
       }
-      if (failed) {
+      if (failed && isHardTable(failed.name)) {
         logFailure(`fetchAllUserData (${failed.name})`, failed.error);
         // Still failing after a refresh attempt (or refreshSession() itself
         // failed) is an auth problem ONLY if the (possibly retried) failure
@@ -193,12 +221,16 @@ export async function fetchAllUserData(
         // deserves the normal "couldn't reach the cloud" treatment.
         return { bundle: null, authError: failed.status === 401 };
       }
-    } else if (failed) {
+    } else if (failed && isHardTable(failed.name)) {
       logFailure(`fetchAllUserData (${failed.name})`, failed.error);
       return { bundle: null, authError: false };
     }
 
-    const [txRes, trRes, snapRes, grindRes, hustleRes, settingsRes, pendingRes] = results;
+    const [txRes, trRes, snapRes, grindRes, hustleRes, settingsRes, pendingRes, milestonesRes] = results;
+
+    if (milestonesRes.error) {
+      logFailure("fetchAllUserData (user_milestones)", milestonesRes.error);
+    }
 
     const metrics: GrindState["metrics"] = {
       systemDesign: [],
@@ -218,6 +250,11 @@ export async function fetchAllUserData(
         grind: { metrics, hustle: (hustleRes.data ?? []).map(rowToHustle) },
         settings: settingsRes.data ? rowToSettings(settingsRes.data) : null,
         pending: pendingRes.data ? rowToPending(pendingRes.data) : null,
+        // null (not []) on error, same reasoning as settings/pending above:
+        // an unmigrated/unreachable user_milestones must not read as "the
+        // user really has zero milestones" and overwrite their local
+        // defaults/customizations — see RemoteBundle.milestones.
+        milestones: milestonesRes.error ? null : (milestonesRes.data ?? []).map(rowToMilestone),
       },
       authError: false,
     };
@@ -424,6 +461,7 @@ export async function upsertSettings(
     hiddenDefaultCategories: CustomCategories;
     hiddenDefaultAccountIds: string[];
     hiddenDefaultPartitionIds: string[];
+    projectionSettings: ProjectionSettings;
   },
 ): Promise<boolean> {
   const { error } = await client
@@ -443,5 +481,26 @@ export async function upsertPendingObligations(
     .from("pending_obligations")
     .upsert(pendingToRow(pending, yearMonth, userId), { onConflict: "user_id,year_month" });
   if (error) logFailure("upsertPendingObligations", error);
+  return !error;
+}
+
+// ─── Writes: milestones ────────────────────────────────────────────────────
+export async function upsertMilestone(
+  client: FinStrideClient,
+  userId: string,
+  m: Milestone,
+): Promise<boolean> {
+  const { error } = await client.from("user_milestones").upsert(milestoneToRow(m, userId));
+  if (error) logFailure("upsertMilestone", error);
+  return !error;
+}
+
+export async function deleteMilestoneRow(
+  client: FinStrideClient,
+  userId: string,
+  id: string,
+): Promise<boolean> {
+  const { error } = await client.from("user_milestones").delete().eq("id", id).eq("user_id", userId);
+  if (error) logFailure("deleteMilestone", error);
   return !error;
 }

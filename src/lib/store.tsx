@@ -6,6 +6,7 @@ import {
   deleteAllSnapshotRows,
   deleteGrindLogRow,
   deleteHustleEntryRow,
+  deleteMilestoneRow,
   deleteSnapshotRow,
   deleteTradeRow,
   deleteTransactionRow,
@@ -18,6 +19,7 @@ import {
   migrateLocalDataToSupabase,
   upsertGrindLog as dbUpsertGrindLog,
   upsertHustleEntry as dbUpsertHustleEntry,
+  upsertMilestone as dbUpsertMilestone,
   upsertPendingObligations,
   upsertSettings as dbUpsertSettings,
   upsertSnapshots as dbUpsertSnapshots,
@@ -406,10 +408,13 @@ function normalizeBlueprint(raw: unknown): BlueprintSettings {
 }
 
 // ─── Net Worth Projection & Milestones ─────────────────────────────────────
-// Local-only, for the same reason as CustomObligation above: user_settings
-// has no jsonb column for this (see supabase/migrations/0001_initial_schema.sql),
-// so there's nowhere to sync it to without a schema migration. Kept fully
-// functional device-locally rather than blocked on that.
+// Cloud-synced as of supabase/migrations/0007_wealth_milestones.sql:
+// projectionSettings lives in user_settings.projection_settings (a jsonb blob,
+// synced through the same single-row settings bundle as blueprintSettings —
+// see the remote-sync effect below), and milestones live in their own
+// user_milestones table (synced per-row, the same shape as trades/
+// transactions). localStorage remains the offline cache/first-paint source
+// for both, exactly like every other cloud-backed slice in this file.
 export type Scenario = "conservative" | "base" | "aggressive";
 
 export type ProjectionSettings = {
@@ -473,24 +478,43 @@ function normalizeProjectionSettings(raw: unknown, autoMonthlySip: number): Proj
   };
 }
 
-/** A wealth target the Milestone Tracker watches for. Fully editable/deletable, defaults included — same shape as CustomObligation. */
+/** WHAT KIND of goal a milestone represents — independent of who created it (see Milestone.isCustom). */
+export type MilestoneTargetType = "net_worth" | "asset_goal" | "custom";
+
+export const MILESTONE_TARGET_TYPES: readonly { value: MilestoneTargetType; label: string }[] = [
+  { value: "net_worth", label: "Net Worth Milestone" },
+  { value: "asset_goal", label: "Asset Goal" },
+  { value: "custom", label: "Custom" },
+];
+
+/**
+ * A wealth target the Milestone Tracker watches for. Deletable regardless of
+ * origin (matching AccountMode/BrokerPartition); editable via MilestoneModal
+ * only when isCustom is true — see updateMilestone's doc comment.
+ */
 export type Milestone = {
   id: string;
+  name: string;
   targetAmount: number;
-  /** Optional custom name (e.g. "House Downpayment"). Defaults render as their compact ₹ amount (inrCompact) when absent. */
-  label?: string;
+  targetType: MilestoneTargetType;
+  /** false only for the 6 seeded net-worth defaults below. */
+  isCustom: boolean;
 };
 
 export const DEFAULT_MILESTONES: readonly Milestone[] = [
-  { id: "milestone-25l", targetAmount: 2_500_000 },
-  { id: "milestone-50l", targetAmount: 5_000_000 },
-  { id: "milestone-1cr", targetAmount: 10_000_000 },
-  { id: "milestone-2.5cr", targetAmount: 25_000_000 },
-  { id: "milestone-5cr", targetAmount: 50_000_000 },
-  { id: "milestone-10cr", targetAmount: 100_000_000 },
+  { id: "milestone-25l", name: "₹25L", targetAmount: 2_500_000, targetType: "net_worth", isCustom: false },
+  { id: "milestone-50l", name: "₹50L", targetAmount: 5_000_000, targetType: "net_worth", isCustom: false },
+  { id: "milestone-1cr", name: "₹1Cr", targetAmount: 10_000_000, targetType: "net_worth", isCustom: false },
+  { id: "milestone-2.5cr", name: "₹2.5Cr", targetAmount: 25_000_000, targetType: "net_worth", isCustom: false },
+  { id: "milestone-5cr", name: "₹5Cr", targetAmount: 50_000_000, targetType: "net_worth", isCustom: false },
+  { id: "milestone-10cr", name: "₹10Cr", targetAmount: 100_000_000, targetType: "net_worth", isCustom: false },
 ];
 
 const MILESTONES_KEY = "finstride.milestones";
+
+function normalizeMilestoneTargetType(raw: unknown): MilestoneTargetType {
+  return raw === "net_worth" || raw === "asset_goal" || raw === "custom" ? raw : "custom";
+}
 
 // raw === null means "never saved" (fresh install) -> seed the defaults.
 // A saved-but-empty array means the user deliberately deleted every
@@ -502,10 +526,12 @@ function normalizeMilestones(raw: unknown): Milestone[] {
     .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
     .map((r) => ({
       id: String(r.id ?? ""),
+      name: typeof r.name === "string" && r.name.trim() ? r.name : String(r.label ?? ""),
       targetAmount: Number(r.targetAmount) || 0,
-      label: typeof r.label === "string" && r.label.trim() ? r.label.trim() : undefined,
+      targetType: normalizeMilestoneTargetType(r.targetType),
+      isCustom: typeof r.isCustom === "boolean" ? r.isCustom : true,
     }))
-    .filter((m) => m.id.trim() !== "" && m.targetAmount > 0);
+    .filter((m) => m.id.trim() !== "" && m.name.trim() !== "" && m.targetAmount > 0);
 }
 
 // ─── Dynamic Categories ────────────────────────────────────────────────────
@@ -1085,12 +1111,17 @@ type StoreCtx = {
   // Blueprint — user-editable
   blueprintSettings: BlueprintSettings;
   updateBlueprintSettings: (patch: Partial<BlueprintSettings>) => void;
-  // Net worth projection settings (local-only — see comment above ProjectionSettings)
+  // Net worth projection settings — cloud-synced via user_settings.projection_settings
   projectionSettings: ProjectionSettings;
   updateProjectionSettings: (patch: Partial<ProjectionSettings>) => void;
-  // Wealth milestones — fully editable/deletable, defaults included (local-only)
+  // Wealth milestones — cloud-synced via user_milestones, defaults included
   milestones: Milestone[];
-  addMilestone: (targetAmount: number, label?: string) => void;
+  addMilestone: (milestone: { name: string; targetAmount: number; targetType: MilestoneTargetType }) => void;
+  /** Returns false if id isn't a CUSTOM milestone (defaults can't be edited in place — delete + add instead). */
+  updateMilestone: (
+    id: string,
+    updates: Partial<{ name: string; targetAmount: number; targetType: MilestoneTargetType }>,
+  ) => boolean;
   deleteMilestone: (id: string) => void;
   // Dynamic categories — fully editable/deletable, defaults included
   incomeCategories: string[];
@@ -1424,7 +1455,12 @@ function localStateHasData(s: LocalState): boolean {
     s.grind.metrics.systemDesign.length > 0 ||
     s.grind.metrics.leetcode.length > 0 ||
     s.grind.metrics.linkedinOutreach.length > 0 ||
-    s.customObligations.length > 0
+    s.customObligations.length > 0 ||
+    // Always true on a fresh install too (readLocalState seeds the 6 net-worth
+    // defaults) — that's intentional: it's what makes a brand-new signup's
+    // first login migrate those defaults into user_milestones instead of the
+    // "cloud wins" branch overwriting them with an empty remote table.
+    s.milestones.length > 0
   );
 }
 
@@ -1608,8 +1644,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const hydrated = hydratedOwner === owner;
 
   /** Latest state, readable from mutation closures without re-subscribing effects. */
-  const stateRef = useRef({ trades, grind });
-  stateRef.current = { trades, grind };
+  const stateRef = useRef({ trades, grind, milestones });
+  stateRef.current = { trades, grind, milestones };
 
   /**
    * Set by every mutator; cleared at the start of each load. Guards the
@@ -1791,8 +1827,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           setHiddenDefaultCategories(remote.settings.hiddenDefaultCategories);
           setHiddenDefaultAccountIds(remote.settings.hiddenDefaultAccountIds);
           setHiddenDefaultPartitionIds(remote.settings.hiddenDefaultPartitionIds);
+          setProjectionSettings(remote.settings.projectionSettings);
         }
         setPendingChecklist(remote.pending ?? {});
+        // null means the read failed (see RemoteBundle.milestones) — keep
+        // whatever readLocalState() already applied earlier in this effect
+        // rather than blanking the user's milestones to an empty list.
+        if (remote.milestones !== null) setMilestones(remote.milestones);
         writeCacheOwner(identity);
       }
 
@@ -1907,6 +1948,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         hiddenDefaultCategories,
         hiddenDefaultAccountIds,
         hiddenDefaultPartitionIds,
+        projectionSettings,
       }),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1923,6 +1965,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     hiddenDefaultCategories,
     hiddenDefaultAccountIds,
     hiddenDefaultPartitionIds,
+    projectionSettings,
   ]);
 
   useEffect(() => {
@@ -2039,17 +2082,36 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setProjectionSettings((prev) => ({ ...prev, ...patch }));
     },
     milestones,
-    addMilestone: (targetAmount, label) => {
-      if (!(targetAmount > 0)) return;
+    addMilestone: ({ name, targetAmount, targetType }) => {
+      const trimmed = name.trim();
+      if (!trimmed || !(targetAmount > 0)) return;
       markLocalWrite();
-      setMilestones((prev) => [
-        ...prev,
-        { id: crypto.randomUUID(), targetAmount, label: label?.trim() || undefined },
-      ]);
+      const row: Milestone = { id: crypto.randomUUID(), name: trimmed, targetAmount, targetType, isCustom: true };
+      setMilestones((prev) => [...prev, row]);
+      const sync = getSync();
+      if (sync) trackedWrite(dbUpsertMilestone(sync.client, sync.userId, row));
+    },
+    updateMilestone: (id, updates) => {
+      const existing = stateRef.current.milestones.find((m) => m.id === id);
+      if (!existing || !existing.isCustom) return false;
+      if (updates.name !== undefined && !updates.name.trim()) return false;
+      if (updates.targetAmount !== undefined && !(updates.targetAmount > 0)) return false;
+      markLocalWrite();
+      const next: Milestone = {
+        ...existing,
+        ...updates,
+        name: updates.name !== undefined ? updates.name.trim() : existing.name,
+      };
+      setMilestones((prev) => prev.map((m) => (m.id === id ? next : m)));
+      const sync = getSync();
+      if (sync) trackedWrite(dbUpsertMilestone(sync.client, sync.userId, next));
+      return true;
     },
     deleteMilestone: (id) => {
       markLocalWrite();
       setMilestones((prev) => prev.filter((m) => m.id !== id));
+      const sync = getSync();
+      if (sync) trackedWrite(deleteMilestoneRow(sync.client, sync.userId, id));
     },
     incomeCategories,
     expenseCategories,
@@ -2827,8 +2889,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             hiddenDefaultCategories: importedHiddenCategories,
             hiddenDefaultAccountIds: importedHiddenAccountIds,
             hiddenDefaultPartitionIds: importedHiddenPartitionIds,
+            projectionSettings: importedProjectionSettings,
           }),
         );
+        for (const m of importedMilestones) trackedWrite(dbUpsertMilestone(sync.client, sync.userId, m));
       }
 
       return { success: true };

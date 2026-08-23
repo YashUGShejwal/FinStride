@@ -58,7 +58,24 @@ export type DbUserSettings = {
   hidden_default_partition_ids: string[];
   /** Opt-in (default false) gating F&O rows in the tradebook importer and the Swing Desk's "F&O Desk" view. */
   enable_fno_tracking: boolean;
+  /** ProjectionSettings JSON — see supabase/migrations/0007_wealth_milestones.sql. */
+  projection_settings: DbProjectionSettingsJson;
   updated_at: string;
+};
+
+/**
+ * JSON shape stored in the projection_settings jsonb column — mirrors
+ * ProjectionSettings in src/lib/store.tsx verbatim (camelCase keys, same as
+ * DbAccountModeJson mirrors AccountMode).
+ */
+export type DbProjectionSettingsJson = {
+  monthlySip: number;
+  stepUpPercent: number;
+  expectedCagr: number;
+  inflationRate: number;
+  horizonYears: number;
+  scenario: string;
+  adjustForInflation: boolean;
 };
 
 /**
@@ -207,6 +224,22 @@ export type DbPendingObligationRow = {
 
 export type DbPendingObligationUpsert = Omit<DbPendingObligationRow, "updated_at">;
 
+// ─── user_milestones ────────────────────────────────────────────────────────
+/** Mirrors: user_milestones — see supabase/migrations/0007_wealth_milestones.sql. */
+export type DbUserMilestoneRow = {
+  id: string;
+  user_id: string;
+  name: string;
+  target_amount: number;
+  is_custom: boolean;
+  /** 'net_worth' | 'asset_goal' | 'custom' — see the migration's target_type comment. */
+  target_type: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DbUserMilestoneInsert = Omit<DbUserMilestoneRow, "created_at" | "updated_at">;
+
 // ─── Database (supabase-js generic) ────────────────────────────────────────
 /**
  * Shape consumed by createClient<Database>() so `.from("table")` is typed.
@@ -267,6 +300,12 @@ export type Database = {
         Row: DbPendingObligationRow;
         Insert: DbPendingObligationUpsert;
         Update: Partial<DbPendingObligationUpsert>;
+        Relationships: [];
+      };
+      user_milestones: {
+        Row: DbUserMilestoneRow;
+        Insert: DbUserMilestoneInsert;
+        Update: Partial<DbUserMilestoneInsert>;
         Relationships: [];
       };
     };

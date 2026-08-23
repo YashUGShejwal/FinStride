@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   calculateMilestoneETA,
   generateProjectionSeries,
+  getCompoundingCheckpoints,
   milestoneProgress,
   SCENARIO_CAGR,
   wealthMultiple,
@@ -191,5 +192,45 @@ describe("calculateMilestoneETA", () => {
     expect(fast).not.toBeNull();
     expect(slow).not.toBeNull();
     expect(fast!.totalMonths).toBeLessThanOrEqual(slow!.totalMonths);
+  });
+});
+
+describe("getCompoundingCheckpoints", () => {
+  const baseInputs = {
+    currentNetWorth: 300_000,
+    monthlyContribution: 20_000,
+    stepUpPercent: 10,
+    annualReturnPercent: 12,
+    inflationPercent: 6,
+    horizonYears: 20,
+  };
+
+  it("lands exactly on Year 0, 5, 10, 15, 20 for a clean-multiple horizon", () => {
+    const checkpoints = getCompoundingCheckpoints(baseInputs);
+    expect(checkpoints.map((c) => c.monthIndex / 12)).toEqual([0, 5, 10, 15, 20]);
+  });
+
+  it("each checkpoint matches the full series at the same month exactly", () => {
+    const checkpoints = getCompoundingCheckpoints(baseInputs);
+    const series = generateProjectionSeries(baseInputs);
+    for (const c of checkpoints) {
+      expect(c.nominalValue).toBe(series[c.monthIndex].nominalValue);
+    }
+  });
+
+  it("always includes the final horizon point, even off-interval", () => {
+    const checkpoints = getCompoundingCheckpoints({ ...baseInputs, horizonYears: 22 });
+    const months = checkpoints.map((c) => c.monthIndex);
+    expect(months).toEqual([0, 60, 120, 180, 240, 264]); // 264 = 22 years, not a multiple of 5
+  });
+
+  it("respects a custom interval", () => {
+    const checkpoints = getCompoundingCheckpoints(baseInputs, { intervalYears: 10 });
+    expect(checkpoints.map((c) => c.monthIndex / 12)).toEqual([0, 10, 20]);
+  });
+
+  it("every checkpoint's principal+gains still reconciles to its nominal value", () => {
+    const checkpoints = getCompoundingCheckpoints(baseInputs);
+    for (const c of checkpoints) expect(c.principal + c.gains).toBeCloseTo(c.nominalValue, 6);
   });
 });

@@ -24,10 +24,14 @@ import type {
   GrindMetricKey,
   HustleCategory,
   HustleEntry,
+  Milestone,
+  MilestoneTargetType,
   MonthlyPending,
   PartitionCategory,
   PartitionPurpose,
   PortfolioSnapshot,
+  ProjectionSettings,
+  Scenario,
   Trade,
   Transaction,
 } from "@/lib/store";
@@ -44,8 +48,11 @@ import type {
   DbPendingObligationUpsert,
   DbPortfolioSnapshotInsert,
   DbPortfolioSnapshotRow,
+  DbProjectionSettingsJson,
   DbSwingTradeInsert,
   DbSwingTradeRow,
+  DbUserMilestoneInsert,
+  DbUserMilestoneRow,
   DbUserSettings,
   DbUserSettingsUpsert,
 } from "./types";
@@ -275,6 +282,7 @@ export type SettingsBundle = {
   hiddenDefaultAccountIds: string[];
   hiddenDefaultPartitionIds: string[];
   enableFnoTracking: boolean;
+  projectionSettings: ProjectionSettings;
 };
 
 const ACCOUNT_TYPES: readonly string[] = ["bank", "credit_card", "upi", "cash", "wallet"];
@@ -366,6 +374,58 @@ function jsonToBrokerPartition(raw: unknown): BrokerPartition | null {
   };
 }
 
+/**
+ * Kept in sync with DEFAULT_PROJECTION_SETTINGS in src/lib/store.tsx — see the
+ * import-cycle note at the top of this file for why this can't just import
+ * that constant directly.
+ */
+const PROJECTION_FALLBACK: ProjectionSettings = {
+  monthlySip: 0,
+  stepUpPercent: 10,
+  expectedCagr: 12,
+  inflationRate: 6,
+  horizonYears: 15,
+  scenario: "base",
+  adjustForInflation: false,
+};
+
+function projectionSettingsToJson(p: ProjectionSettings): DbProjectionSettingsJson {
+  return {
+    monthlySip: p.monthlySip,
+    stepUpPercent: p.stepUpPercent,
+    expectedCagr: p.expectedCagr,
+    inflationRate: p.inflationRate,
+    horizonYears: p.horizonYears,
+    scenario: p.scenario,
+    adjustForInflation: p.adjustForInflation,
+  };
+}
+
+function jsonToProjectionSettings(raw: unknown): ProjectionSettings {
+  if (!raw || typeof raw !== "object") return PROJECTION_FALLBACK;
+  const r = raw as Record<string, unknown>;
+  const scenario: Scenario =
+    r.scenario === "conservative" || r.scenario === "base" || r.scenario === "aggressive"
+      ? r.scenario
+      : PROJECTION_FALLBACK.scenario;
+  return {
+    monthlySip: typeof r.monthlySip === "number" ? r.monthlySip : PROJECTION_FALLBACK.monthlySip,
+    stepUpPercent:
+      typeof r.stepUpPercent === "number" ? r.stepUpPercent : PROJECTION_FALLBACK.stepUpPercent,
+    expectedCagr:
+      typeof r.expectedCagr === "number" ? r.expectedCagr : PROJECTION_FALLBACK.expectedCagr,
+    inflationRate:
+      typeof r.inflationRate === "number" ? r.inflationRate : PROJECTION_FALLBACK.inflationRate,
+    horizonYears:
+      typeof r.horizonYears === "number" ? r.horizonYears : PROJECTION_FALLBACK.horizonYears,
+    scenario,
+    adjustForInflation:
+      typeof r.adjustForInflation === "boolean"
+        ? r.adjustForInflation
+        : PROJECTION_FALLBACK.adjustForInflation,
+  };
+}
+
 export function settingsToRow(b: SettingsBundle, userId: string): DbUserSettingsUpsert {
   return {
     user_id: userId,
@@ -388,6 +448,7 @@ export function settingsToRow(b: SettingsBundle, userId: string): DbUserSettings
     hidden_default_account_ids: b.hiddenDefaultAccountIds,
     hidden_default_partition_ids: b.hiddenDefaultPartitionIds,
     enable_fno_tracking: b.enableFnoTracking,
+    projection_settings: projectionSettingsToJson(b.projectionSettings),
   };
 }
 
@@ -445,6 +506,7 @@ export function rowToSettings(r: DbUserSettings): SettingsBundle {
     hiddenDefaultAccountIds: list(r.hidden_default_account_ids),
     hiddenDefaultPartitionIds: list(r.hidden_default_partition_ids),
     enableFnoTracking: r.enable_fno_tracking === true,
+    projectionSettings: jsonToProjectionSettings(r.projection_settings),
   };
 }
 
@@ -470,5 +532,31 @@ export function rowToPending(r: DbPendingObligationRow): MonthlyPending {
     scooterEmi: r.scooter_emi === true,
     growwMfSip: r.groww_mf_sip === true,
     ccSettled: r.cc_settled === true,
+  };
+}
+
+// ─── Milestones <-> user_milestones ─────────────────────────────────────────
+function milestoneTargetType(raw: unknown): MilestoneTargetType {
+  return raw === "net_worth" || raw === "asset_goal" || raw === "custom" ? raw : "custom";
+}
+
+export function milestoneToRow(m: Milestone, userId: string): DbUserMilestoneInsert {
+  return {
+    id: m.id,
+    user_id: userId,
+    name: m.name,
+    target_amount: m.targetAmount,
+    is_custom: m.isCustom,
+    target_type: m.targetType,
+  };
+}
+
+export function rowToMilestone(r: DbUserMilestoneRow): Milestone {
+  return {
+    id: r.id,
+    name: r.name,
+    targetAmount: Number(r.target_amount),
+    targetType: milestoneTargetType(r.target_type),
+    isCustom: r.is_custom === true,
   };
 }

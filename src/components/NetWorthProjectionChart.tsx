@@ -124,7 +124,7 @@ export function NetWorthProjectionChart() {
                 stroke="oklch(0.78 0.16 75 / 0.45)"
                 strokeDasharray="4 4"
                 label={{
-                  value: m.label?.trim() || inrCompact(m.targetAmount),
+                  value: m.name,
                   position: "insideTopRight",
                   fill: "oklch(0.78 0.16 75)",
                   fontSize: 10,

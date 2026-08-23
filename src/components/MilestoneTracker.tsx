@@ -1,12 +1,11 @@
-import { useId, useMemo, useState, type FormEvent } from "react";
+import { useId, useMemo, useState } from "react";
 import { format } from "date-fns";
-import { Plus, Target, Trash2, X } from "lucide-react";
+import { Pencil, Plus, Target, Trash2 } from "lucide-react";
 import { calculateMilestoneETA, milestoneProgress, type MilestoneETAResult } from "@/lib/projectionEngine";
 import { useStore, type Milestone } from "@/lib/store";
-import { inrCompact } from "@/lib/format";
 import { Sensitive } from "@/components/Sensitive";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { MilestoneModal } from "@/components/MilestoneModal";
 
 const R = 30;
 const CIRCUMFERENCE = 2 * Math.PI * R;
@@ -28,11 +27,14 @@ type Row = {
  * Milestone Velocity Tracker — a grid of wealth targets, each showing % of
  * the way there, an achieved/in-progress badge, and the calculateMilestoneETA
  * projected date. The nearest not-yet-achieved milestone gets an ambient
- * neon highlight so the page always foregrounds "what's next."
+ * neon highlight so the page always foregrounds "what's next." Edit/Delete
+ * are scoped to custom milestones only — the 6 seeded defaults are fixed
+ * reference points, matching AccountMode/BrokerPartition's convention.
  */
 export function MilestoneTracker() {
-  const { milestones, currentNetWorth, projectionSettings, addMilestone, deleteMilestone } = useStore();
-  const [adding, setAdding] = useState(false);
+  const { milestones, currentNetWorth, projectionSettings, deleteMilestone } = useStore();
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<Milestone | null>(null);
 
   const rows = useMemo<Row[]>(() => {
     return [...milestones]
@@ -58,6 +60,15 @@ export function MilestoneTracker() {
 
   const nextUpId = rows.find((r) => !r.achieved)?.milestone.id;
 
+  const openAdd = () => {
+    setEditing(null);
+    setModalOpen(true);
+  };
+  const openEdit = (m: Milestone) => {
+    setEditing(m);
+    setModalOpen(true);
+  };
+
   return (
     <section className="rounded-2xl border border-white/[0.08] bg-white/[0.015] p-5">
       <div className="flex items-center justify-between mb-4">
@@ -65,21 +76,11 @@ export function MilestoneTracker() {
           <Target className="size-4 text-muted-foreground" />
           <h2 className="font-display font-semibold tracking-tight">Milestone Velocity Tracker</h2>
         </div>
-        <Button variant="ghost" size="sm" onClick={() => setAdding((v) => !v)}>
-          {adding ? <X className="size-3.5" /> : <Plus className="size-3.5" />}
-          {adding ? "Cancel" : "Add Milestone"}
+        <Button variant="ghost" size="sm" onClick={openAdd}>
+          <Plus className="size-3.5" />
+          Add Milestone
         </Button>
       </div>
-
-      {adding && (
-        <AddMilestoneForm
-          onAdd={(amount, label) => {
-            addMilestone(amount, label);
-            setAdding(false);
-          }}
-          onCancel={() => setAdding(false)}
-        />
-      )}
 
       {rows.length === 0 ? (
         <p className="text-sm text-muted-foreground text-center py-8">
@@ -92,11 +93,14 @@ export function MilestoneTracker() {
               key={row.milestone.id}
               row={row}
               isNextUp={row.milestone.id === nextUpId}
+              onEdit={() => openEdit(row.milestone)}
               onDelete={() => deleteMilestone(row.milestone.id)}
             />
           ))}
         </div>
       )}
+
+      <MilestoneModal milestone={editing} open={modalOpen} onOpenChange={setModalOpen} />
     </section>
   );
 }
@@ -104,14 +108,15 @@ export function MilestoneTracker() {
 function MilestoneCard({
   row,
   isNextUp,
+  onEdit,
   onDelete,
 }: {
   row: Row;
   isNextUp: boolean;
+  onEdit: () => void;
   onDelete: () => void;
 }) {
   const { milestone, progress, achieved, eta } = row;
-  const title = milestone.label?.trim() || inrCompact(milestone.targetAmount);
   const dashOffset = CIRCUMFERENCE * (1 - progress);
   const gid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
 
@@ -135,22 +140,31 @@ function MilestoneCard({
         </span>
       )}
 
-      <button
-        type="button"
-        onClick={onDelete}
-        aria-label={`Remove ${title} milestone`}
-        className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
-      >
-        <Trash2 className="size-3.5" />
-      </button>
+      {milestone.isCustom && (
+        <div className="absolute top-3 right-3 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            type="button"
+            onClick={onEdit}
+            aria-label={`Edit ${milestone.name} milestone`}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <Pencil className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            aria-label={`Remove ${milestone.name} milestone`}
+            className="text-muted-foreground hover:text-destructive"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        </div>
+      )}
 
       <div className="flex items-start justify-between gap-3 pr-5">
         <div>
           <p className="text-[10px] uppercase tracking-wider text-white/50">Milestone Target</p>
-          <p className="text-xl font-display font-bold tnum mt-0.5">{title}</p>
-          {milestone.label && (
-            <p className="text-[11px] text-muted-foreground tnum">{inrCompact(milestone.targetAmount)}</p>
-          )}
+          <p className="text-xl font-display font-bold tnum mt-0.5">{milestone.name}</p>
         </div>
         <span
           className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
@@ -207,55 +221,5 @@ function MilestoneCard({
         </div>
       </div>
     </div>
-  );
-}
-
-function AddMilestoneForm({
-  onAdd,
-  onCancel,
-}: {
-  onAdd: (amount: number, label?: string) => void;
-  onCancel: () => void;
-}) {
-  const [amount, setAmount] = useState("");
-  const [label, setLabel] = useState("");
-
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    const value = Number(amount);
-    if (!(value > 0)) return;
-    onAdd(value, label);
-  };
-
-  return (
-    <form
-      onSubmit={handleSubmit}
-      className="flex flex-col sm:flex-row gap-2 mb-4 p-3 rounded-xl border border-white/[0.08] bg-white/[0.02]"
-    >
-      <Input
-        type="number"
-        inputMode="decimal"
-        placeholder="Target amount (₹)"
-        value={amount}
-        onChange={(e) => setAmount(e.target.value)}
-        className="sm:max-w-[180px]"
-        autoFocus
-      />
-      <Input
-        type="text"
-        placeholder="Label (optional, e.g. House Downpayment)"
-        value={label}
-        onChange={(e) => setLabel(e.target.value)}
-        className="flex-1"
-      />
-      <div className="flex gap-2">
-        <Button type="submit" size="sm" disabled={!(Number(amount) > 0)}>
-          Add
-        </Button>
-        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
-          Cancel
-        </Button>
-      </div>
-    </form>
   );
 }

@@ -23,6 +23,7 @@ export type {
   DbGrindLogRow,
   DbHustleEntryRow,
   DbPendingObligationRow,
+  DbUserMilestoneRow,
 } from "./types";
 
 export {
@@ -43,6 +44,8 @@ export {
   deleteHustleEntryRow,
   upsertSettings,
   upsertPendingObligations,
+  upsertMilestone,
+  deleteMilestoneRow,
   type RemoteBundle,
   type FetchAllUserDataResult,
 } from "./repository";
