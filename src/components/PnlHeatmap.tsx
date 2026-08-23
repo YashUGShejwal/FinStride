@@ -59,8 +59,8 @@ const TOTAL_DAYS = WEEKS * 7;
 // the Tailwind classes below) because anchorFor's math depends on them
 // exactly matching the rendered size. If the cell/gap classes below ever
 // change, these numbers need to change with them.
-const CELL_PX = 14; // w-3.5 / h-3.5
-const GAP_PX = 4; // gap-1
+const CELL_PX = 16; // w-4 / h-4
+const GAP_PX = 6; // gap-1.5
 const PITCH_PX = CELL_PX + GAP_PX;
 const GRID_WIDTH_PX = WEEKS * CELL_PX + (WEEKS - 1) * GAP_PX;
 const GRID_HEIGHT_PX = 7 * CELL_PX + 6 * GAP_PX;
@@ -246,12 +246,12 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
             or on any ancestor — see the vertical-anchoring doc comment above
             for why the scroller's own padding, not this box, is what keeps
             tooltips from being clipped. */}
-        <div className="lg:col-span-7 relative flex flex-col items-center lg:items-start justify-center rounded-2xl border border-white/[0.08] bg-white/[0.015] p-5 shadow-lg">
+        <div className="lg:col-span-7 relative flex flex-col items-center lg:items-start justify-center rounded-2xl border border-white/[0.08] bg-white/[0.015] p-4 shadow-lg">
           <div
             className="overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             style={{ paddingTop: SCROLLER_PAD_TOP_PX, paddingBottom: SCROLLER_PAD_BOTTOM_PX }}
           >
-            <div className="flex gap-1 mb-1">
+            <div className="flex gap-1.5 mb-1.5">
               <div className="w-5 shrink-0" />
               {grid.weeks.map((week, wi) => {
                 const month = week[0].key.slice(0, 7);
@@ -260,22 +260,22 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
                 return (
                   <div
                     key={wi}
-                    className="w-3.5 h-3.5 shrink-0 text-[9px] leading-[14px] text-muted-foreground"
+                    className="w-4 h-4 shrink-0 text-xs font-medium text-white/75"
                   >
                     {label}
                   </div>
                 );
               })}
             </div>
-            <div className="flex gap-1">
+            <div className="flex gap-1.5">
               {/* Weekday labels — only every other one (M/W/F), matching the
                   understated GitHub/fintech convention rather than labeling
                   all 7 rows. */}
-              <div className="flex flex-col gap-1 w-5 shrink-0">
+              <div className="flex flex-col gap-1.5 w-5 shrink-0">
                 {WEEKDAY_LABELS.map((label, i) => (
                   <div
                     key={i}
-                    className="w-3.5 h-3.5 flex items-center text-[9px] uppercase tracking-wide text-muted-foreground"
+                    className="w-4 h-4 flex items-center text-[11px] font-semibold uppercase tracking-wide text-white/60"
                   >
                     {label}
                   </div>
@@ -285,7 +285,7 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
                 const hAnchor = anchorFor(wi, GRID_WIDTH_PX, TOOLTIP_WIDTH_PX);
                 const hAlign = hAnchor === "start" ? "left-0" : "right-0";
                 return (
-                  <div key={wi} className="flex flex-col gap-1">
+                  <div key={wi} className="flex flex-col gap-1.5">
                     {week.map((day, di) => {
                       const color = day.bucket ? cellColor(day.bucket.netPnl, grid.maxAbs) : undefined;
                       const isToday = day.key === todayKey;
@@ -300,7 +300,7 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
                       return (
                         <div key={day.key} className="relative group">
                           <div
-                            className={`w-3.5 h-3.5 rounded-[3px] transition-all duration-150 cursor-pointer hover:scale-130 hover:z-20 ${
+                            className={`w-4 h-4 rounded-[3px] transition-all duration-150 cursor-pointer hover:scale-130 hover:z-20 ${
                               color
                                 ? glow
                                 : "bg-white/[0.025] border border-white/[0.04] hover:bg-white/[0.08] hover:border-white/20"
@@ -402,7 +402,7 @@ function HeatmapStat({
       : "";
   const val = (
     <span
-      className={`text-sm font-semibold tnum ${cyanGradient || tone || ""} ${
+      className={`text-xl lg:text-2xl font-display font-bold tnum ${cyanGradient || tone || ""} ${
         glow === "emerald"
           ? "drop-shadow-[0_0_8px_oklch(0.72_0.18_155_/_0.4)]"
           : glow === "rose"
@@ -417,9 +417,9 @@ function HeatmapStat({
     <div
       className={`relative h-full flex flex-col justify-center overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.015] p-4 hover:border-white/20 transition-colors ${GLOW_BACKDROP[glow]}`}
     >
-      <p className="relative text-[9px] uppercase tracking-wider text-muted-foreground">{label}</p>
+      <p className="relative text-[11px] font-semibold uppercase tracking-wider text-white/60">{label}</p>
       <p className="relative mt-0.5">{sensitive ? <Sensitive>{val}</Sensitive> : val}</p>
-      {sub && <p className="relative text-[9px] text-muted-foreground mt-0.5 truncate">{sub}</p>}
+      {sub && <p className="relative text-xs font-medium text-white/50 mt-0.5 truncate">{sub}</p>}
     </div>
   );
 }
