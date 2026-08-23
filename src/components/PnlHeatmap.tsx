@@ -10,18 +10,28 @@
  *
  * Every date key used here — the grid's cells AND a trade's bucket — is the
  * plain UTC-slice of its ISO string ("YYYY-MM-DD"), matching the convention
- * `dupKey`/exit-date grouping already use elsewhere in this app. Building the
- * grid from local calendar arithmetic instead would risk its cell keys not
- * lining up with a trade's bucket key for users on either side of a UTC day
- * boundary — this keeps the two derived the exact same way.
+ * `dupKey`/exit-date grouping already use elsewhere in this app.
  *
- * Colors intentionally reuse this app's own oklch palette (matching
- * PNL_EMERALD/PNL_ROSE's hues, 155 and 25, from swing.tsx) rather than
- * Tailwind's stock emerald/rose scale, so the heatmap's greens/reds read as
- * the SAME green/red used everywhere else in the app. They're applied via
- * inline style, not Tailwind classes — the color is computed per-cell at
- * runtime from trade data, and Tailwind's build-time scanner can't generate
- * CSS for a class name it never sees literally in the source.
+ * COLOR CHOICE: every "neon" accent here (cell glow, ring, stat-card auras,
+ * gradient text) is expressed as this app's own oklch palette — matching
+ * PNL_EMERALD/PNL_ROSE's hues (155, 25) and --accent's cyan (195) from
+ * styles.css — rather than Tailwind's stock emerald-400/rose-400/cyan-400.
+ * Both technically work in this project (verified directly against the
+ * compiled CSS output before writing this), but every other emerald/rose
+ * accent in the app — the ribbon above this component, the closed-trade
+ * cards, the exit-reason badges — uses the custom oklch scale, and Tailwind's
+ * stock colors render a visibly different exact hue. Introducing a second,
+ * slightly-off "emerald" into the same page would look inconsistent even
+ * though it would technically render.
+ *
+ * TOOLTIP ANCHORING: the previous version hand-derived a fixed left/right
+ * split point for a specific tile size and tooltip width, which broke the
+ * moment either changed (a real bug from an earlier pass — a tooltip wider
+ * than several grid columns, centered, was overflowing the horizontal
+ * scroll container and toggling a scrollbar on hover). `anchorFor` below
+ * replaces that with a general formula computed from the actual pixel
+ * dimensions, so it stays correct across future size tweaks instead of
+ * needing to be re-derived by hand every time.
  */
 import { useEffect, useMemo, useState } from "react";
 import { useStore, type Trade } from "@/lib/store";
@@ -30,6 +40,18 @@ import { Sensitive } from "@/components/Sensitive";
 
 const WEEKS = 14;
 const TOTAL_DAYS = WEEKS * 7;
+
+// Pixel geometry of the grid — kept as named constants (not re-derived from
+// the Tailwind classes below) because anchorFor's math depends on them
+// exactly matching the rendered size. If the cell/gap classes below ever
+// change, these three numbers need to change with them.
+const CELL_PX = 14; // w-3.5 / h-3.5
+const GAP_PX = 3.5; // gap-[3.5px]
+const PITCH_PX = CELL_PX + GAP_PX;
+const GRID_WIDTH_PX = WEEKS * CELL_PX + (WEEKS - 1) * GAP_PX;
+const GRID_HEIGHT_PX = 7 * CELL_PX + 6 * GAP_PX;
+const TOOLTIP_WIDTH_PX = 130;
+const TOOLTIP_HEIGHT_PX = 84; // header line + large P&L line + footer pill, generously rounded up
 
 type DayBucket = {
   key: string;
@@ -59,6 +81,9 @@ const ROSE_LEVELS = [
 ];
 const EMERALD_TEXT = "text-[oklch(0.78_0.16_155)]";
 const ROSE_TEXT = "text-[oklch(0.78_0.18_25)]";
+const EMERALD_GLOW = "shadow-[0_0_10px_oklch(0.72_0.18_155_/_0.35)] ring-1 ring-[oklch(0.72_0.18_155_/_0.4)]";
+const ROSE_GLOW = "shadow-[0_0_10px_oklch(0.7_0.2_25_/_0.35)] ring-1 ring-[oklch(0.7_0.2_25_/_0.4)]";
+const WEEKDAY_LABELS = ["", "M", "", "W", "", "F", ""];
 
 function cellColor(netPnl: number, maxAbs: number): string | undefined {
   if (netPnl === 0) return undefined;
@@ -80,6 +105,31 @@ function utcDayOfWeek(key: string): number {
 }
 
 const signed = (n: number) => `${n >= 0 ? "+" : ""}${inr(n)}`;
+
+/**
+ * Which edge of a cell's own bounding box a tooltip of the given size should
+ * anchor to, so that (as long as `size` and `count` above match the
+ * rendered CSS) it never extends past the grid's own [0, total] span on
+ * that axis — see the file doc comment for why this replaced a hand-picked
+ * threshold. `index` is the cell's position along the axis (column or row).
+ */
+function anchorFor(
+  index: number,
+  total: number,
+  tooltipSize: number,
+): "start" | "end" {
+  const nearEdge = index * PITCH_PX;
+  const farEdge = nearEdge + CELL_PX;
+  const fitsExtendingForward = nearEdge + tooltipSize <= total;
+  const fitsExtendingBackward = farEdge - tooltipSize >= 0;
+  if (fitsExtendingForward && !fitsExtendingBackward) return "start";
+  if (!fitsExtendingForward && fitsExtendingBackward) return "end";
+  // Both fit, or neither fits cleanly (tooltip bigger than the grid itself)
+  // — pick whichever direction leaves more room either way.
+  const forwardMargin = total - (nearEdge + tooltipSize);
+  const backwardMargin = farEdge - tooltipSize;
+  return forwardMargin >= backwardMargin ? "start" : "end";
+}
 
 export function PnlHeatmap({ trades }: { trades: Trade[] }) {
   const { isStealthMode } = useStore();
@@ -158,78 +208,96 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
     );
   }
 
-  const lastCol = grid.weeks.length - 1;
-
   return (
     <section className="glass rounded-2xl p-5">
       <h2 className="font-display font-semibold tracking-tight mb-4">Trading Activity</h2>
       <div className="flex flex-col lg:flex-row lg:items-start gap-5">
         {/* Left: header already above, grid below — sized to occupy ~55-60%
             of the row so it never has to fight the stat grid for space. */}
-        <div className="lg:w-[58%] min-w-0">
+        <div className="lg:w-[58%] min-w-0 flex flex-col items-center lg:items-start justify-center">
           <div className="overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <div className="flex gap-1 mb-1">
+            <div className="flex gap-[3.5px] mb-1">
+              <div className="w-5 shrink-0" />
               {grid.weeks.map((week, wi) => {
                 const month = week[0].key.slice(0, 7);
                 const prevMonth = wi > 0 ? grid.weeks[wi - 1][0].key.slice(0, 7) : "";
                 const label = month !== prevMonth ? fmtDate(week[0].key).split(" ")[1] : "";
                 return (
-                  <div key={wi} className="w-3 h-3 shrink-0 text-[9px] leading-3 text-muted-foreground">
+                  <div
+                    key={wi}
+                    className="w-3.5 h-3.5 shrink-0 text-[9px] leading-[14px] text-muted-foreground"
+                  >
                     {label}
                   </div>
                 );
               })}
             </div>
-            <div className="flex gap-1">
+            <div className="flex gap-[3.5px]">
+              {/* Weekday labels — only every other one (M/W/F), matching the
+                  understated GitHub/fintech convention rather than labeling
+                  all 7 rows. */}
+              <div className="flex flex-col gap-[3.5px] w-5 shrink-0">
+                {WEEKDAY_LABELS.map((label, i) => (
+                  <div
+                    key={i}
+                    className="w-3.5 h-3.5 flex items-center text-[9px] uppercase tracking-wide text-muted-foreground"
+                  >
+                    {label}
+                  </div>
+                ))}
+              </div>
               {grid.weeks.map((week, wi) => {
-                // Edge-aware tooltip anchoring, sized to the ACTUAL numbers:
-                // each column is 16px (size-3 cell + gap-1), 14 of them is a
-                // ~220px-wide grid, and the tooltip is a fixed 7rem (112px).
-                // A plain centered tooltip overflows the grid's own footprint
-                // for almost every column here — half its own width (56px)
-                // is more than 3 whole columns — so instead: the first half
-                // of columns anchor their tooltip's LEFT edge to the cell
-                // (extends rightward, so it can never start before x=0), the
-                // second half anchor the RIGHT edge (extends leftward, so it
-                // can never end past the grid's own right edge at x≈220).
-                // Splitting exactly at the midpoint is what keeps BOTH
-                // boundary columns (last-of-first-half, first-of-second-half)
-                // inside [0, 220] — anything looser re-introduces the
-                // negative-x/past-edge overflow this whole fix exists for.
-                const hAlign = wi <= Math.floor(lastCol / 2) ? "left-0" : "right-0";
+                const hAnchor = anchorFor(wi, GRID_WIDTH_PX, TOOLTIP_WIDTH_PX);
+                const hAlign = hAnchor === "start" ? "left-0" : "right-0";
                 return (
-                  <div key={wi} className="flex flex-col gap-1">
+                  <div key={wi} className="flex flex-col gap-[3.5px]">
                     {week.map((day, di) => {
                       const color = day.bucket ? cellColor(day.bucket.netPnl, grid.maxAbs) : undefined;
                       const isToday = day.key === todayKey;
-                      // Rows 0-1 (Sun/Mon) flip the tooltip BELOW the cell —
-                      // ABOVE would push it past the grid's own top edge.
-                      const vAlign = di < 2 ? "top-full mt-1.5" : "bottom-full mb-1.5";
+                      const vAnchor = anchorFor(di, GRID_HEIGHT_PX, TOOLTIP_HEIGHT_PX);
+                      const vAlign = vAnchor === "start" ? "top-full mt-1.5" : "bottom-full mb-1.5";
+                      const glow = !day.bucket
+                        ? ""
+                        : day.bucket.netPnl > 0
+                          ? EMERALD_GLOW
+                          : day.bucket.netPnl < 0
+                            ? ROSE_GLOW
+                            : "";
                       return (
                         <div key={day.key} className="relative group">
                           <div
-                            className={`size-3 rounded-[2px] ${
-                              color ? "" : "bg-white/[0.02] border border-white/[0.04]"
+                            className={`w-3.5 h-3.5 rounded-[3px] transition-all duration-150 cursor-pointer hover:scale-130 hover:z-20 ${
+                              color
+                                ? glow
+                                : "bg-white/[0.025] border border-white/[0.04] hover:bg-white/[0.08] hover:border-white/20"
                             } ${isToday ? "ring-1 ring-white/40" : ""}`}
                             style={color ? { backgroundColor: color } : undefined}
                           />
                           {day.bucket && (
                             <div
-                              className={`pointer-events-none absolute z-50 hidden group-hover:flex flex-col gap-0.5 ${vAlign} ${hAlign} w-[7rem] rounded-lg border border-glass-border bg-[#05070a] px-2 py-1.5 text-[10px] leading-tight shadow-lg`}
+                              className={`pointer-events-none absolute z-50 hidden group-hover:flex flex-col gap-1 ${vAlign} ${hAlign} min-w-[130px] w-max max-w-[130px] rounded-xl border border-white/15 bg-[#060913]/95 backdrop-blur-2xl px-2.5 py-2 shadow-2xl ${
+                                day.bucket.netPnl >= 0
+                                  ? "shadow-[0_0_16px_oklch(0.72_0.18_155_/_0.25)]"
+                                  : "shadow-[0_0_16px_oklch(0.7_0.2_25_/_0.25)]"
+                              }`}
                             >
-                              <span className="font-semibold">{fmtDate(day.bucket.key)}</span>
+                              <span className="text-[10px] text-white/50 font-medium tracking-wide whitespace-nowrap">
+                                {fmtDate(day.bucket.key)}
+                              </span>
                               <Sensitive>
                                 <span
-                                  className={`tnum font-semibold ${
-                                    day.bucket.netPnl >= 0 ? EMERALD_TEXT : ROSE_TEXT
+                                  className={`tnum text-base font-bold leading-tight whitespace-nowrap ${
+                                    day.bucket.netPnl >= 0
+                                      ? `${EMERALD_TEXT} drop-shadow-[0_0_8px_oklch(0.72_0.18_155_/_0.5)]`
+                                      : `${ROSE_TEXT} drop-shadow-[0_0_8px_oklch(0.7_0.2_25_/_0.5)]`
                                   }`}
                                 >
                                   {signed(day.bucket.netPnl)}
                                 </span>
                               </Sensitive>
-                              <span className="text-muted-foreground">
+                              <span className="inline-flex w-fit items-center rounded-md border border-white/[0.06] bg-white/[0.05] px-1.5 py-0.5 text-[9px] text-white/60 whitespace-nowrap">
                                 {day.bucket.trades} trade{day.bucket.trades !== 1 ? "s" : ""} ·{" "}
-                                {day.bucket.wins}W · {day.bucket.losses}L
+                                {day.bucket.wins}W {day.bucket.losses}L
                               </span>
                             </div>
                           )}
@@ -249,12 +317,14 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
             label="Streak"
             value={grid.streak > 0 ? `${grid.streak} day${grid.streak !== 1 ? "s" : ""}` : "—"}
             tone={grid.streak > 0 ? EMERALD_TEXT : undefined}
+            glow={grid.streak > 0 ? "emerald" : "none"}
           />
           <HeatmapStat
             label="Best Day"
             value={grid.best ? signed(grid.best.netPnl) : "—"}
             sub={grid.best ? fmtDate(grid.best.key) : undefined}
             tone={EMERALD_TEXT}
+            glow="emerald"
             sensitive
           />
           <HeatmapStat
@@ -262,14 +332,22 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
             value={grid.worst ? signed(grid.worst.netPnl) : "—"}
             sub={grid.worst ? fmtDate(grid.worst.key) : undefined}
             tone={grid.worst && grid.worst.netPnl < 0 ? ROSE_TEXT : EMERALD_TEXT}
+            glow={grid.worst && grid.worst.netPnl < 0 ? "rose" : "emerald"}
             sensitive
           />
-          <HeatmapStat label="Trading Days" value={`${grid.activeDays} / ${TOTAL_DAYS}`} />
+          <HeatmapStat label="Trading Days" value={`${grid.activeDays} / ${TOTAL_DAYS}`} glow="cyan" />
         </div>
       </div>
     </section>
   );
 }
+
+const GLOW_BACKDROP: Record<"emerald" | "rose" | "cyan" | "none", string> = {
+  emerald: "bg-[radial-gradient(circle_at_25%_15%,oklch(0.72_0.18_155_/_0.1),transparent_65%)]",
+  rose: "bg-[radial-gradient(circle_at_25%_15%,oklch(0.7_0.2_25_/_0.1),transparent_65%)]",
+  cyan: "bg-[radial-gradient(circle_at_25%_15%,oklch(0.72_0.14_195_/_0.1),transparent_65%)]",
+  none: "",
+};
 
 function HeatmapStat({
   label,
@@ -277,19 +355,39 @@ function HeatmapStat({
   sub,
   tone,
   sensitive,
+  glow = "none",
 }: {
   label: string;
   value: string;
   sub?: string;
   tone?: string;
   sensitive?: boolean;
+  glow?: "emerald" | "rose" | "cyan" | "none";
 }) {
-  const val = <span className={`text-sm font-semibold tnum ${tone ?? ""}`}>{value}</span>;
+  const cyanGradient =
+    glow === "cyan"
+      ? "bg-gradient-to-r from-[oklch(0.72_0.14_195)] to-white bg-clip-text text-transparent"
+      : "";
+  const val = (
+    <span
+      className={`text-sm font-semibold tnum ${cyanGradient || tone || ""} ${
+        glow === "emerald"
+          ? "drop-shadow-[0_0_8px_oklch(0.72_0.18_155_/_0.4)]"
+          : glow === "rose"
+            ? "drop-shadow-[0_0_8px_oklch(0.7_0.2_25_/_0.4)]"
+            : ""
+      }`}
+    >
+      {value}
+    </span>
+  );
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5">
-      <p className="text-[9px] uppercase tracking-wider text-muted-foreground">{label}</p>
-      <p className="mt-0.5">{sensitive ? <Sensitive>{val}</Sensitive> : val}</p>
-      {sub && <p className="text-[9px] text-muted-foreground mt-0.5 truncate">{sub}</p>}
+    <div
+      className={`relative overflow-hidden rounded-xl border border-white/[0.08] bg-white/[0.02] px-3 py-2.5 hover:border-white/20 transition-colors ${GLOW_BACKDROP[glow]}`}
+    >
+      <p className="relative text-[9px] uppercase tracking-wider text-muted-foreground">{label}</p>
+      <p className="relative mt-0.5">{sensitive ? <Sensitive>{val}</Sensitive> : val}</p>
+      {sub && <p className="relative text-[9px] text-muted-foreground mt-0.5 truncate">{sub}</p>}
     </div>
   );
 }
