@@ -122,3 +122,19 @@ export function decodeFnoSymbol(symbol: string): FnoContractInfo | null {
 
   return null;
 }
+
+/**
+ * The underlying root for any symbol: an F&O contract's instrument name
+ * (NIFTY, BANKNIFTY, RELIANCE, ...), or the symbol itself unchanged for a
+ * plain equity ticker that was never a contract to begin with. Thin wrapper
+ * around decodeFnoSymbol — a plain equity ticker never matches either F&O
+ * shape there, so it always falls through to the "leave it as-is" branch.
+ *
+ * Lets every strike/expiry of the same underlying (RELIANCE24AUG2900CE,
+ * RELIANCE24AUG2950CE, RELIANCE24SEPFUT, ...) collapse under one master
+ * group in the Swing Desk's "By Symbol & Date" view instead of each exact
+ * contract string getting its own separate card.
+ */
+export function getUnderlyingSymbol(rawSymbol: string): string {
+  return decodeFnoSymbol(rawSymbol)?.instrument ?? rawSymbol;
+}

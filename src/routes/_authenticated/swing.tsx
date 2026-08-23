@@ -12,7 +12,7 @@ import {
   useStore,
   type CloseReason, type PartitionId, type Trade, type ExitReason,
 } from "@/lib/store";
-import { FNO_REGEX } from "@/lib/blueprintRules";
+import { FNO_REGEX, getUnderlyingSymbol } from "@/lib/blueprintRules";
 import { inr, fmtDate, todayLocalISO } from "@/lib/format";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { Sensitive } from "@/components/Sensitive";
@@ -1171,6 +1171,20 @@ function ClosedTradeCard({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 flex-wrap">
           <p className="font-semibold tracking-wider line-through text-muted-foreground">{t.ticker}</p>
+          <span
+            className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${
+              t.direction === "SHORT"
+                ? "bg-[oklch(0.7_0.22_20/0.18)] text-[oklch(0.82_0.18_25)]"
+                : "bg-[oklch(0.72_0.18_155/0.18)] text-[oklch(0.82_0.16_155)]"
+            }`}
+          >
+            {t.direction}
+          </span>
+          {t.optionType && (
+            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border border-glass-border text-muted-foreground">
+              {t.optionType === "FUT" ? "FUT" : `${t.optionType}${t.strike !== undefined ? ` ${t.strike}` : ""}`}
+            </span>
+          )}
           {meta && (
             <span
               className={`inline-flex items-center gap-1 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border ${meta.color}`}
@@ -1354,13 +1368,19 @@ function GroupedClosedTrades({
     );
   }
 
-  // "symbol-date" — symbol groups first (most-recently-traded symbol first),
-  // each one split into its own per-day session blocks underneath.
+  // "symbol-date" — grouped by UNDERLYING, not raw ticker: RELIANCE24AUG2900CE,
+  // RELIANCE24AUG2950CE, and RELIANCE24SEPFUT all collapse into one
+  // "RELIANCE" master card instead of three separate ones, since they're the
+  // same underlying position risk even though every strike/expiry is a
+  // distinct ticker string. Most-recently-traded underlying first; each
+  // master card splits into its own per-day session blocks underneath so
+  // different trading days for the same underlying never merge.
   const bySymbol = new Map<string, Trade[]>();
   for (const t of trades) {
-    const list = bySymbol.get(t.ticker) ?? [];
+    const underlying = getUnderlyingSymbol(t.ticker);
+    const list = bySymbol.get(underlying) ?? [];
     list.push(t);
-    bySymbol.set(t.ticker, list);
+    bySymbol.set(underlying, list);
   }
   const latestExit = (list: Trade[]) =>
     list.reduce((m, t) => (t.exitDate && t.exitDate > m ? t.exitDate : m), "");
@@ -1372,6 +1392,7 @@ function GroupedClosedTrades({
     <div className="space-y-3">
       {symbolKeys.map((symbol) => {
         const symbolTrades = bySymbol.get(symbol)!;
+        const symbolStats = summarizeSession(symbolTrades);
         const sessions = new Map<string, Trade[]>();
         for (const t of symbolTrades) {
           const k = exitDay(t);
@@ -1381,8 +1402,26 @@ function GroupedClosedTrades({
         }
         const sessionKeys = [...sessions.keys()].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
         return (
-          <div key={symbol} className="rounded-2xl border border-glass-border bg-white/[0.02] p-4">
-            <p className="text-sm font-semibold tracking-wider mb-3">{symbol}</p>
+          <div key={symbol} className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-3 pb-3 border-b border-white/[0.06]">
+              <p className="text-sm font-display font-semibold tracking-wider">{symbol}</p>
+              <div className="flex items-center gap-3">
+                <span className="text-[11px] text-muted-foreground">
+                  {symbolStats.count} trade{symbolStats.count !== 1 ? "s" : ""}
+                </span>
+                <span
+                  className={`tnum text-sm font-semibold ${
+                    symbolStats.hasPnl
+                      ? symbolStats.netPnl >= 0
+                        ? PNL_EMERALD
+                        : PNL_ROSE
+                      : "text-muted-foreground"
+                  }`}
+                >
+                  <Sensitive>{symbolStats.hasPnl ? signedInr(symbolStats.netPnl) : "—"}</Sensitive>
+                </span>
+              </div>
+            </div>
             <div className="space-y-2">
               {sessionKeys.map((day) => (
                 <SessionBlock key={day || "unknown"} day={day} trades={sessions.get(day)!} renderCard={card} />
@@ -1460,9 +1499,11 @@ function SessionBlock({
 }) {
   const stats = summarizeSession(trades);
   return (
-    <div className="rounded-xl border border-glass-border/60 bg-white/[0.02] p-3">
+    <div className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-3">
       <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
-        <p className="text-xs text-muted-foreground">
+        {/* Lighter weight + smaller than the master symbol header on purpose —
+            this is a sub-header one level down, not a second title. */}
+        <p className="text-[11px] font-medium text-muted-foreground">
           {day ? fmtDate(day) : "No exit date recorded"} · {stats.count} trade{stats.count !== 1 ? "s" : ""}
         </p>
         <span

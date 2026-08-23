@@ -24,7 +24,7 @@
  * CSS for a class name it never sees literally in the source.
  */
 import { useEffect, useMemo, useState } from "react";
-import type { Trade } from "@/lib/store";
+import { useStore, type Trade } from "@/lib/store";
 import { inr, fmtDate, todayLocalISO } from "@/lib/format";
 import { Sensitive } from "@/components/Sensitive";
 
@@ -82,6 +82,7 @@ function utcDayOfWeek(key: string): number {
 const signed = (n: number) => `${n >= 0 ? "+" : ""}${inr(n)}`;
 
 export function PnlHeatmap({ trades }: { trades: Trade[] }) {
+  const { isStealthMode } = useStore();
   const [todayKey, setTodayKey] = useState<string | null>(null);
   useEffect(() => {
     setTodayKey(todayLocalISO());
@@ -140,6 +141,22 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
   }, [todayKey, trades]);
 
   if (!grid || grid.activeDays === 0) return null;
+
+  // Stealth Mode hides the heatmap+stats OUTRIGHT rather than routing them
+  // through <Sensitive> the way individual figures elsewhere in the app are
+  // blurred — a color-coded calendar reveals relative profit/loss magnitude
+  // and streak length just from its SHAPE, which blurring the numbers alone
+  // wouldn't hide. Checked after the "no data yet" guard above: with nothing
+  // to show either way, there's nothing to announce as hidden.
+  if (isStealthMode) {
+    return (
+      <section className="glass rounded-2xl p-5 flex items-center justify-center text-center">
+        <p className="text-sm text-muted-foreground">
+          🔒 Trading Activity Heatmap hidden in Stealth Mode
+        </p>
+      </section>
+    );
+  }
 
   return (
     <section className="glass rounded-2xl p-5">
