@@ -232,8 +232,12 @@ export type DbUserMilestoneRow = {
   name: string;
   target_amount: number;
   is_custom: boolean;
-  /** 'net_worth' | 'asset_goal' | 'custom' — see the migration's target_type comment. */
+  /** 'net_worth' | 'need' | 'major_want' | 'minor_want' — see the migration's target_type comment. */
   target_type: string;
+  /** NULL for net_worth; the item/purchase price for the 3 affordability types. */
+  item_cost: number | null;
+  /** NULL for net_worth; the % of net worth the affordability category is capped at. */
+  allocation_percent: number | null;
   created_at: string;
   updated_at: string;
 };

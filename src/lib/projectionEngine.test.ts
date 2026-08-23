@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  affordabilityMultiplier,
   calculateMilestoneETA,
+  calculateRequiredNetWorth,
   generateProjectionSeries,
   getCompoundingCheckpoints,
   milestoneProgress,
@@ -232,5 +234,92 @@ describe("getCompoundingCheckpoints", () => {
   it("every checkpoint's principal+gains still reconciles to its nominal value", () => {
     const checkpoints = getCompoundingCheckpoints(baseInputs);
     for (const c of checkpoints) expect(c.principal + c.gains).toBeCloseTo(c.nominalValue, 6);
+  });
+});
+
+describe("calculateMilestoneETA — inflation-aware (adjustForInflation)", () => {
+  const start = new Date("2026-01-01T00:00:00.000Z");
+  const base = { targetAmount: 2_000_000, currentNW: 100_000, monthlyContribution: 15_000, stepUpRate: 5, cagr: 12 };
+
+  it("with inflationPercent omitted, behaves exactly like the original nominal-only solver", () => {
+    const withOpts = calculateMilestoneETA(
+      base.targetAmount, base.currentNW, base.monthlyContribution, base.stepUpRate, base.cagr,
+      { startDate: start },
+    );
+    const withZeroInflation = calculateMilestoneETA(
+      base.targetAmount, base.currentNW, base.monthlyContribution, base.stepUpRate, base.cagr,
+      { startDate: start, inflationPercent: 0 },
+    );
+    expect(withZeroInflation).toEqual(withOpts);
+  });
+
+  it("solving against the real (inflation-adjusted) curve never finds an EARLIER month than the nominal curve", () => {
+    const nominalEta = calculateMilestoneETA(
+      base.targetAmount, base.currentNW, base.monthlyContribution, base.stepUpRate, base.cagr,
+      { startDate: start },
+    );
+    const realEta = calculateMilestoneETA(
+      base.targetAmount, base.currentNW, base.monthlyContribution, base.stepUpRate, base.cagr,
+      { startDate: start, inflationPercent: 6 },
+    );
+    expect(nominalEta).not.toBeNull();
+    expect(realEta).not.toBeNull();
+    expect(realEta!.totalMonths).toBeGreaterThanOrEqual(nominalEta!.totalMonths);
+  });
+
+  it("the real-terms ETA month matches an independent real-value recomputation from generateProjectionSeries", () => {
+    const inflationPercent = 6;
+    const eta = calculateMilestoneETA(
+      base.targetAmount, base.currentNW, base.monthlyContribution, base.stepUpRate, base.cagr,
+      { startDate: start, inflationPercent },
+    );
+    expect(eta).not.toBeNull();
+    const series = generateProjectionSeries(
+      {
+        currentNetWorth: base.currentNW,
+        monthlyContribution: base.monthlyContribution,
+        stepUpPercent: base.stepUpRate,
+        annualReturnPercent: base.cagr,
+        inflationPercent,
+        horizonYears: 30,
+      },
+      { startDate: start },
+    );
+    const atEta = series[eta!.totalMonths];
+    const beforeEta = series[eta!.totalMonths - 1];
+    expect(atEta.realValue).toBeGreaterThanOrEqual(base.targetAmount);
+    expect(beforeEta.realValue).toBeLessThan(base.targetAmount);
+  });
+});
+
+describe("calculateRequiredNetWorth", () => {
+  it("matches cost / (allocationPercent/100) for each affordability category's default", () => {
+    expect(calculateRequiredNetWorth(300_000, 50)).toBeCloseTo(600_000, 6); // Need default
+    expect(calculateRequiredNetWorth(300_000, 20)).toBeCloseTo(1_500_000, 6); // Major Want default
+    expect(calculateRequiredNetWorth(300_000, 10)).toBeCloseTo(3_000_000, 6); // Minor Want default
+  });
+
+  it("is algebraically equivalent to cost * (100 / allocationPercent)", () => {
+    expect(calculateRequiredNetWorth(50_000, 3)).toBeCloseTo(50_000 * (100 / 3), 6);
+  });
+
+  it("returns Infinity for a non-positive allocation percent rather than a misleading finite number", () => {
+    expect(calculateRequiredNetWorth(100_000, 0)).toBe(Infinity);
+    expect(calculateRequiredNetWorth(100_000, -5)).toBe(Infinity);
+  });
+});
+
+describe("affordabilityMultiplier", () => {
+  it("matches the documented multiplier bounds for every category's slider range", () => {
+    expect(affordabilityMultiplier(50)).toBeCloseTo(2.0, 6); // Need max% (least conservative)
+    expect(affordabilityMultiplier(20)).toBeCloseTo(5.0, 6); // Need min% == Major Want max%
+    expect(affordabilityMultiplier(10)).toBeCloseTo(10.0, 6); // Major Want min% == Minor Want max%
+    expect(affordabilityMultiplier(3)).toBeCloseTo(100 / 3, 6); // Minor Want min% (~33.3x)
+  });
+
+  it("cost * multiplier reconciles exactly with calculateRequiredNetWorth", () => {
+    for (const pct of [3, 10, 20, 50]) {
+      expect(70_000 * affordabilityMultiplier(pct)).toBeCloseTo(calculateRequiredNetWorth(70_000, pct), 6);
+    }
   });
 });

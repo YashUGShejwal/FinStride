@@ -478,13 +478,36 @@ function normalizeProjectionSettings(raw: unknown, autoMonthlySip: number): Proj
   };
 }
 
-/** WHAT KIND of goal a milestone represents — independent of who created it (see Milestone.isCustom). */
-export type MilestoneTargetType = "net_worth" | "asset_goal" | "custom";
+/**
+ * WHAT KIND of goal a milestone represents — independent of who created it
+ * (see Milestone.isCustom). `net_worth` is a direct target the user types in;
+ * the other three are "affordability" categories where the user enters an
+ * item's cost and a % of net worth it's allowed to consume, and targetAmount
+ * is DERIVED — see calculateRequiredNetWorth in projectionEngine.ts.
+ */
+export type MilestoneTargetType = "net_worth" | "need" | "major_want" | "minor_want";
 
-export const MILESTONE_TARGET_TYPES: readonly { value: MilestoneTargetType; label: string }[] = [
-  { value: "net_worth", label: "Net Worth Milestone" },
-  { value: "asset_goal", label: "Asset Goal" },
-  { value: "custom", label: "Custom" },
+/**
+ * Per-category defaults for the MilestoneModal's pill selector + safety
+ * slider. `defaultAllocationPercent` is always the HIGH end of the range
+ * (the least-conservative, lowest-multiplier position) — sliding toward
+ * `minAllocationPercent` asks for a bigger safety buffer.
+ */
+export const MILESTONE_TARGET_TYPE_META: Record<
+  MilestoneTargetType,
+  { label: string; icon: string; minAllocationPercent: number; maxAllocationPercent: number; defaultAllocationPercent: number }
+> = {
+  net_worth: { label: "Net Worth Goal", icon: "👑", minAllocationPercent: 100, maxAllocationPercent: 100, defaultAllocationPercent: 100 },
+  need: { label: "Need / Asset", icon: "🏠", minAllocationPercent: 20, maxAllocationPercent: 50, defaultAllocationPercent: 50 },
+  major_want: { label: "Major Want", icon: "🎮", minAllocationPercent: 10, maxAllocationPercent: 20, defaultAllocationPercent: 20 },
+  minor_want: { label: "Minor Want", icon: "☕", minAllocationPercent: 3, maxAllocationPercent: 10, defaultAllocationPercent: 10 },
+};
+
+export const MILESTONE_TARGET_TYPE_ORDER: readonly MilestoneTargetType[] = [
+  "net_worth",
+  "need",
+  "major_want",
+  "minor_want",
 ];
 
 /**
@@ -495,10 +518,24 @@ export const MILESTONE_TARGET_TYPES: readonly { value: MilestoneTargetType; labe
 export type Milestone = {
   id: string;
   name: string;
+  /** Direct value for net_worth; DERIVED via calculateRequiredNetWorth for the 3 affordability types. */
   targetAmount: number;
   targetType: MilestoneTargetType;
+  /** Only set for need/major_want/minor_want — the actual item/purchase price the target is derived from. */
+  itemCost?: number;
+  /** Only set for need/major_want/minor_want — the % of net worth this category is capped at. */
+  allocationPercent?: number;
   /** false only for the 6 seeded net-worth defaults below. */
   isCustom: boolean;
+};
+
+/** The user-editable fields of a Milestone — everything but id/isCustom, which the store owns. */
+export type MilestoneInput = {
+  name: string;
+  targetAmount: number;
+  targetType: MilestoneTargetType;
+  itemCost?: number;
+  allocationPercent?: number;
 };
 
 export const DEFAULT_MILESTONES: readonly Milestone[] = [
@@ -512,8 +549,14 @@ export const DEFAULT_MILESTONES: readonly Milestone[] = [
 
 const MILESTONES_KEY = "finstride.milestones";
 
+// Legacy values map onto the closest new category rather than collapsing
+// everything to one default — a device that already saved milestones under
+// the prior (net_worth | asset_goal | custom) taxonomy keeps a sensible
+// category instead of silently losing the distinction.
 function normalizeMilestoneTargetType(raw: unknown): MilestoneTargetType {
-  return raw === "net_worth" || raw === "asset_goal" || raw === "custom" ? raw : "custom";
+  if (raw === "net_worth" || raw === "need" || raw === "major_want" || raw === "minor_want") return raw;
+  if (raw === "asset_goal") return "major_want";
+  return "minor_want";
 }
 
 // raw === null means "never saved" (fresh install) -> seed the defaults.
@@ -524,13 +567,22 @@ function normalizeMilestones(raw: unknown): Milestone[] {
   if (raw === null || raw === undefined || !Array.isArray(raw)) return [...DEFAULT_MILESTONES];
   return raw
     .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
-    .map((r) => ({
-      id: String(r.id ?? ""),
-      name: typeof r.name === "string" && r.name.trim() ? r.name : String(r.label ?? ""),
-      targetAmount: Number(r.targetAmount) || 0,
-      targetType: normalizeMilestoneTargetType(r.targetType),
-      isCustom: typeof r.isCustom === "boolean" ? r.isCustom : true,
-    }))
+    .map((r) => {
+      const targetType = normalizeMilestoneTargetType(r.targetType);
+      const isAffordability = targetType !== "net_worth";
+      return {
+        id: String(r.id ?? ""),
+        name: typeof r.name === "string" && r.name.trim() ? r.name : String(r.label ?? ""),
+        targetAmount: Number(r.targetAmount) || 0,
+        targetType,
+        itemCost: isAffordability && typeof r.itemCost === "number" && r.itemCost > 0 ? r.itemCost : undefined,
+        allocationPercent:
+          isAffordability && typeof r.allocationPercent === "number" && r.allocationPercent > 0
+            ? r.allocationPercent
+            : undefined,
+        isCustom: typeof r.isCustom === "boolean" ? r.isCustom : true,
+      };
+    })
     .filter((m) => m.id.trim() !== "" && m.name.trim() !== "" && m.targetAmount > 0);
 }
 
@@ -1116,12 +1168,9 @@ type StoreCtx = {
   updateProjectionSettings: (patch: Partial<ProjectionSettings>) => void;
   // Wealth milestones — cloud-synced via user_milestones, defaults included
   milestones: Milestone[];
-  addMilestone: (milestone: { name: string; targetAmount: number; targetType: MilestoneTargetType }) => void;
+  addMilestone: (milestone: MilestoneInput) => void;
   /** Returns false if id isn't a CUSTOM milestone (defaults can't be edited in place — delete + add instead). */
-  updateMilestone: (
-    id: string,
-    updates: Partial<{ name: string; targetAmount: number; targetType: MilestoneTargetType }>,
-  ) => boolean;
+  updateMilestone: (id: string, updates: Partial<MilestoneInput>) => boolean;
   deleteMilestone: (id: string) => void;
   // Dynamic categories — fully editable/deletable, defaults included
   incomeCategories: string[];
@@ -2082,11 +2131,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setProjectionSettings((prev) => ({ ...prev, ...patch }));
     },
     milestones,
-    addMilestone: ({ name, targetAmount, targetType }) => {
+    addMilestone: ({ name, targetAmount, targetType, itemCost, allocationPercent }) => {
       const trimmed = name.trim();
       if (!trimmed || !(targetAmount > 0)) return;
+      const isAffordability = targetType !== "net_worth";
       markLocalWrite();
-      const row: Milestone = { id: crypto.randomUUID(), name: trimmed, targetAmount, targetType, isCustom: true };
+      const row: Milestone = {
+        id: crypto.randomUUID(),
+        name: trimmed,
+        targetAmount,
+        targetType,
+        // Never persist a 0/negative itemCost or allocationPercent — that's
+        // not a meaningful "no cost", it's invalid input, and downstream
+        // display (categoryPillText, the Cost: subtext) treats "field is a
+        // number" as "field is meaningful," so a stray 0 would render as a
+        // real (wrong) cost instead of correctly omitting the line.
+        itemCost: isAffordability && itemCost !== undefined && itemCost > 0 ? itemCost : undefined,
+        allocationPercent:
+          isAffordability && allocationPercent !== undefined && allocationPercent > 0
+            ? allocationPercent
+            : undefined,
+        isCustom: true,
+      };
       setMilestones((prev) => [...prev, row]);
       const sync = getSync();
       if (sync) trackedWrite(dbUpsertMilestone(sync.client, sync.userId, row));
@@ -2097,10 +2163,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (updates.name !== undefined && !updates.name.trim()) return false;
       if (updates.targetAmount !== undefined && !(updates.targetAmount > 0)) return false;
       markLocalWrite();
-      const next: Milestone = {
+      const merged = {
         ...existing,
         ...updates,
         name: updates.name !== undefined ? updates.name.trim() : existing.name,
+      };
+      const isAffordability = merged.targetType !== "net_worth";
+      const next: Milestone = {
+        ...merged,
+        itemCost: isAffordability && merged.itemCost !== undefined && merged.itemCost > 0 ? merged.itemCost : undefined,
+        allocationPercent:
+          isAffordability && merged.allocationPercent !== undefined && merged.allocationPercent > 0
+            ? merged.allocationPercent
+            : undefined,
       };
       setMilestones((prev) => prev.map((m) => (m.id === id ? next : m)));
       const sync = getSync();

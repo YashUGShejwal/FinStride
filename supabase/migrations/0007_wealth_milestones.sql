@@ -19,20 +19,30 @@
 --      blob) since a user has many milestones, each independently created,
 --      edited, and deleted. Mirrors the swing_trades RLS/index/trigger shape.
 --
--- EXTENSION BEYOND THE LITERAL SPEC — target_type
--- ------------------------------------------------
+-- EXTENSION BEYOND THE LITERAL SPEC — target_type, item_cost, allocation_percent
+-- --------------------------------------------------------------------------
 -- The originating spec lists user_milestones columns without a "type" column,
 -- but separately specifies a milestone modal with a required "Target Type"
--- field (Asset Goal | Net Worth Milestone | Custom). Without a column to hold
--- it, that field would have nowhere to persist. Adding target_type here is the
--- same kind of deliberate, documented extension as income_categories/
--- expense_categories in 0001_initial_schema.sql ("Extension beyond the
--- original column spec... required so the feature can sync").
+-- field. Without a column to hold it, that field would have nowhere to
+-- persist. Adding target_type here is the same kind of deliberate, documented
+-- extension as income_categories/expense_categories in 0001_initial_schema.sql
+-- ("Extension beyond the original column spec... required so the feature can
+-- sync"). item_cost/allocation_percent are the same story, added when the
+-- affordability-multiplier engine (Track 4) needed somewhere to persist the
+-- item price and the % of net worth it's capped at for the 3 non-net_worth
+-- categories.
 --
 -- is_custom vs. target_type: is_custom is WHO created the row (false only for
 -- the 6 seeded defaults — ₹25L..₹10Cr — pushed by the migration flow in
 -- src/lib/db/migrate.ts on first login); target_type is WHAT KIND of goal it
 -- is. The two are independent — a user-added milestone can be any target_type.
+--
+-- REVISION NOTE: this migration was revised in place (not superseded by a
+-- corrective follow-up) to replace the target_type taxonomy (net_worth |
+-- asset_goal | custom) with the affordability-multiplier one (net_worth |
+-- need | major_want | minor_want) and add item_cost/allocation_percent —
+-- confirmed safe because this migration had not yet been applied to any real
+-- Supabase project when the taxonomy changed.
 --
 -- RE-RUNNABILITY
 -- --------------
@@ -51,20 +61,28 @@ comment on column public.user_settings.projection_settings is
 
 -- ─── 2. user_milestones ─────────────────────────────────────────────────────
 create table if not exists public.user_milestones (
-  id             uuid        primary key default gen_random_uuid(),
-  user_id        uuid        not null references auth.users (id) on delete cascade,
-  name           text        not null,
-  target_amount  numeric     not null,
-  is_custom      boolean     not null default true,
+  id                  uuid        primary key default gen_random_uuid(),
+  user_id             uuid        not null references auth.users (id) on delete cascade,
+  name                text        not null,
+  target_amount       numeric     not null,
+  is_custom           boolean     not null default true,
   -- Extension beyond the literal spec — see the migration doc comment above.
-  target_type    text        not null default 'custom',
-  created_at     timestamptz not null default now(),
-  updated_at     timestamptz not null default now(),
+  target_type         text        not null default 'net_worth',
+  -- Affordability-multiplier fields: NULL for target_type = 'net_worth',
+  -- populated for need/major_want/minor_want.
+  item_cost           numeric,
+  allocation_percent  numeric,
+  created_at          timestamptz not null default now(),
+  updated_at          timestamptz not null default now(),
 
   constraint user_milestones_target_amount_check
     check (target_amount > 0),
   constraint user_milestones_target_type_check
-    check (target_type in ('net_worth', 'asset_goal', 'custom'))
+    check (target_type in ('net_worth', 'need', 'major_want', 'minor_want')),
+  constraint user_milestones_item_cost_check
+    check (item_cost is null or item_cost > 0),
+  constraint user_milestones_allocation_percent_check
+    check (allocation_percent is null or (allocation_percent > 0 and allocation_percent <= 100))
 );
 
 comment on table public.user_milestones is
@@ -72,7 +90,11 @@ comment on table public.user_milestones is
 comment on column public.user_milestones.is_custom is
   'false only for the 6 seeded net-worth defaults. Gates the Edit affordance in the UI — matching AccountMode/BrokerPartition''s "defaults can''t be edited in place" convention.';
 comment on column public.user_milestones.target_type is
-  'net_worth (round total net-worth figure, e.g. ₹1Cr) | asset_goal (a specific purchase, e.g. House Downpayment) | custom (anything else). Extension beyond the literal spec — see migration doc comment.';
+  'net_worth (direct target, e.g. ₹1Cr) | need, major_want, minor_want (affordability categories — target_amount is DERIVED from item_cost/allocation_percent, see calculateRequiredNetWorth in src/lib/projectionEngine.ts). Extension beyond the literal spec — see migration doc comment.';
+comment on column public.user_milestones.item_cost is
+  'NULL for target_type = net_worth. The actual purchase price for need/major_want/minor_want — target_amount = item_cost / (allocation_percent/100).';
+comment on column public.user_milestones.allocation_percent is
+  'NULL for target_type = net_worth. The % of net worth the category is capped at for need/major_want/minor_want (e.g. 20 for a Major Want) — the reciprocal (100/allocation_percent) is the "buffer" multiplier shown in the UI.';
 
 create index if not exists user_milestones_user_id_target_amount_idx
   on public.user_milestones (user_id, target_amount);

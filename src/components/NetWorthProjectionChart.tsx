@@ -36,6 +36,7 @@ export function NetWorthProjectionChart() {
   );
 
   const final = series[series.length - 1];
+  const headlineValue = adjustForInflation ? final.realValue : final.nominalValue;
 
   const yDomainMax = useMemo(() => {
     const max = Math.max(...series.map((p) => p.nominalValue), 1);
@@ -70,14 +71,19 @@ export function NetWorthProjectionChart() {
         </div>
       </div>
 
-      {/* Horizon summary — the same 4 figures the hover tooltip shows, pinned to the final projected month. */}
+      {/* Horizon summary — the same 4 figures the hover tooltip shows, pinned to the final projected month.
+          Cards 1-2 invert which figure is "primary" based on adjustForInflation (the "Headline in real
+          terms" toggle) — the emphasized card always reflects what the user asked to see first. */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 my-4">
         <SummaryStat
-          label={`Nominal · Year ${horizonYears}`}
-          value={final.nominalValue}
-          tone="oklch(0.72 0.18 155)"
+          label={adjustForInflation ? "Real (Today's Purchasing Power)" : `Nominal · Year ${horizonYears}`}
+          value={headlineValue}
+          primary
         />
-        <SummaryStat label="Real (Today's ₹)" value={final.realValue} tone="oklch(0.72 0.14 195)" />
+        <SummaryStat
+          label={adjustForInflation ? "Nominal Portfolio Value" : "Real (Today's ₹)"}
+          value={adjustForInflation ? final.nominalValue : final.realValue}
+        />
         <SummaryStat label="Principal Invested" value={final.principal} />
         <SummaryStat label="Compounded Gain" value={final.gains} tone="oklch(0.72 0.18 155)" />
       </div>
@@ -85,10 +91,10 @@ export function NetWorthProjectionChart() {
         Your money multiplies{" "}
         <Sensitive>
           <span className="tnum font-medium text-foreground">
-            {wealthMultiple(final.nominalValue, final.principal).toFixed(1)}×
+            {wealthMultiple(headlineValue, final.principal).toFixed(1)}×
           </span>
         </Sensitive>{" "}
-        over {horizonYears} years{adjustForInflation ? " (nominal terms)" : ""}.
+        over {horizonYears} years ({adjustForInflation ? "real" : "nominal"} terms).
       </p>
 
       <div className="h-[320px] -ml-2">
@@ -157,13 +163,30 @@ export function NetWorthProjectionChart() {
   );
 }
 
-function SummaryStat({ label, value, tone }: { label: string; value: number; tone?: string }) {
+function SummaryStat({
+  label,
+  value,
+  tone,
+  primary,
+}: {
+  label: string;
+  value: number;
+  tone?: string;
+  /** The headline card driven by the "Headline in real terms" toggle — bigger, bolder, glowing emerald. */
+  primary?: boolean;
+}) {
   return (
-    <div className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-3">
+    <div
+      className={
+        primary
+          ? "rounded-xl border border-primary/30 bg-primary/[0.06] p-3 shadow-[0_0_24px_-10px_oklch(0.78_0.15_165_/_0.5)]"
+          : "rounded-xl border border-white/[0.08] bg-white/[0.02] p-3"
+      }
+    >
       <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
       <p
-        className="text-base font-semibold tnum mt-0.5"
-        style={tone ? { color: tone } : undefined}
+        className={primary ? "text-2xl font-bold font-display tnum mt-1" : "text-base font-semibold tnum mt-0.5"}
+        style={{ color: primary ? "oklch(0.78 0.2 155)" : tone }}
       >
         <Sensitive>
           <AnimatedNumber value={value} format={inr} />

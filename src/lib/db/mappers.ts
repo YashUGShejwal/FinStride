@@ -537,7 +537,9 @@ export function rowToPending(r: DbPendingObligationRow): MonthlyPending {
 
 // ─── Milestones <-> user_milestones ─────────────────────────────────────────
 function milestoneTargetType(raw: unknown): MilestoneTargetType {
-  return raw === "net_worth" || raw === "asset_goal" || raw === "custom" ? raw : "custom";
+  if (raw === "net_worth" || raw === "need" || raw === "major_want" || raw === "minor_want") return raw;
+  if (raw === "asset_goal") return "major_want";
+  return "minor_want";
 }
 
 export function milestoneToRow(m: Milestone, userId: string): DbUserMilestoneInsert {
@@ -548,15 +550,24 @@ export function milestoneToRow(m: Milestone, userId: string): DbUserMilestoneIns
     target_amount: m.targetAmount,
     is_custom: m.isCustom,
     target_type: m.targetType,
+    item_cost: m.itemCost ?? null,
+    allocation_percent: m.allocationPercent ?? null,
   };
 }
 
 export function rowToMilestone(r: DbUserMilestoneRow): Milestone {
+  const targetType = milestoneTargetType(r.target_type);
+  const isAffordability = targetType !== "net_worth";
   return {
     id: r.id,
     name: r.name,
     targetAmount: Number(r.target_amount),
-    targetType: milestoneTargetType(r.target_type),
+    targetType,
+    itemCost: isAffordability && r.item_cost !== null && Number(r.item_cost) > 0 ? Number(r.item_cost) : undefined,
+    allocationPercent:
+      isAffordability && r.allocation_percent !== null && Number(r.allocation_percent) > 0
+        ? Number(r.allocation_percent)
+        : undefined,
     isCustom: r.is_custom === true,
   };
 }

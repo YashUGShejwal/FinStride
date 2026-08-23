@@ -1,8 +1,14 @@
 import { useId, useMemo, useState } from "react";
 import { format } from "date-fns";
 import { Pencil, Plus, Target, Trash2 } from "lucide-react";
-import { calculateMilestoneETA, milestoneProgress, type MilestoneETAResult } from "@/lib/projectionEngine";
-import { useStore, type Milestone } from "@/lib/store";
+import {
+  affordabilityMultiplier,
+  calculateMilestoneETA,
+  milestoneProgress,
+  type MilestoneETAResult,
+} from "@/lib/projectionEngine";
+import { MILESTONE_TARGET_TYPE_META, useStore, type Milestone } from "@/lib/store";
+import { inrCompact } from "@/lib/format";
 import { Sensitive } from "@/components/Sensitive";
 import { Button } from "@/components/ui/button";
 import { MilestoneModal } from "@/components/MilestoneModal";
@@ -14,6 +20,14 @@ function formatEta(totalMonths: number): string {
   if (totalMonths < 1) return "this month";
   if (totalMonths < 12) return `in ${totalMonths} mo`;
   return `in ${(totalMonths / 12).toFixed(1)} yrs`;
+}
+
+/** "Net Worth Goal" for a direct target, or e.g. "Major Want • 5.0× Buffer" for an affordability category. */
+function categoryPillText(m: Milestone): string {
+  const meta = MILESTONE_TARGET_TYPE_META[m.targetType];
+  if (m.targetType === "net_worth") return meta.label;
+  const pct = m.allocationPercent ?? meta.defaultAllocationPercent;
+  return `${meta.label} • ${affordabilityMultiplier(pct).toFixed(1)}× Buffer`;
 }
 
 type Row = {
@@ -53,6 +67,12 @@ export function MilestoneTracker() {
                 projectionSettings.monthlySip,
                 projectionSettings.stepUpPercent,
                 projectionSettings.expectedCagr,
+                // When "Headline in real terms" is on, evaluate ETA against
+                // the inflation-adjusted curve instead of the nominal one —
+                // see calculateMilestoneETA's doc comment.
+                projectionSettings.adjustForInflation
+                  ? { inflationPercent: projectionSettings.inflationRate }
+                  : undefined,
               ),
         };
       });
@@ -165,6 +185,19 @@ function MilestoneCard({
         <div>
           <p className="text-[10px] uppercase tracking-wider text-white/50">Milestone Target</p>
           <p className="text-xl font-display font-bold tnum mt-0.5">{milestone.name}</p>
+          {milestone.isCustom && (
+            <>
+              <span className="inline-flex items-center rounded-md border border-white/[0.08] bg-white/[0.05] px-1.5 py-0.5 text-[9px] font-semibold text-white/60 mt-1.5">
+                {categoryPillText(milestone)}
+              </span>
+              <Sensitive>
+                <p className="text-[11px] text-muted-foreground tnum mt-1">
+                  Target: {inrCompact(milestone.targetAmount)}
+                  {milestone.itemCost !== undefined && ` · Cost: ${inrCompact(milestone.itemCost)}`}
+                </p>
+              </Sensitive>
+            </>
+          )}
         </div>
         <span
           className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${

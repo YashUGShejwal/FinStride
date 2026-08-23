@@ -199,10 +199,15 @@ export function milestoneProgress(currentNetWorth: number, targetAmount: number)
 
 /**
  * Solves for the exact month a target net worth is first hit, under the same
- * step-up monthly-compounding model as generateProjectionSeries. Inflation is
- * deliberately not a parameter here — a "₹1 Crore" milestone means a nominal
- * ₹1,00,00,000, matching how milestones are colloquially understood and kept
- * consistent regardless of the chart's inflation-adjustment toggle.
+ * step-up monthly-compounding model as generateProjectionSeries.
+ *
+ * Inflation is opt-in via `opts.inflationPercent` (default 0, i.e. solve
+ * against the nominal curve — a "₹1 Crore" milestone means a nominal
+ * ₹1,00,00,000). Pass the Wealth Hub's inflation rate here when
+ * `adjustForInflation` is on, so the ETA reflects "when does my REAL,
+ * purchasing-power-adjusted net worth cross this target" instead — always a
+ * later (or equal) month than the nominal-curve answer, since the real curve
+ * grows slower.
  *
  * Returns null if the target isn't reached within MAX_SOLVER_YEARS (e.g. a
  * 0% return with 0 contribution and a target above the current net worth).
@@ -213,7 +218,7 @@ export function calculateMilestoneETA(
   monthlyContribution: number,
   stepUpRate: number,
   cagr: number,
-  opts?: { startDate?: Date },
+  opts?: { startDate?: Date; inflationPercent?: number },
 ): MilestoneETAResult | null {
   const start = opts?.startDate ?? new Date();
 
@@ -222,13 +227,15 @@ export function calculateMilestoneETA(
   }
 
   const monthlyRate = monthlyRateFromAnnualPercent(cagr);
+  const inflationPercent = opts?.inflationPercent ?? 0;
   const maxMonths = MAX_SOLVER_YEARS * 12;
   let balance = currentNW;
 
   for (let m = 1; m <= maxMonths; m++) {
     const contribution = contributionForMonth(monthlyContribution, stepUpRate, m);
     balance = (balance + contribution) * (1 + monthlyRate);
-    if (balance >= targetAmount) {
+    const comparisonValue = toRealValue(balance, inflationPercent, m / 12);
+    if (comparisonValue >= targetAmount) {
       return {
         totalMonths: m,
         years: Math.floor(m / 12),
@@ -239,4 +246,23 @@ export function calculateMilestoneETA(
     }
   }
   return null;
+}
+
+/**
+ * Affordability multiplier engine — "how much net worth do I need before
+ * safely spending X on something, given it should never exceed Y% of my net
+ * worth." Both functions are pure algebra (multiplier = 100/allocationPercent
+ * exactly), split in two because the UI displays the multiplier independently
+ * of any specific item cost (e.g. on the modal's category pills).
+ */
+
+/** Required net worth so that `cost` is exactly `allocationPercent`% of it: cost / (allocationPercent/100). */
+export function calculateRequiredNetWorth(cost: number, allocationPercent: number): number {
+  if (!(allocationPercent > 0)) return Infinity;
+  return cost / (allocationPercent / 100);
+}
+
+/** The "buffer" multiplier implied by a given allocation cap, e.g. 20% -> 5.0x. */
+export function affordabilityMultiplier(allocationPercent: number): number {
+  return allocationPercent > 0 ? 100 / allocationPercent : Infinity;
 }
