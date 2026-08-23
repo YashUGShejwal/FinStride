@@ -59,7 +59,7 @@ const TOTAL_DAYS = WEEKS * 7;
 // the Tailwind classes below) because anchorFor's math depends on them
 // exactly matching the rendered size. If the cell/gap classes below ever
 // change, these numbers need to change with them.
-const CELL_PX = 16; // w-4 / h-4
+const CELL_PX = 18; // w-[18px] / h-[18px]
 const GAP_PX = 6; // gap-1.5
 const PITCH_PX = CELL_PX + GAP_PX;
 const GRID_WIDTH_PX = WEEKS * CELL_PX + (WEEKS - 1) * GAP_PX;
@@ -246,7 +246,7 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
             or on any ancestor — see the vertical-anchoring doc comment above
             for why the scroller's own padding, not this box, is what keeps
             tooltips from being clipped. */}
-        <div className="lg:col-span-7 relative flex flex-col items-center lg:items-start justify-center rounded-2xl border border-white/[0.08] bg-white/[0.015] p-4 shadow-lg">
+        <div className="lg:col-span-8 relative flex justify-center items-center w-full rounded-2xl border border-white/[0.08] bg-white/[0.015] p-4 shadow-lg">
           <div
             className="overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             style={{ paddingTop: SCROLLER_PAD_TOP_PX, paddingBottom: SCROLLER_PAD_BOTTOM_PX }}
@@ -260,7 +260,7 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
                 return (
                   <div
                     key={wi}
-                    className="w-4 h-4 shrink-0 text-xs font-medium text-white/75"
+                    className="w-[18px] h-[18px] shrink-0 text-xs font-medium text-white/75"
                   >
                     {label}
                   </div>
@@ -275,7 +275,7 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
                 {WEEKDAY_LABELS.map((label, i) => (
                   <div
                     key={i}
-                    className="w-4 h-4 flex items-center text-[11px] font-semibold uppercase tracking-wide text-white/60"
+                    className="w-[18px] h-[18px] flex items-center text-[11px] font-semibold uppercase tracking-wide text-white/60"
                   >
                     {label}
                   </div>
@@ -300,7 +300,7 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
                       return (
                         <div key={day.key} className="relative group">
                           <div
-                            className={`w-4 h-4 rounded-[3px] transition-all duration-150 cursor-pointer hover:scale-130 hover:z-20 ${
+                            className={`w-[18px] h-[18px] rounded-[4px] transition-all duration-150 cursor-pointer hover:scale-130 hover:z-20 ${
                               color
                                 ? glow
                                 : "bg-white/[0.025] border border-white/[0.04] hover:bg-white/[0.08] hover:border-white/20"
@@ -344,7 +344,7 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
         </div>
 
         {/* Right: 2x2 stat grid, height-matched to the left box via items-stretch above. */}
-        <div className="lg:col-span-5 grid grid-cols-2 gap-3 h-full">
+        <div className="lg:col-span-4 grid grid-cols-2 gap-3 h-full">
           <HeatmapStat
             label="Streak"
             value={grid.streak > 0 ? `${grid.streak} day${grid.streak !== 1 ? "s" : ""}` : "—"}
@@ -402,7 +402,7 @@ function HeatmapStat({
       : "";
   const val = (
     <span
-      className={`text-xl lg:text-2xl font-display font-bold tnum ${cyanGradient || tone || ""} ${
+      className={`text-lg lg:text-xl font-display font-bold tnum ${cyanGradient || tone || ""} ${
         glow === "emerald"
           ? "drop-shadow-[0_0_8px_oklch(0.72_0.18_155_/_0.4)]"
           : glow === "rose"
@@ -415,7 +415,7 @@ function HeatmapStat({
   );
   return (
     <div
-      className={`relative h-full flex flex-col justify-center overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.015] p-4 hover:border-white/20 transition-colors ${GLOW_BACKDROP[glow]}`}
+      className={`relative h-full flex flex-col justify-center overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.015] p-3 hover:border-white/20 transition-colors ${GLOW_BACKDROP[glow]}`}
     >
       <p className="relative text-[11px] font-semibold uppercase tracking-wider text-white/60">{label}</p>
       <p className="relative mt-0.5">{sensitive ? <Sensitive>{val}</Sensitive> : val}</p>
