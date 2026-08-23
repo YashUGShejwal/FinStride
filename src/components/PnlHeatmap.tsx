@@ -1,7 +1,7 @@
 /**
  * GitHub-style daily P&L activity heatmap — one cell per calendar day over
- * the last 14 weeks, colored by that day's aggregated realized P&L from
- * closed trades.
+ * the last 26 weeks (~6 months), colored by that day's aggregated realized
+ * P&L from closed trades.
  *
  * Renders nothing until mounted. The grid's layout is anchored on "today",
  * which can differ between server and client render (different clocks) —
@@ -17,41 +17,68 @@
  * PNL_EMERALD/PNL_ROSE's hues (155, 25) and --accent's cyan (195) from
  * styles.css — rather than Tailwind's stock emerald-400/rose-400/cyan-400.
  * Both technically work in this project (verified directly against the
- * compiled CSS output before writing this), but every other emerald/rose
- * accent in the app — the ribbon above this component, the closed-trade
- * cards, the exit-reason badges — uses the custom oklch scale, and Tailwind's
- * stock colors render a visibly different exact hue. Introducing a second,
- * slightly-off "emerald" into the same page would look inconsistent even
- * though it would technically render.
+ * compiled CSS output), but every other emerald/rose accent in the app — the
+ * ribbon above this component, the closed-trade cards, the exit-reason
+ * badges — uses the custom oklch scale, and Tailwind's stock colors render a
+ * visibly different exact hue. Introducing a second, slightly-off "emerald"
+ * into the same page would look inconsistent even though it would
+ * technically render.
  *
- * TOOLTIP ANCHORING: the previous version hand-derived a fixed left/right
- * split point for a specific tile size and tooltip width, which broke the
- * moment either changed (a real bug from an earlier pass — a tooltip wider
- * than several grid columns, centered, was overflowing the horizontal
- * scroll container and toggling a scrollbar on hover). `anchorFor` below
- * replaces that with a general formula computed from the actual pixel
- * dimensions, so it stays correct across future size tweaks instead of
- * needing to be re-derived by hand every time.
+ * HORIZONTAL TOOLTIP ANCHORING: `anchorFor` computes, from actual pixel
+ * geometry, which edge of a cell's own box a same-axis tooltip should extend
+ * from so it never crosses the grid's own [0, total] span — replacing an
+ * earlier hand-derived split point that broke the moment tile/gap/tooltip
+ * sizes changed (a real bug from an earlier pass: a tooltip wider than
+ * several grid columns, centered, was overflowing the horizontal scroll
+ * container and toggling a scrollbar on hover). Still used for the
+ * horizontal axis below.
+ *
+ * VERTICAL TOOLTIP ANCHORING: the vertical axis instead uses a fixed split —
+ * the top 3 rows (Sun/Mon/Tue) render their tooltip below the cell, the
+ * bottom 4 (Wed-Sat) render above. Because that's a fixed rule rather than a
+ * per-row fit check, some rows extend past the grid's own top/bottom edge
+ * (e.g. row 3, the first "above" row, needs more headroom than 3 row-pitches
+ * provide). The scroller wrapping the grid needs `overflow-x-auto` for
+ * narrow viewports, and per the CSS overflow spec, giving one axis a
+ * non-`visible` value forces the other axis's computed `visible` to become
+ * `auto` too — so without reserving that overflow inside the scroller's own
+ * content box, it would be silently clipped exactly like the original
+ * horizontal bug above. SCROLLER_PAD_TOP_PX/SCROLLER_PAD_BOTTOM_PX reserve
+ * exactly that much room, derived from the same geometry constants so they
+ * self-correct if cell/gap/tooltip sizes change again.
  */
 import { useEffect, useMemo, useState } from "react";
 import { useStore, type Trade } from "@/lib/store";
 import { inr, fmtDate, todayLocalISO } from "@/lib/format";
 import { Sensitive } from "@/components/Sensitive";
 
-const WEEKS = 14;
+const WEEKS = 26;
 const TOTAL_DAYS = WEEKS * 7;
 
 // Pixel geometry of the grid — kept as named constants (not re-derived from
 // the Tailwind classes below) because anchorFor's math depends on them
 // exactly matching the rendered size. If the cell/gap classes below ever
-// change, these three numbers need to change with them.
+// change, these numbers need to change with them.
 const CELL_PX = 14; // w-3.5 / h-3.5
-const GAP_PX = 3.5; // gap-[3.5px]
+const GAP_PX = 4; // gap-1
 const PITCH_PX = CELL_PX + GAP_PX;
 const GRID_WIDTH_PX = WEEKS * CELL_PX + (WEEKS - 1) * GAP_PX;
 const GRID_HEIGHT_PX = 7 * CELL_PX + 6 * GAP_PX;
-const TOOLTIP_WIDTH_PX = 130;
+const TOOLTIP_WIDTH_PX = 140;
 const TOOLTIP_HEIGHT_PX = 84; // header line + large P&L line + footer pill, generously rounded up
+const TOOLTIP_GAP_PX = 10; // mt-2.5 / mb-2.5
+
+const BELOW_ROWS = [0, 1, 2]; // Sun, Mon, Tue -> tooltip renders below the cell
+const ABOVE_ROWS = [3, 4, 5, 6]; // Wed, Thu, Fri, Sat -> tooltip renders above the cell
+
+const SCROLLER_PAD_TOP_PX = Math.max(
+  0,
+  ...ABOVE_ROWS.map((row) => TOOLTIP_GAP_PX + TOOLTIP_HEIGHT_PX - row * PITCH_PX),
+);
+const SCROLLER_PAD_BOTTOM_PX = Math.max(
+  0,
+  ...BELOW_ROWS.map((row) => row * PITCH_PX + CELL_PX + TOOLTIP_GAP_PX + TOOLTIP_HEIGHT_PX - GRID_HEIGHT_PX),
+);
 
 type DayBucket = {
   key: string;
@@ -83,6 +110,8 @@ const EMERALD_TEXT = "text-[oklch(0.78_0.16_155)]";
 const ROSE_TEXT = "text-[oklch(0.78_0.18_25)]";
 const EMERALD_GLOW = "shadow-[0_0_10px_oklch(0.72_0.18_155_/_0.35)] ring-1 ring-[oklch(0.72_0.18_155_/_0.4)]";
 const ROSE_GLOW = "shadow-[0_0_10px_oklch(0.7_0.2_25_/_0.35)] ring-1 ring-[oklch(0.7_0.2_25_/_0.4)]";
+const TOOLTIP_SHADOW_WIN = "shadow-[0_0_20px_rgba(0,0,0,0.8),0_0_16px_oklch(0.72_0.18_155_/_0.25)]";
+const TOOLTIP_SHADOW_LOSS = "shadow-[0_0_20px_rgba(0,0,0,0.8),0_0_16px_oklch(0.7_0.2_25_/_0.25)]";
 const WEEKDAY_LABELS = ["", "M", "", "W", "", "F", ""];
 
 function cellColor(netPnl: number, maxAbs: number): string | undefined {
@@ -107,11 +136,12 @@ function utcDayOfWeek(key: string): number {
 const signed = (n: number) => `${n >= 0 ? "+" : ""}${inr(n)}`;
 
 /**
- * Which edge of a cell's own bounding box a tooltip of the given size should
- * anchor to, so that (as long as `size` and `count` above match the
- * rendered CSS) it never extends past the grid's own [0, total] span on
- * that axis — see the file doc comment for why this replaced a hand-picked
- * threshold. `index` is the cell's position along the axis (column or row).
+ * Which edge of a cell's own bounding box a same-axis tooltip of the given
+ * size should anchor to, so that (as long as `size`/`count` match the
+ * rendered CSS) it never extends past the grid's own [0, total] span on that
+ * axis — see the file doc comment for why this replaced a hand-picked
+ * threshold. `index` is the cell's position along the axis (column here;
+ * the row axis uses a fixed split instead, see BELOW_ROWS/ABOVE_ROWS).
  */
 function anchorFor(
   index: number,
@@ -210,13 +240,18 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
 
   return (
     <section className="glass rounded-2xl p-5">
-      <h2 className="font-display font-semibold tracking-tight mb-4">Trading Activity</h2>
-      <div className="flex flex-col lg:flex-row lg:items-start gap-5">
-        {/* Left: header already above, grid below — sized to occupy ~55-60%
-            of the row so it never has to fight the stat grid for space. */}
-        <div className="lg:w-[58%] min-w-0 flex flex-col items-center lg:items-start justify-center">
-          <div className="overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <div className="flex gap-[3.5px] mb-1">
+      <h2 className="font-display font-semibold tracking-tight mb-4">Trading Activity &amp; Performance</h2>
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
+        {/* Left: dedicated glass box for the heatmap. No overflow-hidden here
+            or on any ancestor — see the vertical-anchoring doc comment above
+            for why the scroller's own padding, not this box, is what keeps
+            tooltips from being clipped. */}
+        <div className="lg:col-span-7 relative flex flex-col items-center lg:items-start justify-center rounded-2xl border border-white/[0.08] bg-white/[0.015] p-5 shadow-lg">
+          <div
+            className="overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            style={{ paddingTop: SCROLLER_PAD_TOP_PX, paddingBottom: SCROLLER_PAD_BOTTOM_PX }}
+          >
+            <div className="flex gap-1 mb-1">
               <div className="w-5 shrink-0" />
               {grid.weeks.map((week, wi) => {
                 const month = week[0].key.slice(0, 7);
@@ -232,11 +267,11 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
                 );
               })}
             </div>
-            <div className="flex gap-[3.5px]">
+            <div className="flex gap-1">
               {/* Weekday labels — only every other one (M/W/F), matching the
                   understated GitHub/fintech convention rather than labeling
                   all 7 rows. */}
-              <div className="flex flex-col gap-[3.5px] w-5 shrink-0">
+              <div className="flex flex-col gap-1 w-5 shrink-0">
                 {WEEKDAY_LABELS.map((label, i) => (
                   <div
                     key={i}
@@ -250,12 +285,11 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
                 const hAnchor = anchorFor(wi, GRID_WIDTH_PX, TOOLTIP_WIDTH_PX);
                 const hAlign = hAnchor === "start" ? "left-0" : "right-0";
                 return (
-                  <div key={wi} className="flex flex-col gap-[3.5px]">
+                  <div key={wi} className="flex flex-col gap-1">
                     {week.map((day, di) => {
                       const color = day.bucket ? cellColor(day.bucket.netPnl, grid.maxAbs) : undefined;
                       const isToday = day.key === todayKey;
-                      const vAnchor = anchorFor(di, GRID_HEIGHT_PX, TOOLTIP_HEIGHT_PX);
-                      const vAlign = vAnchor === "start" ? "top-full mt-1.5" : "bottom-full mb-1.5";
+                      const vAlign = BELOW_ROWS.includes(di) ? "top-full mt-2.5" : "bottom-full mb-2.5";
                       const glow = !day.bucket
                         ? ""
                         : day.bucket.netPnl > 0
@@ -275,10 +309,8 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
                           />
                           {day.bucket && (
                             <div
-                              className={`pointer-events-none absolute z-50 hidden group-hover:flex flex-col gap-1 ${vAlign} ${hAlign} min-w-[130px] w-max max-w-[130px] rounded-xl border border-white/15 bg-[#060913]/95 backdrop-blur-2xl px-2.5 py-2 shadow-2xl ${
-                                day.bucket.netPnl >= 0
-                                  ? "shadow-[0_0_16px_oklch(0.72_0.18_155_/_0.25)]"
-                                  : "shadow-[0_0_16px_oklch(0.7_0.2_25_/_0.25)]"
+                              className={`pointer-events-none absolute z-50 hidden group-hover:flex flex-col gap-1 ${vAlign} ${hAlign} min-w-[140px] w-max max-w-[140px] rounded-xl border border-white/15 bg-[#060913]/95 backdrop-blur-2xl p-2.5 ${
+                                day.bucket.netPnl >= 0 ? TOOLTIP_SHADOW_WIN : TOOLTIP_SHADOW_LOSS
                               }`}
                             >
                               <span className="text-[10px] text-white/50 font-medium tracking-wide whitespace-nowrap">
@@ -311,8 +343,8 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
           </div>
         </div>
 
-        {/* Right: 2x2 stat grid, ~40-45% of the row. */}
-        <div className="lg:w-[42%] grid grid-cols-2 gap-2">
+        {/* Right: 2x2 stat grid, height-matched to the left box via items-stretch above. */}
+        <div className="lg:col-span-5 grid grid-cols-2 gap-3 h-full">
           <HeatmapStat
             label="Streak"
             value={grid.streak > 0 ? `${grid.streak} day${grid.streak !== 1 ? "s" : ""}` : "—"}
@@ -383,7 +415,7 @@ function HeatmapStat({
   );
   return (
     <div
-      className={`relative overflow-hidden rounded-xl border border-white/[0.08] bg-white/[0.02] px-3 py-2.5 hover:border-white/20 transition-colors ${GLOW_BACKDROP[glow]}`}
+      className={`relative h-full flex flex-col justify-center overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.015] p-4 hover:border-white/20 transition-colors ${GLOW_BACKDROP[glow]}`}
     >
       <p className="relative text-[9px] uppercase tracking-wider text-muted-foreground">{label}</p>
       <p className="relative mt-0.5">{sensitive ? <Sensitive>{val}</Sensitive> : val}</p>
