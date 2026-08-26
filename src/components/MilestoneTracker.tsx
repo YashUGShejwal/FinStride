@@ -132,7 +132,7 @@ export function MilestoneTracker() {
           <Target className="size-4 text-muted-foreground" />
           <h2 className="font-display font-semibold tracking-tight">Milestone Velocity Tracker</h2>
         </div>
-        <Button variant="ghost" size="sm" onClick={openAdd}>
+        <Button data-tour="add-milestone-btn" variant="ghost" size="sm" onClick={openAdd}>
           <Plus className="size-3.5" />
           Add Milestone
         </Button>

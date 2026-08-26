@@ -230,7 +230,7 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
   // to show either way, there's nothing to announce as hidden.
   if (isStealthMode) {
     return (
-      <section className="glass rounded-2xl p-5 flex items-center justify-center text-center">
+      <section data-tour="pnl-heatmap" className="glass rounded-2xl p-5 flex items-center justify-center text-center">
         <p className="text-sm text-muted-foreground">
           🔒 Trading Activity Heatmap hidden in Stealth Mode
         </p>
@@ -239,7 +239,7 @@ export function PnlHeatmap({ trades }: { trades: Trade[] }) {
   }
 
   return (
-    <section className="glass rounded-2xl p-5">
+    <section data-tour="pnl-heatmap" className="glass rounded-2xl p-5">
       <h2 className="font-display font-semibold tracking-tight mb-4">Trading Activity &amp; Performance</h2>
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
         {/* Left: dedicated glass box for the heatmap. No overflow-hidden here

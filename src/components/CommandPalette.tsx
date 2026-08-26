@@ -23,7 +23,7 @@ export function CommandPalette({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Opens AppTourModal — owned by the authenticated layout, same as onOpenChange. */
+  /** Opens InteractiveTour — owned by the authenticated layout, same as onOpenChange. */
   onOpenTour: () => void;
 }) {
   const nav = useNavigate();

@@ -759,7 +759,7 @@ const SHOW_PERSONAL_QUOTES_KEY = "finstride.quotes.showPersonal";
 // view. Unlike showPersonalQuotes, this carries no owner-PIN gate — it's a
 // plain trading preference, not something that needs device-level unlocking.
 const ENABLE_FNO_TRACKING_KEY = "finstride.fno.enabled";
-// AppTourModal completion flag (Track 5) — cloud-synced like every other
+// InteractiveTour completion flag (Track 5) — cloud-synced like every other
 // settings field above, unlike ONBOARDING_KEY below which stays local-only.
 const HAS_COMPLETED_TOUR_KEY = "finstride.tour.completed";
 

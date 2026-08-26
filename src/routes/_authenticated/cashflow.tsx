@@ -398,7 +398,7 @@ function LedgerSection({ openFormSignal }: { openFormSignal: boolean }) {
       {/* Running totals — spring counters roll up as entries land. Labeled
           "all time" because the search box below only filters the table.
           Single column on phones: mono lakh-scale amounts don't fit thirds. */}
-      <section className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <section data-tour="cashflow-summary" className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <SpotlightCard className="rounded-xl p-4">
           <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Income · all time</p>
           <p className="text-lg font-semibold mt-1 tnum text-[oklch(0.78_0.16_155)]">

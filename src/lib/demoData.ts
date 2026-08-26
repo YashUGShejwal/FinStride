@@ -1,6 +1,6 @@
 /**
  * Demo Sandbox data seeder (Track 5) — a realistic, hand-curated snapshot
- * spanning all 5 hubs, used by AppTourModal's "Load Demo Sandbox" action and
+ * spanning all 5 hubs, used by InteractiveTour's auto-sandbox activation and
  * StoreProvider's loadDemoData()/exitSandboxMode().
  *
  * Every id/date is generated FRESH on each call (ids are stable strings —
@@ -258,7 +258,7 @@ function demoMilestones(): Milestone[] {
   ];
 }
 
-/** The full mock bundle AppTourModal's "Load Demo Sandbox" injects into the store. */
+/** The full mock bundle InteractiveTour's auto-sandbox activation injects into the store. */
 export function getDemoSnapshot(): DemoSnapshot {
   return {
     transactions: demoTransactions(),

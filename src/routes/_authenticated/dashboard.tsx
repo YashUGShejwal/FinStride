@@ -39,7 +39,7 @@ function Dashboard() {
       </header>
 
       {/* KPI Cards */}
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <section data-tour="networth-hero" className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <KpiCard
           tone="primary"
           icon={<Wallet className="size-5" />}

@@ -10,9 +10,9 @@ import { useStore } from "@/lib/store";
 import { inr } from "@/lib/format";
 import { useModKeyLabel } from "@/lib/platform";
 import { cn } from "@/lib/utils";
-import { AppTourModal } from "@/components/AppTourModal";
 import { CommandPalette } from "@/components/CommandPalette";
 import { HotkeysModal } from "@/components/HotkeysModal";
+import { InteractiveTour } from "@/components/InteractiveTour";
 import { Logo } from "@/components/Logo";
 import { OnboardingWizard } from "@/components/OnboardingWizard";
 import { Sensitive } from "@/components/Sensitive";
@@ -372,7 +372,7 @@ function WorkstationShell() {
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} onOpenTour={() => setTourOpen(true)} />
       <HotkeysModal open={hotkeysOpen} onOpenChange={setHotkeysOpen} />
       <OnboardingWizard />
-      <AppTourModal open={tourOpen} onOpenChange={setTourOpen} />
+      <InteractiveTour open={tourOpen} onOpenChange={setTourOpen} />
     </div>
   );
 }

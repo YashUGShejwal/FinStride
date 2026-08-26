@@ -55,7 +55,7 @@ function WealthPage() {
       </header>
 
       {/* Scenario presets + quick parameter sliders */}
-      <section className="rounded-2xl border border-white/[0.08] bg-white/[0.015] p-5 space-y-5">
+      <section data-tour="wealth-controls" className="rounded-2xl border border-white/[0.08] bg-white/[0.015] p-5 space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs uppercase tracking-wider text-muted-foreground">Return Scenario</p>
           <div className="inline-flex items-center gap-1 rounded-lg border border-glass-border p-1">
