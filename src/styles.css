@@ -215,6 +215,18 @@
       box-shadow: 0 0 0 1px oklch(0.78 0.15 165 / 0.4), 0 0 24px -6px oklch(0.78 0.15 165 / 0.45);
     }
   }
+
+  /* Rejection feedback for a failed form-submit attempt (MilestoneModal).
+     One-shot, like .glow-ripple — the component toggles the class off after
+     SHAKE_DURATION_MS so it can replay on the next failed attempt. */
+  .shake-error {
+    animation: modal-shake 500ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .shake-error {
+      animation: none;
+    }
+  }
 }
 
 @keyframes prestige-pulse {
@@ -224,6 +236,20 @@
   50% {
     box-shadow: 0 0 0 1.5px oklch(0.78 0.15 165 / 0.55), 0 0 34px -6px oklch(0.78 0.15 165 / 0.6);
   }
+}
+
+/* DialogContent is already centered via translate-x-[-50%] translate-y-[-50%]
+   (see ui/dialog.tsx) — every step below re-states that base translate before
+   adding the shake's own translateX, since a CSS animation's transform
+   REPLACES the element's static transform for its duration rather than
+   composing with it. Omitting this would make the dialog jump off-center
+   for the animation's 500ms instead of shaking in place. */
+@keyframes modal-shake {
+  0%, 100% { transform: translate(-50%, -50%) translateX(0); }
+  10%, 90% { transform: translate(-50%, -50%) translateX(-1px); }
+  20%, 80% { transform: translate(-50%, -50%) translateX(2px); }
+  30%, 50%, 70% { transform: translate(-50%, -50%) translateX(-4px); }
+  40%, 60% { transform: translate(-50%, -50%) translateX(4px); }
 }
 
 /* var(--shadow-card) rides along in both frames: keyframe values replace the

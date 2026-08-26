@@ -19,6 +19,12 @@ import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const DP_PERCENT_PRESETS = [10, 20, 25, 50] as const;
+/** How long .shake-error's keyframe animation runs — kept in sync with styles.css. */
+const SHAKE_DURATION_MS = 500;
+
+const AMOUNT_REQUIRED_MSG = "Please enter an amount greater than ₹0";
+
+type TouchedField = "name" | "amount" | "totalAssetCost" | "downpayment";
 
 /** e.g. "Default 50% NW · 2.0× Multiplier" / "Direct 100% NW Target" for the net-worth pill. */
 function pillSubtitle(type: MilestoneTargetType): string {
@@ -58,6 +64,14 @@ export function MilestoneModal({
   const [totalAssetCost, setTotalAssetCost] = useState("");
   const [downpaymentAmount, setDownpaymentAmount] = useState("");
 
+  // Validation feedback: a field's error only SHOWS once it's been touched
+  // (blurred) or a save attempt has already failed — never on first paint,
+  // so a fresh "Add milestone" dialog doesn't greet the user with red fields.
+  const [touched, setTouched] = useState<Partial<Record<TouchedField, boolean>>>({});
+  const [attemptedSubmit, setAttemptedSubmit] = useState(false);
+  const [isShaking, setIsShaking] = useState(false);
+  const markTouched = (field: TouchedField) => setTouched((t) => ({ ...t, [field]: true }));
+
   // Re-seed whenever a DIFFERENT milestone is loaded for editing, or the
   // dialog re-opens in add-mode — same convention as EditTradeModal.
   useEffect(() => {
@@ -65,6 +79,8 @@ export function MilestoneModal({
     const type = milestone?.targetType ?? "net_worth";
     setTargetType(type);
     setName(milestone?.name ?? "");
+    setTouched({});
+    setAttemptedSubmit(false);
     const financedExisting = type !== "net_worth" && milestone?.isFinanced === true;
     setIsFinanced(financedExisting);
     if (!milestone || type === "net_worth") {
@@ -96,6 +112,7 @@ export function MilestoneModal({
     setIsFinanced(false);
     setTotalAssetCost("");
     setDownpaymentAmount("");
+    setTouched({});
   };
 
   const isAffordability = targetType !== "net_worth";
@@ -109,21 +126,35 @@ export function MilestoneModal({
   const effectiveCost = financed ? downpaymentNum : amountNum;
   const requiredNetWorth = isAffordability ? calculateRequiredNetWorth(effectiveCost, allocationPercent) : amountNum;
   const multiplier = affordabilityMultiplier(allocationPercent);
-  const isValid =
-    name.trim() !== "" &&
-    (financed
-      ? totalAssetCostNum > 0 && downpaymentNum > 0 && downpaymentNum <= totalAssetCostNum
-      : amountNum > 0);
+
+  // Per-field error messages — null when that field is currently valid.
+  const nameError = name.trim() === "" ? "Milestone name is required" : null;
+  const amountError = !financed && !(amountNum > 0) ? AMOUNT_REQUIRED_MSG : null;
+  const totalAssetCostError = financed && !(totalAssetCostNum > 0) ? AMOUNT_REQUIRED_MSG : null;
+  const downpaymentError = financed
+    ? !(downpaymentNum > 0)
+      ? AMOUNT_REQUIRED_MSG
+      : downpaymentNum > totalAssetCostNum
+        ? "Down payment cannot exceed total asset cost"
+        : null
+    : null;
+  const firstError = nameError ?? totalAssetCostError ?? downpaymentError ?? amountError;
+
+  // A field's error only renders once touched or a submit has been attempted.
+  const showError = (field: TouchedField, error: string | null) =>
+    (touched[field] || attemptedSubmit) && error ? error : null;
+  const errorInputClass = "border-red-500/50 bg-red-500/[0.04]";
+
+  const triggerShake = () => {
+    setIsShaking(true);
+    setTimeout(() => setIsShaking(false), SHAKE_DURATION_MS);
+  };
 
   const handleSave = () => {
-    if (!isValid) {
-      toast.error(
-        financed
-          ? "Give the goal a name, an asset cost, and a down payment (≤ asset cost) above ₹0"
-          : isAffordability
-            ? "Give the goal a name and an item cost above ₹0"
-            : "Give the milestone a name and a target amount above ₹0",
-      );
+    setAttemptedSubmit(true);
+    if (firstError) {
+      toast.error(firstError);
+      triggerShake();
       return;
     }
     const payload: MilestoneInput = {
@@ -152,7 +183,12 @@ export function MilestoneModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-[#060913]/95 border border-white/10 backdrop-blur-2xl sm:max-w-md">
+      <DialogContent
+        className={cn(
+          "bg-[#060913]/95 border border-white/10 backdrop-blur-2xl sm:max-w-md",
+          isShaking && "shake-error",
+        )}
+      >
         <DialogHeader>
           <DialogTitle className="font-display tracking-tight">
             {milestone ? "Edit milestone" : "Add milestone"}
@@ -170,10 +206,14 @@ export function MilestoneModal({
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
+              onBlur={() => markTouched("name")}
               placeholder="House Downpayment, Early Retirement, Dream Car…"
-              className="mt-1.5 bg-input/40 border-white/10"
+              className={cn("mt-1.5 bg-input/40 border-white/10", showError("name", nameError) && errorInputClass)}
               autoFocus
             />
+            {showError("name", nameError) && (
+              <p className="text-xs text-red-400 mt-1.5">{showError("name", nameError)}</p>
+            )}
           </div>
 
           <div>
@@ -223,6 +263,7 @@ export function MilestoneModal({
                   setAmount("");
                   setTotalAssetCost("");
                   setDownpaymentAmount("");
+                  setTouched({});
                 }}
               />
             </div>
@@ -239,13 +280,20 @@ export function MilestoneModal({
                   inputMode="decimal"
                   value={totalAssetCost}
                   onChange={(e) => setTotalAssetCost(e.target.value)}
+                  onBlur={() => markTouched("totalAssetCost")}
                   placeholder="2500000"
-                  className="mt-1.5 bg-input/40 border-white/10 tnum"
+                  className={cn(
+                    "mt-1.5 bg-input/40 border-white/10 tnum",
+                    showError("totalAssetCost", totalAssetCostError) && errorInputClass,
+                  )}
                 />
                 {totalAssetCostNum > 0 && (
                   <p className="text-xs text-muted-foreground mt-1.5 tnum">
                     {inr(totalAssetCostNum)} · ≈ {inrCompact(totalAssetCostNum)}
                   </p>
+                )}
+                {showError("totalAssetCost", totalAssetCostError) && (
+                  <p className="text-xs text-red-400 mt-1.5">{showError("totalAssetCost", totalAssetCostError)}</p>
                 )}
               </div>
               <div>
@@ -257,8 +305,12 @@ export function MilestoneModal({
                   inputMode="decimal"
                   value={downpaymentAmount}
                   onChange={(e) => setDownpaymentAmount(e.target.value)}
+                  onBlur={() => markTouched("downpayment")}
                   placeholder="500000"
-                  className="mt-1.5 bg-input/40 border-white/10 tnum"
+                  className={cn(
+                    "mt-1.5 bg-input/40 border-white/10 tnum",
+                    showError("downpayment", downpaymentError) && errorInputClass,
+                  )}
                 />
                 <div className="flex gap-1.5 mt-2">
                   {DP_PERCENT_PRESETS.map((pct) => (
@@ -266,20 +318,23 @@ export function MilestoneModal({
                       key={pct}
                       type="button"
                       disabled={!(totalAssetCostNum > 0)}
-                      onClick={() => setDownpaymentAmount(String(Math.round(totalAssetCostNum * (pct / 100))))}
+                      onClick={() => {
+                        setDownpaymentAmount(String(Math.round(totalAssetCostNum * (pct / 100))));
+                        markTouched("downpayment");
+                      }}
                       className="rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:border-white/25 transition-colors disabled:opacity-40 disabled:pointer-events-none"
                     >
                       {pct}%
                     </button>
                   ))}
                 </div>
-                {downpaymentNum > 0 && (
+                {downpaymentNum > 0 && !downpaymentError && (
                   <p className="text-xs text-muted-foreground mt-1.5 tnum">
                     {inr(downpaymentNum)} · ≈ {inrCompact(downpaymentNum)}
                   </p>
                 )}
-                {totalAssetCostNum > 0 && downpaymentNum > totalAssetCostNum && (
-                  <p className="text-xs text-destructive mt-1.5">Down payment can't exceed the asset cost.</p>
+                {showError("downpayment", downpaymentError) && (
+                  <p className="text-xs text-red-400 mt-1.5">{showError("downpayment", downpaymentError)}</p>
                 )}
               </div>
             </>
@@ -293,13 +348,20 @@ export function MilestoneModal({
                 inputMode="decimal"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
+                onBlur={() => markTouched("amount")}
                 placeholder="4000000"
-                className="mt-1.5 bg-input/40 border-white/10 tnum"
+                className={cn(
+                  "mt-1.5 bg-input/40 border-white/10 tnum",
+                  showError("amount", amountError) && errorInputClass,
+                )}
               />
               {amountNum > 0 && !isAffordability && (
                 <p className="text-xs text-muted-foreground mt-1.5 tnum">
                   {inr(amountNum)} · ≈ {inrCompact(amountNum)}
                 </p>
+              )}
+              {showError("amount", amountError) && (
+                <p className="text-xs text-red-400 mt-1.5">{showError("amount", amountError)}</p>
               )}
             </div>
           )}
@@ -362,7 +424,6 @@ export function MilestoneModal({
           <Button
             type="button"
             onClick={handleSave}
-            disabled={!isValid}
             className="gradient-primary text-primary-foreground border-0 gap-2 glow"
           >
             {milestone ? "Save changes" : "Add milestone"}

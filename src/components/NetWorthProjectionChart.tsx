@@ -198,6 +198,20 @@ export function NetWorthProjectionChart() {
   );
 }
 
+/**
+ * Text-size tier for a KPI value, chosen from the FINAL formatted string's
+ * length rather than whatever framer-motion's count-up animation is showing
+ * mid-flight — sizing off the animated value would make the font visibly
+ * resize on every tick as digits appear/disappear. inr()'s output is what
+ * ultimately renders, so its length is what decides the tier; AnimatedNumber
+ * only owns the glyphs, never the size.
+ */
+function summarySizeClass(formattedLength: number): string {
+  if (formattedLength <= 9) return "text-2xl sm:text-3xl";
+  if (formattedLength <= 12) return "text-xl sm:text-2xl";
+  return "text-lg sm:text-xl leading-snug";
+}
+
 function SummaryStat({
   label,
   value,
@@ -208,10 +222,11 @@ function SummaryStat({
   /** The headline card driven by the "Headline in real terms" toggle — bigger, bolder, glowing emerald. */
   primary?: boolean;
 }) {
+  const sizeClass = summarySizeClass(inr(value).length);
   return (
     <div
       className={cn(
-        "rounded-xl border p-4 sm:p-5 min-h-[105px] flex flex-col justify-center",
+        "rounded-xl border p-4 sm:p-5 min-h-[105px] min-w-0 overflow-hidden flex flex-col justify-center",
         primary
           ? "border-primary/30 bg-primary/[0.06] shadow-[0_0_24px_-10px_oklch(0.78_0.15_165_/_0.5)]"
           : "border-white/[0.08] bg-white/[0.02]",
@@ -221,9 +236,10 @@ function SummaryStat({
       <p
         className={cn(
           "tnum",
+          sizeClass,
           primary
-            ? "text-2xl sm:text-3xl font-display font-bold tracking-tight text-emerald-400 drop-shadow-[0_0_10px_rgba(16,185,129,0.35)]"
-            : "text-xl sm:text-2xl font-display font-semibold text-white/90",
+            ? "font-display font-bold tracking-tight text-emerald-400 drop-shadow-[0_0_10px_rgba(16,185,129,0.35)]"
+            : "font-display font-semibold text-white/90",
         )}
       >
         <Sensitive>
