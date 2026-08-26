@@ -2,14 +2,15 @@ import { createFileRoute, Link, Outlet, redirect, useNavigate, useRouterState } 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
-  Bell, Command as CommandIcon, Eye, EyeOff, LayoutDashboard, LogOut,
-  PieChart, Rocket, Settings, TrendingUp, User, Wallet, WifiOff,
+  Bell, Command as CommandIcon, Eye, EyeOff, HelpCircle, LayoutDashboard, LogOut,
+  PieChart, Rocket, Settings, Sparkles, TrendingUp, User, Wallet, WifiOff,
 } from "lucide-react";
 import { getStoredAuthUser, useAuth } from "@/lib/auth";
 import { useStore } from "@/lib/store";
 import { inr } from "@/lib/format";
 import { useModKeyLabel } from "@/lib/platform";
 import { cn } from "@/lib/utils";
+import { AppTourModal } from "@/components/AppTourModal";
 import { CommandPalette } from "@/components/CommandPalette";
 import { HotkeysModal } from "@/components/HotkeysModal";
 import { Logo } from "@/components/Logo";
@@ -116,9 +117,21 @@ function WorkstationShell() {
   const path = useRouterState({ select: (s) => s.location.pathname });
   const nav = useNavigate();
   const { user, signOut } = useAuth();
-  const { isStealthMode, toggleStealthMode, isOffline } = useStore();
+  const {
+    isStealthMode, toggleStealthMode, isOffline,
+    hydrated, hasCompletedTour, isFirstTimeUser, isSandboxMode, exitSandboxMode,
+  } = useStore();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
+  const [tourOpen, setTourOpen] = useState(false);
+
+  // Auto-trigger once, on a genuinely fresh account — mirrors
+  // OnboardingWizard's own "only ever opens, closing is exclusively the
+  // user's action" latch, so loading the demo sandbox mid-tour (which
+  // flips isFirstTimeUser false while it's active) can't slam this shut.
+  useEffect(() => {
+    if (hydrated && !hasCompletedTour && isFirstTimeUser) setTourOpen(true);
+  }, [hydrated, hasCompletedTour, isFirstTimeUser]);
 
   // Global keyboard bindings — Cmd/Ctrl+K → palette, Cmd/Ctrl+Shift+P →
   // stealth, N/T/S → quick-log a transaction/trade/snapshot, ? → this
@@ -270,6 +283,15 @@ function WorkstationShell() {
             </button>
 
             <button
+              onClick={() => setTourOpen(true)}
+              className="size-8 grid place-items-center rounded-lg border border-glass-border text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
+              aria-label="Take product tour"
+              title="Take product tour"
+            >
+              <HelpCircle className="size-4" />
+            </button>
+
+            <button
               onClick={toggleStealthMode}
               className={cn(
                 "size-8 grid place-items-center rounded-lg border transition-colors",
@@ -289,6 +311,25 @@ function WorkstationShell() {
           </div>
         </div>
       </header>
+
+      {/* ── Sandbox mode banner: persistent so it's visible from any hub, not
+          just while the tour modal itself is open ──────────────────────── */}
+      {isSandboxMode && (
+        <div className="sticky top-14 z-30 border-b border-primary/25 bg-primary/10 backdrop-blur-xl">
+          <div className="max-w-6xl mx-auto px-4 md:px-8 h-10 flex items-center justify-between gap-3">
+            <span className="flex items-center gap-2 text-xs sm:text-sm font-medium text-primary">
+              <Sparkles className="size-3.5 shrink-0" />
+              You're viewing demo sandbox data — nothing here is saved or synced.
+            </span>
+            <button
+              onClick={exitSandboxMode}
+              className="shrink-0 text-xs sm:text-sm font-semibold text-primary hover:underline"
+            >
+              Exit Demo
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Content ───────────────────────────────────────────────────────── */}
       <main className="flex-1 w-full max-w-6xl mx-auto px-4 md:px-8 py-6 md:py-8 pb-28 md:pb-10">
@@ -328,9 +369,10 @@ function WorkstationShell() {
         </div>
       </nav>
 
-      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} onOpenTour={() => setTourOpen(true)} />
       <HotkeysModal open={hotkeysOpen} onOpenChange={setHotkeysOpen} />
       <OnboardingWizard />
+      <AppTourModal open={tourOpen} onOpenChange={setTourOpen} />
     </div>
   );
 }

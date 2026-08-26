@@ -131,7 +131,7 @@ const PARTITION_GROUPS: {
  */
 export function OnboardingWizard() {
   const {
-    hydrated, onboardingCompleted, isFirstTimeUser, completeOnboarding,
+    hydrated, onboardingCompleted, isFirstTimeUser, completeOnboarding, hasCompletedTour,
     incomeCategories, expenseCategories, addCategory, deleteCategory,
   } = useStore();
   const [step, setStep] = useState(0);
@@ -142,7 +142,9 @@ export function OnboardingWizard() {
   // they add anything — a raw derivation would slam the dialog shut mid-step
   // the moment they add their very first item. The effect below only ever
   // opens it; closing is exclusively the user's action.
-  const shouldOpen = hydrated && !onboardingCompleted && isFirstTimeUser;
+  // hasCompletedTour sequences this AFTER AppTourModal on a fresh account —
+  // see _authenticated.tsx's WorkstationShell for the tour's own trigger.
+  const shouldOpen = hydrated && hasCompletedTour && !onboardingCompleted && isFirstTimeUser;
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (shouldOpen) setOpen(true);

@@ -462,6 +462,7 @@ export async function upsertSettings(
     hiddenDefaultAccountIds: string[];
     hiddenDefaultPartitionIds: string[];
     projectionSettings: ProjectionSettings;
+    hasCompletedTour: boolean;
   },
 ): Promise<boolean> {
   const { error } = await client

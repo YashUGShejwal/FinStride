@@ -60,6 +60,8 @@ export type DbUserSettings = {
   enable_fno_tracking: boolean;
   /** ProjectionSettings JSON — see supabase/migrations/0007_wealth_milestones.sql. */
   projection_settings: DbProjectionSettingsJson;
+  /** Whether the user has completed (or skipped) the AppTourModal walkthrough — see supabase/migrations/0008_wealth_tour_flag.sql. */
+  has_completed_tour: boolean;
   updated_at: string;
 };
 

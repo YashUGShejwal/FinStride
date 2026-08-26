@@ -70,6 +70,7 @@ export type LocalDataSnapshot = {
   pending: MonthlyPending;
   projectionSettings: ProjectionSettings;
   milestones: Milestone[];
+  hasCompletedTour: boolean;
 };
 
 export type MigrationResult = {
@@ -114,6 +115,7 @@ export async function migrateLocalDataToSupabase(
       hiddenDefaultAccountIds: local.hiddenDefaultAccountIds,
       hiddenDefaultPartitionIds: local.hiddenDefaultPartitionIds,
       projectionSettings: local.projectionSettings,
+      hasCompletedTour: local.hasCompletedTour,
     }),
   );
 

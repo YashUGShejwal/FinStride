@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
+import { getDemoSnapshot } from "@/lib/demoData";
 import { isRunningStandalone, type BeforeInstallPromptEvent } from "@/lib/platform";
 import {
   deleteAllSnapshotRows,
@@ -758,6 +759,9 @@ const SHOW_PERSONAL_QUOTES_KEY = "finstride.quotes.showPersonal";
 // view. Unlike showPersonalQuotes, this carries no owner-PIN gate — it's a
 // plain trading preference, not something that needs device-level unlocking.
 const ENABLE_FNO_TRACKING_KEY = "finstride.fno.enabled";
+// AppTourModal completion flag (Track 5) — cloud-synced like every other
+// settings field above, unlike ONBOARDING_KEY below which stays local-only.
+const HAS_COMPLETED_TOUR_KEY = "finstride.tour.completed";
 
 // ─── Owner passcode gate ────────────────────────────────────────────────────
 // A lightweight, DEVICE-local speed bump — not real security. This value ships
@@ -1324,6 +1328,15 @@ type StoreCtx = {
   isFirstTimeUser: boolean;
   onboardingCompleted: boolean;
   completeOnboarding: () => void;
+  // App-wide walkthrough tour (Track 5) — cloud-synced, unlike onboardingCompleted.
+  hasCompletedTour: boolean;
+  setHasCompletedTour: (v: boolean) => void;
+  /** True while the store holds the demo sandbox bundle instead of the user's real data — see loadDemoData/exitSandboxMode. */
+  isSandboxMode: boolean;
+  /** Backs up current state, then swaps every mutable slice for a realistic demo bundle. No-op if already in sandbox mode. */
+  loadDemoData: () => void;
+  /** Restores the state backed up by loadDemoData() and clears sandbox mode. No-op (beyond clearing the flag) if no backup exists. */
+  exitSandboxMode: () => void;
 };
 
 /** Shape of a file produced by exportData() / accepted by importData(). */
@@ -1350,6 +1363,7 @@ export type FinStrideBackup = {
   enableFnoTracking: boolean;
   projectionSettings: ProjectionSettings;
   milestones: Milestone[];
+  hasCompletedTour: boolean;
 };
 
 const Ctx = createContext<StoreCtx | null>(null);
@@ -1386,6 +1400,7 @@ const ALL_LOCAL_KEYS = [
   HIDDEN_PARTITION_IDS_KEY,
   SHOW_PERSONAL_QUOTES_KEY,
   ENABLE_FNO_TRACKING_KEY,
+  HAS_COMPLETED_TOUR_KEY,
   PENDING_KEY,
   PENDING_WRITES_KEY,
   CUSTOM_OBLIGATIONS_KEY,
@@ -1418,6 +1433,7 @@ type LocalState = {
   customObligationsPending: Record<string, boolean>;
   projectionSettings: ProjectionSettings;
   milestones: Milestone[];
+  hasCompletedTour: boolean;
 };
 
 const EMPTY_LOCAL_STATE: LocalState = {
@@ -1440,6 +1456,7 @@ const EMPTY_LOCAL_STATE: LocalState = {
   customObligationsPending: {},
   projectionSettings: DEFAULT_PROJECTION_SETTINGS,
   milestones: [...DEFAULT_MILESTONES],
+  hasCompletedTour: false,
 };
 
 function readJson<T>(key: string, fallback: T): T {
@@ -1475,6 +1492,12 @@ function readLocalState(): LocalState {
     } catch {
       enableFno = false;
     }
+    let hasCompletedTour = false;
+    try {
+      hasCompletedTour = localStorage.getItem(HAS_COMPLETED_TOUR_KEY) === "true";
+    } catch {
+      hasCompletedTour = false;
+    }
     const blueprint = normalizeBlueprint(readJson<unknown>(BLUEPRINT_KEY, null));
     return {
       transactions: readJson<Record<string, unknown>[]>(TX_KEY, []).map(normalizeTransaction),
@@ -1487,6 +1510,7 @@ function readLocalState(): LocalState {
       // silently true on a device that hasn't itself passed the PIN check.
       showPersonalQuotes: showPersonal && readOwnerUnlocked(),
       enableFnoTracking: enableFno,
+      hasCompletedTour,
       customAccountModes: normalizeCustomAccountModes(
         readJson<unknown>(CUSTOM_ACCOUNT_MODES_KEY, null),
       ),
@@ -1628,6 +1652,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [milestones, setMilestones] = useState<Milestone[]>([...DEFAULT_MILESTONES]);
   const [showPersonalQuotes, setShowPersonalQuotesState] = useState(false);
   const [enableFnoTracking, setEnableFnoTrackingState] = useState(false);
+  const [hasCompletedTour, setHasCompletedTourState] = useState(false);
+  // Runtime-only — never persisted to localStorage or synced to Supabase.
+  // See loadDemoData/exitSandboxMode and demoBackupRef below.
+  const [isSandboxMode, setIsSandboxMode] = useState(false);
   // Always starts false and reads localStorage after mount: SSR has no
   // localStorage, so initializing from it lazily would make the server and
   // first client render disagree on the blur classes (hydration mismatch).
@@ -1712,8 +1740,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const hydrated = hydratedOwner === owner;
 
   /** Latest state, readable from mutation closures without re-subscribing effects. */
-  const stateRef = useRef({ trades, grind, milestones });
-  stateRef.current = { trades, grind, milestones };
+  const stateRef = useRef({ trades, grind, milestones, isSandboxMode });
+  stateRef.current = { trades, grind, milestones, isSandboxMode };
+
+  /**
+   * Snapshot of every slice loadDemoData() overwrites, captured right before
+   * it does so — exitSandboxMode() restores from this and clears it. A ref
+   * (not state) because it's write-once/read-once bookkeeping the UI never
+   * renders from directly.
+   */
+  const demoBackupRef = useRef<{
+    transactions: Transaction[];
+    trades: Trade[];
+    portfolioSnapshots: PortfolioSnapshot[];
+    blueprintSettings: BlueprintSettings;
+    projectionSettings: ProjectionSettings;
+    milestones: Milestone[];
+    enableFnoTracking: boolean;
+  } | null>(null);
 
   /**
    * Set by every mutator; cleared at the start of each load. Guards the
@@ -1727,9 +1771,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     localWriteDuringLoadRef.current = true;
   };
 
-  /** Live sync target, or null when running local-only (offline/unauthenticated/unconfigured). */
+  /**
+   * Live sync target, or null when running local-only (offline/unauthenticated/
+   * unconfigured) OR while the demo sandbox is active — this single guard is
+   * what keeps every mutator's remote write, plus both remote-sync effects
+   * below, from ever pushing demo data to the user's real Supabase rows.
+   */
   const getSync = (): { client: FinStrideClient; userId: string } | null => {
-    if (!cloudEnabled || !userId) return null;
+    if (isSandboxMode || !cloudEnabled || !userId) return null;
     const client = getSupabaseBrowserClient();
     return client ? { client, userId } : null;
   };
@@ -1740,6 +1789,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     localWriteDuringLoadRef.current = false;
 
     void (async () => {
+      // The demo sandbox is active — never let a re-fetch (e.g. a sign-out/
+      // sign-in that happens mid-demo) clobber the demo bundle with real
+      // cloud data or stamp cache ownership against it. stateRef, not the
+      // isSandboxMode closure variable, because this effect's dependency
+      // array doesn't include isSandboxMode and would otherwise see a stale
+      // value from whenever it last actually re-ran.
+      if (stateRef.current.isSandboxMode) return;
+
       const identity = userId ?? LOCAL_OWNER;
       const priorOwner = cloudEnabled ? readCacheOwner() : LOCAL_OWNER;
 
@@ -1771,6 +1828,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setBlueprintSettings(local.blueprint);
       setShowPersonalQuotesState(local.showPersonalQuotes);
       setEnableFnoTrackingState(local.enableFnoTracking);
+      setHasCompletedTourState(local.hasCompletedTour);
       setCustomAccountModes(local.customAccountModes);
       setCustomBrokerPartitions(local.customBrokerPartitions);
       setCustomCategories({
@@ -1886,6 +1944,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // that syncs this account, with no PIN check on the receiving side.
           setShowPersonalQuotesState(remote.settings.showPersonalQuotes && readOwnerUnlocked());
           setEnableFnoTrackingState(remote.settings.enableFnoTracking);
+          setHasCompletedTourState(remote.settings.hasCompletedTour);
           setCustomAccountModes(remote.settings.customAccountModes);
           setCustomBrokerPartitions(remote.settings.customBrokerPartitions);
           setCustomCategories({
@@ -1916,12 +1975,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // ── Persist effects (localStorage = offline cache + local-only store) ────
   // All gated on `hydrated` so they never write pre-load empty state over real data.
   useEffect(() => {
-    if (hydrated) localStorage.setItem(TX_KEY, JSON.stringify(transactions));
-  }, [hydrated, transactions]);
+    // !isSandboxMode on every slice loadDemoData()/exitSandboxMode() touches —
+    // see getSync()'s doc comment for the matching guard on remote writes.
+    if (hydrated && !isSandboxMode) localStorage.setItem(TX_KEY, JSON.stringify(transactions));
+  }, [hydrated, transactions, isSandboxMode]);
 
   useEffect(() => {
-    if (hydrated) localStorage.setItem(TR_KEY, JSON.stringify(trades));
-  }, [hydrated, trades]);
+    if (hydrated && !isSandboxMode) localStorage.setItem(TR_KEY, JSON.stringify(trades));
+  }, [hydrated, trades, isSandboxMode]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -1931,16 +1992,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [hydrated, pendingChecklist]);
 
   useEffect(() => {
-    if (hydrated) localStorage.setItem(SNAP_KEY, JSON.stringify(portfolioSnapshots));
-  }, [hydrated, portfolioSnapshots]);
+    if (hydrated && !isSandboxMode) localStorage.setItem(SNAP_KEY, JSON.stringify(portfolioSnapshots));
+  }, [hydrated, portfolioSnapshots, isSandboxMode]);
 
   useEffect(() => {
     if (hydrated) localStorage.setItem(GRIND_KEY, JSON.stringify(grind));
   }, [hydrated, grind]);
 
   useEffect(() => {
-    if (hydrated) localStorage.setItem(BLUEPRINT_KEY, JSON.stringify(blueprintSettings));
-  }, [hydrated, blueprintSettings]);
+    if (hydrated && !isSandboxMode) localStorage.setItem(BLUEPRINT_KEY, JSON.stringify(blueprintSettings));
+  }, [hydrated, blueprintSettings, isSandboxMode]);
 
   useEffect(() => {
     if (hydrated) localStorage.setItem(CATEGORIES_KEY, JSON.stringify(customCategories));
@@ -1974,8 +2035,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [hydrated, showPersonalQuotes]);
 
   useEffect(() => {
-    if (hydrated) localStorage.setItem(ENABLE_FNO_TRACKING_KEY, String(enableFnoTracking));
-  }, [hydrated, enableFnoTracking]);
+    if (hydrated && !isSandboxMode) localStorage.setItem(ENABLE_FNO_TRACKING_KEY, String(enableFnoTracking));
+  }, [hydrated, enableFnoTracking, isSandboxMode]);
+
+  useEffect(() => {
+    if (hydrated) localStorage.setItem(HAS_COMPLETED_TOUR_KEY, String(hasCompletedTour));
+  }, [hydrated, hasCompletedTour]);
 
   useEffect(() => {
     if (hydrated) localStorage.setItem(CUSTOM_OBLIGATIONS_KEY, JSON.stringify(customObligations));
@@ -1989,12 +2054,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [hydrated, customObligationsPending]);
 
   useEffect(() => {
-    if (hydrated) localStorage.setItem(PROJECTION_SETTINGS_KEY, JSON.stringify(projectionSettings));
-  }, [hydrated, projectionSettings]);
+    if (hydrated && !isSandboxMode)
+      localStorage.setItem(PROJECTION_SETTINGS_KEY, JSON.stringify(projectionSettings));
+  }, [hydrated, projectionSettings, isSandboxMode]);
 
   useEffect(() => {
-    if (hydrated) localStorage.setItem(MILESTONES_KEY, JSON.stringify(milestones));
-  }, [hydrated, milestones]);
+    if (hydrated && !isSandboxMode) localStorage.setItem(MILESTONES_KEY, JSON.stringify(milestones));
+  }, [hydrated, milestones, isSandboxMode]);
 
   // ── Remote sync for the single-row tables ────────────────────────────────
   // Settings live in one row, so the whole bundle is upserted whenever any
@@ -2017,6 +2083,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         hiddenDefaultAccountIds,
         hiddenDefaultPartitionIds,
         projectionSettings,
+        hasCompletedTour,
       }),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2034,6 +2101,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     hiddenDefaultAccountIds,
     hiddenDefaultPartitionIds,
     projectionSettings,
+    hasCompletedTour,
   ]);
 
   useEffect(() => {
@@ -2867,6 +2935,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           enableFnoTracking,
           projectionSettings,
           milestones,
+          hasCompletedTour,
         };
         const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
         const url = URL.createObjectURL(blob);
@@ -2956,6 +3025,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           : customObligations;
       const importedEnableFno =
         typeof b.enableFnoTracking === "boolean" ? b.enableFnoTracking : enableFnoTracking;
+      const importedHasCompletedTour =
+        typeof b.hasCompletedTour === "boolean" ? b.hasCompletedTour : hasCompletedTour;
       const importedProjectionSettings =
         b.projectionSettings !== undefined
           ? normalizeProjectionSettings(b.projectionSettings, projectionSettings.monthlySip)
@@ -2980,6 +3051,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setEnableFnoTrackingState(importedEnableFno);
       setProjectionSettings(importedProjectionSettings);
       setMilestones(importedMilestones);
+      setHasCompletedTourState(importedHasCompletedTour);
 
       if (b.pendingByMonth && typeof b.pendingByMonth === "object") {
         const monthMap = b.pendingByMonth as Record<string, MonthlyPending>;
@@ -3022,6 +3094,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             hiddenDefaultAccountIds: importedHiddenAccountIds,
             hiddenDefaultPartitionIds: importedHiddenPartitionIds,
             projectionSettings: importedProjectionSettings,
+            hasCompletedTour: importedHasCompletedTour,
           }),
         );
         for (const m of importedMilestones) trackedWrite(dbUpsertMilestone(sync.client, sync.userId, m));
@@ -3057,6 +3130,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setProjectionSettings(DEFAULT_PROJECTION_SETTINGS);
       setMilestones([...DEFAULT_MILESTONES]);
       setOnboardingCompleted(false);
+      setHasCompletedTourState(false);
+      // If triggered mid-demo, make the wipe stick instead of letting a later
+      // exitSandboxMode() silently resurrect the just-deleted backup.
+      demoBackupRef.current = null;
+      setIsSandboxMode(false);
       // Deliberately does NOT touch remote Supabase rows or sign the user out —
       // this clears the LOCAL cache only. For a cloud-synced account, the next
       // full reload's "cloud wins" load would otherwise just re-populate
@@ -3089,6 +3167,46 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       } catch {
         // Ignore — the in-memory flag still suppresses the wizard this session.
       }
+    },
+    hasCompletedTour,
+    setHasCompletedTour: (v) => {
+      setHasCompletedTourState(v);
+    },
+    isSandboxMode,
+    loadDemoData: () => {
+      if (isSandboxMode) return; // already demoing — don't clobber the one real backup with demo-over-demo data
+      demoBackupRef.current = {
+        transactions,
+        trades,
+        portfolioSnapshots,
+        blueprintSettings,
+        projectionSettings,
+        milestones,
+        enableFnoTracking,
+      };
+      const demo = getDemoSnapshot();
+      setTransactions(demo.transactions);
+      setTrades(demo.trades);
+      setPortfolioSnapshots(demo.portfolioSnapshots);
+      setBlueprintSettings(demo.blueprintSettings);
+      setProjectionSettings(demo.projectionSettings);
+      setMilestones(demo.milestones);
+      setEnableFnoTrackingState(demo.enableFnoTracking);
+      setIsSandboxMode(true);
+    },
+    exitSandboxMode: () => {
+      const backup = demoBackupRef.current;
+      if (backup) {
+        setTransactions(backup.transactions);
+        setTrades(backup.trades);
+        setPortfolioSnapshots(backup.portfolioSnapshots);
+        setBlueprintSettings(backup.blueprintSettings);
+        setProjectionSettings(backup.projectionSettings);
+        setMilestones(backup.milestones);
+        setEnableFnoTrackingState(backup.enableFnoTracking);
+        demoBackupRef.current = null;
+      }
+      setIsSandboxMode(false);
     },
   };
 

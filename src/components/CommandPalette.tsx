@@ -1,7 +1,7 @@
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   LayoutDashboard, Wallet, TrendingUp, PieChart, Rocket, Settings, User,
-  Plus, Camera, Download, Eye, EyeOff,
+  Plus, Camera, Download, Eye, EyeOff, HelpCircle, Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
@@ -19,13 +19,19 @@ import {
 export function CommandPalette({
   open,
   onOpenChange,
+  onOpenTour,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Opens AppTourModal — owned by the authenticated layout, same as onOpenChange. */
+  onOpenTour: () => void;
 }) {
   const nav = useNavigate();
   const path = useRouterState({ select: (s) => s.location.pathname });
-  const { exportData, isStealthMode, toggleStealthMode } = useStore();
+  const {
+    exportData, isStealthMode, toggleStealthMode,
+    isSandboxMode, loadDemoData, exitSandboxMode,
+  } = useStore();
   const modKey = useModKeyLabel();
 
   // Close first so the palette never lingers over the destination view.
@@ -124,6 +130,9 @@ export function CommandPalette({
           >
             <Download /> Export Data (JSON)
           </CommandItem>
+          <CommandItem onSelect={() => run(onOpenTour)}>
+            <HelpCircle /> Take Product Tour
+          </CommandItem>
         </CommandGroup>
 
         <CommandSeparator />
@@ -133,6 +142,10 @@ export function CommandPalette({
             {isStealthMode ? <Eye /> : <EyeOff />}
             {isStealthMode ? "Disable Stealth Privacy Mode" : "Enable Stealth Privacy Mode"}
             {modKey && <CommandShortcut>{modKey}+Shift+P</CommandShortcut>}
+          </CommandItem>
+          <CommandItem onSelect={() => run(isSandboxMode ? exitSandboxMode : loadDemoData)}>
+            <Sparkles />
+            {isSandboxMode ? "Exit Demo Sandbox Mode" : "Enter Demo Sandbox Mode"}
           </CommandItem>
         </CommandGroup>
       </CommandList>

@@ -283,6 +283,7 @@ export type SettingsBundle = {
   hiddenDefaultPartitionIds: string[];
   enableFnoTracking: boolean;
   projectionSettings: ProjectionSettings;
+  hasCompletedTour: boolean;
 };
 
 const ACCOUNT_TYPES: readonly string[] = ["bank", "credit_card", "upi", "cash", "wallet"];
@@ -449,6 +450,7 @@ export function settingsToRow(b: SettingsBundle, userId: string): DbUserSettings
     hidden_default_partition_ids: b.hiddenDefaultPartitionIds,
     enable_fno_tracking: b.enableFnoTracking,
     projection_settings: projectionSettingsToJson(b.projectionSettings),
+    has_completed_tour: b.hasCompletedTour,
   };
 }
 
@@ -507,6 +509,7 @@ export function rowToSettings(r: DbUserSettings): SettingsBundle {
     hiddenDefaultPartitionIds: list(r.hidden_default_partition_ids),
     enableFnoTracking: r.enable_fno_tracking === true,
     projectionSettings: jsonToProjectionSettings(r.projection_settings),
+    hasCompletedTour: r.has_completed_tour === true,
   };
 }
 
