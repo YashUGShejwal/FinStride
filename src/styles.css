@@ -201,6 +201,29 @@
   .glow-ripple {
     animation: glow-ripple 700ms ease-out;
   }
+
+  /* Continuous "breathing" glow for the Milestone Tracker's next-up card —
+     unlike .glow-ripple (one-shot, 700ms), this loops for as long as the
+     card holds that status. Pure box-shadow animation (no background/border
+     color) so it composes cleanly on top of any category theme underneath. */
+  .next-up-pulse {
+    animation: prestige-pulse 2.4s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .next-up-pulse {
+      animation: none;
+      box-shadow: 0 0 0 1px oklch(0.78 0.15 165 / 0.4), 0 0 24px -6px oklch(0.78 0.15 165 / 0.45);
+    }
+  }
+}
+
+@keyframes prestige-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 1px oklch(0.78 0.15 165 / 0.3), 0 0 22px -6px oklch(0.78 0.15 165 / 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 1.5px oklch(0.78 0.15 165 / 0.55), 0 0 34px -6px oklch(0.78 0.15 165 / 0.6);
+  }
 }
 
 /* var(--shadow-card) rides along in both frames: keyframe values replace the

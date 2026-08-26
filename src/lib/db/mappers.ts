@@ -552,12 +552,16 @@ export function milestoneToRow(m: Milestone, userId: string): DbUserMilestoneIns
     target_type: m.targetType,
     item_cost: m.itemCost ?? null,
     allocation_percent: m.allocationPercent ?? null,
+    is_financed: m.isFinanced,
+    total_asset_cost: m.totalAssetCost ?? null,
+    downpayment_amount: m.downpaymentAmount ?? null,
   };
 }
 
 export function rowToMilestone(r: DbUserMilestoneRow): Milestone {
   const targetType = milestoneTargetType(r.target_type);
   const isAffordability = targetType !== "net_worth";
+  const isFinanced = isAffordability && r.is_financed === true;
   return {
     id: r.id,
     name: r.name,
@@ -567,6 +571,15 @@ export function rowToMilestone(r: DbUserMilestoneRow): Milestone {
     allocationPercent:
       isAffordability && r.allocation_percent !== null && Number(r.allocation_percent) > 0
         ? Number(r.allocation_percent)
+        : undefined,
+    isFinanced,
+    totalAssetCost:
+      isFinanced && r.total_asset_cost !== null && Number(r.total_asset_cost) > 0
+        ? Number(r.total_asset_cost)
+        : undefined,
+    downpaymentAmount:
+      isFinanced && r.downpayment_amount !== null && Number(r.downpayment_amount) > 0
+        ? Number(r.downpayment_amount)
         : undefined,
     isCustom: r.is_custom === true,
   };

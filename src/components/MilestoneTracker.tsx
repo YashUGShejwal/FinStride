@@ -7,7 +7,8 @@ import {
   milestoneProgress,
   type MilestoneETAResult,
 } from "@/lib/projectionEngine";
-import { MILESTONE_TARGET_TYPE_META, useStore, type Milestone } from "@/lib/store";
+import { MILESTONE_TARGET_TYPE_META, useStore, type Milestone, type MilestoneTargetType } from "@/lib/store";
+import { cn } from "@/lib/utils";
 import { inrCompact } from "@/lib/format";
 import { Sensitive } from "@/components/Sensitive";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,40 @@ import { MilestoneModal } from "@/components/MilestoneModal";
 
 const R = 30;
 const CIRCUMFERENCE = 2 * Math.PI * R;
+
+/**
+ * Prestige theming per category — a distinctive border/ambient-glow/ring
+ * identity so the tracker reads as a hierarchy at a glance (👑 amber for the
+ * top-tier net worth goals down to ☕ steel-slate for minor wants), matching
+ * each category's Tailwind color family exactly between the card chrome
+ * (real utility classes) and the SVG progress ring (hex, since SVG stopColor
+ * can't consume Tailwind classes directly).
+ */
+const CATEGORY_THEME: Record<
+  MilestoneTargetType,
+  { card: string; pill: string; ring: { from: string; to: string } }
+> = {
+  net_worth: {
+    card: "border-amber-500/30 bg-amber-500/[0.02] shadow-[0_0_15px_rgba(245,158,11,0.08)] hover:border-amber-500/50",
+    pill: "border-amber-500/30 bg-amber-500/10 text-amber-400",
+    ring: { from: "#fbbf24", to: "#f59e0b" },
+  },
+  need: {
+    card: "border-cyan-500/30 bg-cyan-500/[0.02] shadow-[0_0_15px_rgba(6,182,212,0.08)] hover:border-cyan-500/50",
+    pill: "border-cyan-500/30 bg-cyan-500/10 text-cyan-400",
+    ring: { from: "#22d3ee", to: "#06b6d4" },
+  },
+  major_want: {
+    card: "border-purple-500/30 bg-purple-500/[0.02] shadow-[0_0_15px_rgba(168,85,247,0.08)] hover:border-purple-500/50",
+    pill: "border-purple-500/30 bg-purple-500/10 text-purple-400",
+    ring: { from: "#c084fc", to: "#a855f7" },
+  },
+  minor_want: {
+    card: "border-slate-500/25 bg-slate-500/[0.02] shadow-[0_0_15px_rgba(148,163,184,0.05)] hover:border-slate-500/45",
+    pill: "border-slate-500/25 bg-slate-500/10 text-slate-400",
+    ring: { from: "#94a3b8", to: "#64748b" },
+  },
+};
 
 function formatEta(totalMonths: number): string {
   if (totalMonths < 1) return "this month";
@@ -40,9 +75,10 @@ type Row = {
 /**
  * Milestone Velocity Tracker — a grid of wealth targets, each showing % of
  * the way there, an achieved/in-progress badge, and the calculateMilestoneETA
- * projected date. The nearest not-yet-achieved milestone gets an ambient
- * neon highlight so the page always foregrounds "what's next." Edit/Delete
- * are scoped to custom milestones only — the 6 seeded defaults are fixed
+ * projected date. The nearest not-yet-achieved milestone gets a continuous
+ * breathing glow (.next-up-pulse) so the page always foregrounds "what's
+ * next," layered on top of that card's own category theme. Edit/Delete are
+ * scoped to custom milestones only — the 6 seeded defaults are fixed
  * reference points, matching AccountMode/BrokerPartition's convention.
  */
 export function MilestoneTracker() {
@@ -139,21 +175,16 @@ function MilestoneCard({
   const { milestone, progress, achieved, eta } = row;
   const dashOffset = CIRCUMFERENCE * (1 - progress);
   const gid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  const theme = CATEGORY_THEME[milestone.targetType];
 
   const ringTone = achieved
     ? { from: "oklch(0.74 0.17 160)", to: "oklch(0.72 0.18 155)" }
     : isNextUp
       ? { from: "oklch(0.78 0.15 165)", to: "oklch(0.72 0.14 195)" }
-      : { from: "oklch(0.6 0.03 260)", to: "oklch(0.5 0.03 260)" };
+      : theme.ring;
 
   return (
-    <div
-      className={`group relative rounded-2xl border p-4 transition-colors ${
-        isNextUp
-          ? "border-primary/40 bg-primary/[0.04] shadow-[0_0_40px_-14px_oklch(0.78_0.15_165_/_0.55)]"
-          : "border-white/[0.08] bg-white/[0.015] hover:border-white/20"
-      }`}
-    >
+    <div className={cn("group relative rounded-2xl border p-4 transition-colors", theme.card, isNextUp && "next-up-pulse")}>
       {isNextUp && (
         <span className="absolute -top-2.5 left-4 rounded-full border border-primary/40 bg-[#060913] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-primary">
           Next Up
@@ -187,14 +218,33 @@ function MilestoneCard({
           <p className="text-xl font-display font-bold tnum mt-0.5">{milestone.name}</p>
           {milestone.isCustom && (
             <>
-              <span className="inline-flex items-center rounded-md border border-white/[0.08] bg-white/[0.05] px-1.5 py-0.5 text-[9px] font-semibold text-white/60 mt-1.5">
-                {categoryPillText(milestone)}
-              </span>
+              <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                <span className={cn("inline-flex items-center rounded-md border px-1.5 py-0.5 text-[9px] font-semibold", theme.pill)}>
+                  {categoryPillText(milestone)}
+                </span>
+                {milestone.isFinanced && (
+                  <span className="inline-flex items-center rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold text-primary">
+                    DP Goal
+                  </span>
+                )}
+              </div>
               <Sensitive>
-                <p className="text-[11px] text-muted-foreground tnum mt-1">
-                  Target: {inrCompact(milestone.targetAmount)}
-                  {milestone.itemCost !== undefined && ` · Cost: ${inrCompact(milestone.itemCost)}`}
-                </p>
+                {milestone.isFinanced ? (
+                  <>
+                    <p className="text-[11px] text-muted-foreground tnum mt-1">
+                      Asset: {inrCompact(milestone.totalAssetCost ?? 0)} · DP:{" "}
+                      {inrCompact(milestone.downpaymentAmount ?? 0)}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground tnum">
+                      Target NW: {inrCompact(milestone.targetAmount)}
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-[11px] text-muted-foreground tnum mt-1">
+                    Target: {inrCompact(milestone.targetAmount)}
+                    {milestone.itemCost !== undefined && ` · Cost: ${inrCompact(milestone.itemCost)}`}
+                  </p>
+                )}
               </Sensitive>
             </>
           )}

@@ -238,6 +238,12 @@ export type DbUserMilestoneRow = {
   item_cost: number | null;
   /** NULL for net_worth; the % of net worth the affordability category is capped at. */
   allocation_percent: number | null;
+  /** Down-payment financing mode. When true, item_cost mirrors downpayment_amount. */
+  is_financed: boolean;
+  /** NULL unless is_financed — the full asset price, kept for display only. */
+  total_asset_cost: number | null;
+  /** NULL unless is_financed — the actual out-of-pocket cash; item_cost mirrors this. */
+  downpayment_amount: number | null;
   created_at: string;
   updated_at: string;
 };

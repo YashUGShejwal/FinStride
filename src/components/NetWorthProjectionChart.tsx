@@ -6,9 +6,48 @@ import { format } from "date-fns";
 import { LineChart as LineChartIcon } from "lucide-react";
 import { generateProjectionSeries, wealthMultiple, type ProjectionPoint } from "@/lib/projectionEngine";
 import { useStore } from "@/lib/store";
+import { cn } from "@/lib/utils";
 import { inr, inrCompact } from "@/lib/format";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { Sensitive } from "@/components/Sensitive";
+
+/**
+ * Legible badge (filled rounded rect + text) for a milestone ReferenceLine,
+ * pinned to the right edge of the plot area — plain floating text at this
+ * font size got lost against the grid, especially where a line crosses the
+ * curves themselves. Recharts clones this element and injects `viewBox`
+ * (the line's own pixel position) since `label` is a React element, not a
+ * plain string.
+ */
+function MilestoneLineLabel({
+  viewBox,
+  value,
+}: {
+  viewBox?: { x: number; y: number; width: number; height: number };
+  value: string;
+}) {
+  if (!viewBox) return null;
+  const { x, y, width } = viewBox;
+  const badgeWidth = Math.min(96, Math.max(36, value.length * 5.6 + 12));
+  const bx = x + width - badgeWidth - 2;
+  const by = y - 9;
+  return (
+    <g>
+      <rect
+        x={bx}
+        y={by}
+        width={badgeWidth}
+        height={18}
+        rx={5}
+        fill="oklch(0.18 0.03 75 / 0.95)"
+        stroke="oklch(0.78 0.16 75 / 0.6)"
+      />
+      <text x={bx + badgeWidth / 2} y={by + 12.5} textAnchor="middle" fontSize={10} fontWeight={700} fill="oklch(0.85 0.15 78)">
+        {value}
+      </text>
+    </g>
+  );
+}
 
 /** How many year-gridlines to show on the X-axis before thinning them out. */
 function tickStepYears(horizonYears: number): number {
@@ -85,9 +124,9 @@ export function NetWorthProjectionChart() {
           value={adjustForInflation ? final.nominalValue : final.realValue}
         />
         <SummaryStat label="Principal Invested" value={final.principal} />
-        <SummaryStat label="Compounded Gain" value={final.gains} tone="oklch(0.72 0.18 155)" />
+        <SummaryStat label="Compounded Gain" value={final.gains} />
       </div>
-      <p className="text-[11px] text-muted-foreground mb-4">
+      <p className="text-xs text-white/60 font-medium mt-1 mb-4">
         Your money multiplies{" "}
         <Sensitive>
           <span className="tnum font-medium text-foreground">
@@ -107,14 +146,14 @@ export function NetWorthProjectionChart() {
               domain={[0, series.length - 1]}
               ticks={ticks}
               tickFormatter={(m: number) => format(series[m]?.date ?? new Date(), "yyyy")}
-              tick={{ fontSize: 11, fill: "oklch(0.65 0 0)" }}
+              tick={{ fontSize: 11, fill: "oklch(1 0 0 / 0.65)", fontFamily: "var(--font-mono-nums)" }}
               axisLine={{ stroke: "oklch(1 0 0 / 0.1)" }}
               tickLine={false}
             />
             <YAxis
               domain={[0, yDomainMax]}
               tickFormatter={(v: number) => (isStealthMode ? "₹•••" : inrCompact(v))}
-              tick={{ fontSize: 11, fill: "oklch(0.65 0 0)" }}
+              tick={{ fontSize: 11, fill: "oklch(1 0 0 / 0.65)", fontFamily: "var(--font-mono-nums)" }}
               axisLine={false}
               tickLine={false}
               width={56}
@@ -127,14 +166,10 @@ export function NetWorthProjectionChart() {
               <ReferenceLine
                 key={m.id}
                 y={m.targetAmount}
-                stroke="oklch(0.78 0.16 75 / 0.45)"
+                stroke="oklch(0.78 0.16 75 / 0.6)"
+                strokeWidth={1.5}
                 strokeDasharray="4 4"
-                label={{
-                  value: m.name,
-                  position: "insideTopRight",
-                  fill: "oklch(0.78 0.16 75)",
-                  fontSize: 10,
-                }}
+                label={<MilestoneLineLabel value={m.name} />}
               />
             ))}
             <Line
@@ -166,27 +201,30 @@ export function NetWorthProjectionChart() {
 function SummaryStat({
   label,
   value,
-  tone,
   primary,
 }: {
   label: string;
   value: number;
-  tone?: string;
   /** The headline card driven by the "Headline in real terms" toggle — bigger, bolder, glowing emerald. */
   primary?: boolean;
 }) {
   return (
     <div
-      className={
+      className={cn(
+        "rounded-xl border p-4 sm:p-5 min-h-[105px] flex flex-col justify-center",
         primary
-          ? "rounded-xl border border-primary/30 bg-primary/[0.06] p-3 shadow-[0_0_24px_-10px_oklch(0.78_0.15_165_/_0.5)]"
-          : "rounded-xl border border-white/[0.08] bg-white/[0.02] p-3"
-      }
+          ? "border-primary/30 bg-primary/[0.06] shadow-[0_0_24px_-10px_oklch(0.78_0.15_165_/_0.5)]"
+          : "border-white/[0.08] bg-white/[0.02]",
+      )}
     >
-      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
+      <p className="text-[11px] uppercase tracking-wider font-semibold text-white/50 mb-1.5">{label}</p>
       <p
-        className={primary ? "text-2xl font-bold font-display tnum mt-1" : "text-base font-semibold tnum mt-0.5"}
-        style={{ color: primary ? "oklch(0.78 0.2 155)" : tone }}
+        className={cn(
+          "tnum",
+          primary
+            ? "text-2xl sm:text-3xl font-display font-bold tracking-tight text-emerald-400 drop-shadow-[0_0_10px_rgba(16,185,129,0.35)]"
+            : "text-xl sm:text-2xl font-display font-semibold text-white/90",
+        )}
       >
         <Sensitive>
           <AnimatedNumber value={value} format={inr} />

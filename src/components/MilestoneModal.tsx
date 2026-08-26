@@ -15,7 +15,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+
+const DP_PERCENT_PRESETS = [10, 20, 25, 50] as const;
 
 /** e.g. "Default 50% NW · 2.0× Multiplier" / "Direct 100% NW Target" for the net-worth pill. */
 function pillSubtitle(type: MilestoneTargetType): string {
@@ -30,9 +33,10 @@ function pillSubtitle(type: MilestoneTargetType): string {
  * (defaults can't be edited in place, matching AccountMode/BrokerPartition).
  *
  * Net Worth Goal is a direct target; the other 3 categories are the
- * affordability-multiplier engine — the user enters an item's cost and a %
- * of net worth it's capped at, and targetAmount is DERIVED
- * (calculateRequiredNetWorth in projectionEngine.ts).
+ * affordability-multiplier engine — the user enters an item's cost (or, in
+ * Down Payment financing mode, a down payment) and a % of net worth it's
+ * capped at, and targetAmount is DERIVED (calculateRequiredNetWorth in
+ * projectionEngine.ts).
  */
 export function MilestoneModal({
   milestone,
@@ -46,10 +50,13 @@ export function MilestoneModal({
   const { addMilestone, updateMilestone } = useStore();
   const [name, setName] = useState("");
   const [targetType, setTargetType] = useState<MilestoneTargetType>("net_worth");
-  const [amount, setAmount] = useState(""); // targetAmount for net_worth, itemCost for the affordability types
+  const [amount, setAmount] = useState(""); // targetAmount for net_worth, itemCost for the affordability types (unfinanced)
   const [allocationPercent, setAllocationPercent] = useState(
     MILESTONE_TARGET_TYPE_META.net_worth.defaultAllocationPercent,
   );
+  const [isFinanced, setIsFinanced] = useState(false);
+  const [totalAssetCost, setTotalAssetCost] = useState("");
+  const [downpaymentAmount, setDownpaymentAmount] = useState("");
 
   // Re-seed whenever a DIFFERENT milestone is loaded for editing, or the
   // dialog re-opens in add-mode — same convention as EditTradeModal.
@@ -58,41 +65,64 @@ export function MilestoneModal({
     const type = milestone?.targetType ?? "net_worth";
     setTargetType(type);
     setName(milestone?.name ?? "");
-    if (!milestone) {
+    const financedExisting = type !== "net_worth" && milestone?.isFinanced === true;
+    setIsFinanced(financedExisting);
+    if (!milestone || type === "net_worth") {
+      setAmount(milestone ? String(milestone.targetAmount) : "");
+      setTotalAssetCost("");
+      setDownpaymentAmount("");
+      setAllocationPercent(MILESTONE_TARGET_TYPE_META.net_worth.defaultAllocationPercent);
+    } else if (financedExisting) {
       setAmount("");
-      setAllocationPercent(MILESTONE_TARGET_TYPE_META.net_worth.defaultAllocationPercent);
-    } else if (type === "net_worth") {
-      setAmount(String(milestone.targetAmount));
-      setAllocationPercent(MILESTONE_TARGET_TYPE_META.net_worth.defaultAllocationPercent);
+      setTotalAssetCost(milestone.totalAssetCost !== undefined ? String(milestone.totalAssetCost) : "");
+      setDownpaymentAmount(milestone.downpaymentAmount !== undefined ? String(milestone.downpaymentAmount) : "");
+      setAllocationPercent(milestone.allocationPercent ?? MILESTONE_TARGET_TYPE_META[type].defaultAllocationPercent);
     } else {
       setAmount(milestone.itemCost !== undefined ? String(milestone.itemCost) : "");
+      setTotalAssetCost("");
+      setDownpaymentAmount("");
       setAllocationPercent(milestone.allocationPercent ?? MILESTONE_TARGET_TYPE_META[type].defaultAllocationPercent);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, milestone?.id]);
 
-  // Switching category mid-edit: the number in `amount` means something
-  // different in every category (a direct target vs. an item cost), so it's
-  // cleared rather than silently reinterpreted.
+  // Switching category mid-edit: the numbers mean something different in
+  // every category (a direct target vs. an item cost vs. a down payment), so
+  // they're cleared rather than silently reinterpreted.
   const handleTypeSelect = (type: MilestoneTargetType) => {
     setTargetType(type);
     setAllocationPercent(MILESTONE_TARGET_TYPE_META[type].defaultAllocationPercent);
     setAmount("");
+    setIsFinanced(false);
+    setTotalAssetCost("");
+    setDownpaymentAmount("");
   };
 
   const isAffordability = targetType !== "net_worth";
+  const financed = isAffordability && isFinanced;
   const meta = MILESTONE_TARGET_TYPE_META[targetType];
   const amountNum = Number(amount);
-  const requiredNetWorth = isAffordability ? calculateRequiredNetWorth(amountNum, allocationPercent) : amountNum;
+  const totalAssetCostNum = Number(totalAssetCost);
+  const downpaymentNum = Number(downpaymentAmount);
+  // The number the safety multiplier actually evaluates against: the real
+  // out-of-pocket down payment when financed, otherwise the plain item cost.
+  const effectiveCost = financed ? downpaymentNum : amountNum;
+  const requiredNetWorth = isAffordability ? calculateRequiredNetWorth(effectiveCost, allocationPercent) : amountNum;
   const multiplier = affordabilityMultiplier(allocationPercent);
-  const isValid = name.trim() !== "" && amountNum > 0;
+  const isValid =
+    name.trim() !== "" &&
+    (financed
+      ? totalAssetCostNum > 0 && downpaymentNum > 0 && downpaymentNum <= totalAssetCostNum
+      : amountNum > 0);
 
   const handleSave = () => {
     if (!isValid) {
       toast.error(
-        isAffordability
-          ? "Give the goal a name and an item cost above ₹0"
-          : "Give the milestone a name and a target amount above ₹0",
+        financed
+          ? "Give the goal a name, an asset cost, and a down payment (≤ asset cost) above ₹0"
+          : isAffordability
+            ? "Give the goal a name and an item cost above ₹0"
+            : "Give the milestone a name and a target amount above ₹0",
       );
       return;
     }
@@ -100,8 +130,11 @@ export function MilestoneModal({
       name,
       targetType,
       targetAmount: requiredNetWorth,
-      itemCost: isAffordability ? amountNum : undefined,
+      itemCost: isAffordability ? effectiveCost : undefined,
       allocationPercent: isAffordability ? allocationPercent : undefined,
+      isFinanced: financed,
+      totalAssetCost: financed ? totalAssetCostNum : undefined,
+      downpaymentAmount: financed ? downpaymentNum : undefined,
     };
     if (milestone) {
       const ok = updateMilestone(milestone.id, payload);
@@ -174,24 +207,102 @@ export function MilestoneModal({
             </div>
           </div>
 
-          <div>
-            <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              {isAffordability ? "Item / Purchase Cost" : "Target Amount in ₹"}
-            </Label>
-            <Input
-              type="number"
-              inputMode="decimal"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              placeholder="4000000"
-              className="mt-1.5 bg-input/40 border-white/10 tnum"
-            />
-            {amountNum > 0 && !isAffordability && (
-              <p className="text-xs text-muted-foreground mt-1.5 tnum">
-                {inr(amountNum)} · ≈ {inrCompact(amountNum)}
-              </p>
-            )}
-          </div>
+          {isAffordability && (
+            <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2.5">
+              <div>
+                <Label htmlFor="is-financed" className="text-sm">
+                  Financed Purchase
+                </Label>
+                <p className="text-[10px] text-muted-foreground">Down Payment Target</p>
+              </div>
+              <Switch
+                id="is-financed"
+                checked={isFinanced}
+                onCheckedChange={(v) => {
+                  setIsFinanced(v);
+                  setAmount("");
+                  setTotalAssetCost("");
+                  setDownpaymentAmount("");
+                }}
+              />
+            </div>
+          )}
+
+          {financed ? (
+            <>
+              <div>
+                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Total Asset Cost (₹)
+                </Label>
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  value={totalAssetCost}
+                  onChange={(e) => setTotalAssetCost(e.target.value)}
+                  placeholder="2500000"
+                  className="mt-1.5 bg-input/40 border-white/10 tnum"
+                />
+                {totalAssetCostNum > 0 && (
+                  <p className="text-xs text-muted-foreground mt-1.5 tnum">
+                    {inr(totalAssetCostNum)} · ≈ {inrCompact(totalAssetCostNum)}
+                  </p>
+                )}
+              </div>
+              <div>
+                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Estimated Down Payment (₹)
+                </Label>
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  value={downpaymentAmount}
+                  onChange={(e) => setDownpaymentAmount(e.target.value)}
+                  placeholder="500000"
+                  className="mt-1.5 bg-input/40 border-white/10 tnum"
+                />
+                <div className="flex gap-1.5 mt-2">
+                  {DP_PERCENT_PRESETS.map((pct) => (
+                    <button
+                      key={pct}
+                      type="button"
+                      disabled={!(totalAssetCostNum > 0)}
+                      onClick={() => setDownpaymentAmount(String(Math.round(totalAssetCostNum * (pct / 100))))}
+                      className="rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:border-white/25 transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                    >
+                      {pct}%
+                    </button>
+                  ))}
+                </div>
+                {downpaymentNum > 0 && (
+                  <p className="text-xs text-muted-foreground mt-1.5 tnum">
+                    {inr(downpaymentNum)} · ≈ {inrCompact(downpaymentNum)}
+                  </p>
+                )}
+                {totalAssetCostNum > 0 && downpaymentNum > totalAssetCostNum && (
+                  <p className="text-xs text-destructive mt-1.5">Down payment can't exceed the asset cost.</p>
+                )}
+              </div>
+            </>
+          ) : (
+            <div>
+              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                {isAffordability ? "Item / Purchase Cost" : "Target Amount in ₹"}
+              </Label>
+              <Input
+                type="number"
+                inputMode="decimal"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="4000000"
+                className="mt-1.5 bg-input/40 border-white/10 tnum"
+              />
+              {amountNum > 0 && !isAffordability && (
+                <p className="text-xs text-muted-foreground mt-1.5 tnum">
+                  {inr(amountNum)} · ≈ {inrCompact(amountNum)}
+                </p>
+              )}
+            </div>
+          )}
 
           {isAffordability && (
             <div>
@@ -213,16 +324,30 @@ export function MilestoneModal({
                 <span>Less buffer ({meta.maxAllocationPercent}%)</span>
               </div>
 
-              {amountNum > 0 && (
+              {effectiveCost > 0 && (
                 <div className="rounded-xl border border-primary/20 bg-primary/[0.06] p-3 mt-3 text-xs leading-relaxed">
                   <p className="text-muted-foreground">
-                    To safely spend{" "}
-                    <span className="text-foreground font-semibold tnum">{inr(amountNum)}</span> on{" "}
-                    <span className="text-foreground font-semibold">{name.trim() || "this"}</span> (max{" "}
-                    <span className="text-foreground font-semibold tnum">{allocationPercent}%</span> of NW),
-                    your required target Net Worth is{" "}
-                    <span className="text-primary font-bold tnum">{inr(requiredNetWorth)}</span> (
-                    <span className="font-semibold tnum">{multiplier.toFixed(1)}×</span> buffer).
+                    {financed ? (
+                      <>
+                        To safely fund a{" "}
+                        <span className="text-foreground font-semibold tnum">{inr(downpaymentNum)}</span> Down
+                        Payment on your{" "}
+                        <span className="text-foreground font-semibold tnum">{inr(totalAssetCostNum)}</span> Asset
+                        (max <span className="text-foreground font-semibold tnum">{allocationPercent}%</span>{" "}
+                        {meta.label} buffer), your target Net Worth is{" "}
+                        <span className="text-primary font-bold tnum">{inr(requiredNetWorth)}</span>.
+                      </>
+                    ) : (
+                      <>
+                        To safely spend{" "}
+                        <span className="text-foreground font-semibold tnum">{inr(amountNum)}</span> on{" "}
+                        <span className="text-foreground font-semibold">{name.trim() || "this"}</span> (max{" "}
+                        <span className="text-foreground font-semibold tnum">{allocationPercent}%</span> of NW),
+                        your required target Net Worth is{" "}
+                        <span className="text-primary font-bold tnum">{inr(requiredNetWorth)}</span> (
+                        <span className="font-semibold tnum">{multiplier.toFixed(1)}×</span> buffer).
+                      </>
+                    )}
                   </p>
                 </div>
               )}

@@ -323,3 +323,40 @@ describe("affordabilityMultiplier", () => {
     }
   });
 });
+
+describe("Down Payment (DP) financing — target derives from the down payment, not the full asset cost", () => {
+  // The store enforces itemCost = downpaymentAmount whenever isFinanced is
+  // true (src/lib/store.tsx addMilestone/updateMilestone), so the DP target
+  // is just calculateRequiredNetWorth(downpaymentAmount, allocationPercent) —
+  // these tests pin that specific usage, not new math.
+  it("matches the documented example: ₹5L DP on a ₹25L asset at 50% Need allocation -> ₹10L required net worth", () => {
+    const totalAssetCost = 2_500_000;
+    const downpaymentAmount = 500_000;
+    const allocationPercent = 50; // Need's default
+
+    const requiredNetWorth = calculateRequiredNetWorth(downpaymentAmount, allocationPercent);
+
+    expect(requiredNetWorth).toBeCloseTo(1_000_000, 6);
+    // Sanity-checks that the derivation used the DOWN PAYMENT, not the full
+    // asset price — a common bug if the wiring accidentally read totalAssetCost.
+    expect(requiredNetWorth).toBeLessThan(calculateRequiredNetWorth(totalAssetCost, allocationPercent));
+  });
+
+  it("a smaller down payment (higher DP%) always derives a smaller required net worth for the same asset", () => {
+    const totalAssetCost = 2_500_000;
+    const dp10 = totalAssetCost * 0.1;
+    const dp50 = totalAssetCost * 0.5;
+    const allocationPercent = 50;
+
+    expect(calculateRequiredNetWorth(dp10, allocationPercent)).toBeLessThan(
+      calculateRequiredNetWorth(dp50, allocationPercent),
+    );
+  });
+
+  it("halving the down payment exactly halves the required net worth (linear in the down payment)", () => {
+    const allocationPercent = 20; // Major Want's default
+    const full = calculateRequiredNetWorth(1_000_000, allocationPercent);
+    const half = calculateRequiredNetWorth(500_000, allocationPercent);
+    expect(half).toBeCloseTo(full / 2, 6);
+  });
+});

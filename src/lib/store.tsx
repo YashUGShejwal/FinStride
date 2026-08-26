@@ -521,10 +521,16 @@ export type Milestone = {
   /** Direct value for net_worth; DERIVED via calculateRequiredNetWorth for the 3 affordability types. */
   targetAmount: number;
   targetType: MilestoneTargetType;
-  /** Only set for need/major_want/minor_want — the actual item/purchase price the target is derived from. */
+  /** Only set for need/major_want/minor_want — the actual item/purchase price the target is derived from. When isFinanced, this MIRRORS downpaymentAmount (the multiplier evaluates against real out-of-pocket cash, not the full asset price). */
   itemCost?: number;
   /** Only set for need/major_want/minor_want — the % of net worth this category is capped at. */
   allocationPercent?: number;
+  /** Down-payment financing mode — see MilestoneModal's "Financed Purchase" toggle. Only meaningful (and only ever true) for the 3 affordability types. */
+  isFinanced: boolean;
+  /** Only set when isFinanced — the full asset price (e.g. a house's price), kept for display context ("Asset: X"). Not itself used in the safety-multiplier math. */
+  totalAssetCost?: number;
+  /** Only set when isFinanced — the actual out-of-pocket cash; itemCost mirrors this value. */
+  downpaymentAmount?: number;
   /** false only for the 6 seeded net-worth defaults below. */
   isCustom: boolean;
 };
@@ -536,15 +542,18 @@ export type MilestoneInput = {
   targetType: MilestoneTargetType;
   itemCost?: number;
   allocationPercent?: number;
+  isFinanced?: boolean;
+  totalAssetCost?: number;
+  downpaymentAmount?: number;
 };
 
 export const DEFAULT_MILESTONES: readonly Milestone[] = [
-  { id: "milestone-25l", name: "₹25L", targetAmount: 2_500_000, targetType: "net_worth", isCustom: false },
-  { id: "milestone-50l", name: "₹50L", targetAmount: 5_000_000, targetType: "net_worth", isCustom: false },
-  { id: "milestone-1cr", name: "₹1Cr", targetAmount: 10_000_000, targetType: "net_worth", isCustom: false },
-  { id: "milestone-2.5cr", name: "₹2.5Cr", targetAmount: 25_000_000, targetType: "net_worth", isCustom: false },
-  { id: "milestone-5cr", name: "₹5Cr", targetAmount: 50_000_000, targetType: "net_worth", isCustom: false },
-  { id: "milestone-10cr", name: "₹10Cr", targetAmount: 100_000_000, targetType: "net_worth", isCustom: false },
+  { id: "milestone-25l", name: "₹25L", targetAmount: 2_500_000, targetType: "net_worth", isFinanced: false, isCustom: false },
+  { id: "milestone-50l", name: "₹50L", targetAmount: 5_000_000, targetType: "net_worth", isFinanced: false, isCustom: false },
+  { id: "milestone-1cr", name: "₹1Cr", targetAmount: 10_000_000, targetType: "net_worth", isFinanced: false, isCustom: false },
+  { id: "milestone-2.5cr", name: "₹2.5Cr", targetAmount: 25_000_000, targetType: "net_worth", isFinanced: false, isCustom: false },
+  { id: "milestone-5cr", name: "₹5Cr", targetAmount: 50_000_000, targetType: "net_worth", isFinanced: false, isCustom: false },
+  { id: "milestone-10cr", name: "₹10Cr", targetAmount: 100_000_000, targetType: "net_worth", isFinanced: false, isCustom: false },
 ];
 
 const MILESTONES_KEY = "finstride.milestones";
@@ -570,6 +579,7 @@ function normalizeMilestones(raw: unknown): Milestone[] {
     .map((r) => {
       const targetType = normalizeMilestoneTargetType(r.targetType);
       const isAffordability = targetType !== "net_worth";
+      const isFinanced = isAffordability && r.isFinanced === true;
       return {
         id: String(r.id ?? ""),
         name: typeof r.name === "string" && r.name.trim() ? r.name : String(r.label ?? ""),
@@ -579,6 +589,15 @@ function normalizeMilestones(raw: unknown): Milestone[] {
         allocationPercent:
           isAffordability && typeof r.allocationPercent === "number" && r.allocationPercent > 0
             ? r.allocationPercent
+            : undefined,
+        isFinanced,
+        totalAssetCost:
+          isFinanced && typeof r.totalAssetCost === "number" && r.totalAssetCost > 0
+            ? r.totalAssetCost
+            : undefined,
+        downpaymentAmount:
+          isFinanced && typeof r.downpaymentAmount === "number" && r.downpaymentAmount > 0
+            ? r.downpaymentAmount
             : undefined,
         isCustom: typeof r.isCustom === "boolean" ? r.isCustom : true,
       };
@@ -2131,26 +2150,49 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setProjectionSettings((prev) => ({ ...prev, ...patch }));
     },
     milestones,
-    addMilestone: ({ name, targetAmount, targetType, itemCost, allocationPercent }) => {
+    addMilestone: ({
+      name,
+      targetAmount,
+      targetType,
+      itemCost,
+      allocationPercent,
+      isFinanced,
+      totalAssetCost,
+      downpaymentAmount,
+    }) => {
       const trimmed = name.trim();
       if (!trimmed || !(targetAmount > 0)) return;
       const isAffordability = targetType !== "net_worth";
+      const financed = isAffordability && isFinanced === true;
+      // Never persist a 0/negative cost/percent field — that's not a
+      // meaningful "no value", it's invalid input, and downstream display
+      // (categoryPillText, the Cost:/Asset:/DP: subtext) treats "field is a
+      // number" as "field is meaningful," so a stray 0 would render as a
+      // real (wrong) figure instead of correctly omitting the line.
+      const safeDownpayment =
+        financed && downpaymentAmount !== undefined && downpaymentAmount > 0 ? downpaymentAmount : undefined;
       markLocalWrite();
       const row: Milestone = {
         id: crypto.randomUUID(),
         name: trimmed,
         targetAmount,
         targetType,
-        // Never persist a 0/negative itemCost or allocationPercent — that's
-        // not a meaningful "no cost", it's invalid input, and downstream
-        // display (categoryPillText, the Cost: subtext) treats "field is a
-        // number" as "field is meaningful," so a stray 0 would render as a
-        // real (wrong) cost instead of correctly omitting the line.
-        itemCost: isAffordability && itemCost !== undefined && itemCost > 0 ? itemCost : undefined,
+        // When financed, itemCost always MIRRORS downpaymentAmount — the
+        // safety multiplier evaluates against real out-of-pocket cash, never
+        // the full asset price. Enforced here (not just in the modal) so the
+        // two can never drift out of sync.
+        itemCost: financed
+          ? safeDownpayment
+          : isAffordability && itemCost !== undefined && itemCost > 0
+            ? itemCost
+            : undefined,
         allocationPercent:
           isAffordability && allocationPercent !== undefined && allocationPercent > 0
             ? allocationPercent
             : undefined,
+        isFinanced: financed,
+        totalAssetCost: financed && totalAssetCost !== undefined && totalAssetCost > 0 ? totalAssetCost : undefined,
+        downpaymentAmount: safeDownpayment,
         isCustom: true,
       };
       setMilestones((prev) => [...prev, row]);
@@ -2169,13 +2211,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         name: updates.name !== undefined ? updates.name.trim() : existing.name,
       };
       const isAffordability = merged.targetType !== "net_worth";
+      const financed = isAffordability && merged.isFinanced === true;
+      const safeDownpayment =
+        financed && merged.downpaymentAmount !== undefined && merged.downpaymentAmount > 0
+          ? merged.downpaymentAmount
+          : undefined;
       const next: Milestone = {
         ...merged,
-        itemCost: isAffordability && merged.itemCost !== undefined && merged.itemCost > 0 ? merged.itemCost : undefined,
+        itemCost: financed
+          ? safeDownpayment
+          : isAffordability && merged.itemCost !== undefined && merged.itemCost > 0
+            ? merged.itemCost
+            : undefined,
         allocationPercent:
           isAffordability && merged.allocationPercent !== undefined && merged.allocationPercent > 0
             ? merged.allocationPercent
             : undefined,
+        isFinanced: financed,
+        totalAssetCost:
+          financed && merged.totalAssetCost !== undefined && merged.totalAssetCost > 0
+            ? merged.totalAssetCost
+            : undefined,
+        downpaymentAmount: safeDownpayment,
       };
       setMilestones((prev) => prev.map((m) => (m.id === id ? next : m)));
       const sync = getSync();

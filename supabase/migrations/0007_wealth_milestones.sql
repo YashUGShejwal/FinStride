@@ -40,9 +40,20 @@
 -- REVISION NOTE: this migration was revised in place (not superseded by a
 -- corrective follow-up) to replace the target_type taxonomy (net_worth |
 -- asset_goal | custom) with the affordability-multiplier one (net_worth |
--- need | major_want | minor_want) and add item_cost/allocation_percent —
--- confirmed safe because this migration had not yet been applied to any real
--- Supabase project when the taxonomy changed.
+-- need | major_want | minor_want) and add item_cost/allocation_percent, and
+-- again to add is_financed/total_asset_cost/downpayment_amount (Down Payment
+-- financing mode) — confirmed safe both times because this migration had not
+-- yet been applied to any real Supabase project.
+--
+-- DOWN PAYMENT (DP) FINANCING MODE
+-- ---------------------------------
+-- For a financed purchase (e.g. a house bought with a home loan), the
+-- affordability multiplier should evaluate against the actual out-of-pocket
+-- cash — the down payment — not the full asset price, since that's the real
+-- amount at risk. When is_financed is true, item_cost MIRRORS
+-- downpayment_amount (enforced in src/lib/store.tsx's addMilestone/
+-- updateMilestone, not just the UI); total_asset_cost is kept purely for
+-- display context ("Asset: ₹25L · DP: ₹5L") and never enters the math.
 --
 -- RE-RUNNABILITY
 -- --------------
@@ -72,6 +83,12 @@ create table if not exists public.user_milestones (
   -- populated for need/major_want/minor_want.
   item_cost           numeric,
   allocation_percent  numeric,
+  -- Down Payment (DP) financing mode — see the migration doc comment above.
+  -- NULL/false unless the user opted a need/major_want/minor_want goal into
+  -- financing.
+  is_financed         boolean     not null default false,
+  total_asset_cost    numeric,
+  downpayment_amount  numeric,
   created_at          timestamptz not null default now(),
   updated_at          timestamptz not null default now(),
 
@@ -82,7 +99,18 @@ create table if not exists public.user_milestones (
   constraint user_milestones_item_cost_check
     check (item_cost is null or item_cost > 0),
   constraint user_milestones_allocation_percent_check
-    check (allocation_percent is null or (allocation_percent > 0 and allocation_percent <= 100))
+    check (allocation_percent is null or (allocation_percent > 0 and allocation_percent <= 100)),
+  constraint user_milestones_total_asset_cost_check
+    check (total_asset_cost is null or total_asset_cost > 0),
+  constraint user_milestones_downpayment_amount_check
+    check (downpayment_amount is null or downpayment_amount > 0),
+  -- A down payment can never exceed the asset it's a down payment ON. Only
+  -- enforced when BOTH are present — is_financed=false leaves both NULL.
+  constraint user_milestones_downpayment_le_asset_check
+    check (
+      total_asset_cost is null or downpayment_amount is null
+      or downpayment_amount <= total_asset_cost
+    )
 );
 
 comment on table public.user_milestones is
@@ -95,6 +123,12 @@ comment on column public.user_milestones.item_cost is
   'NULL for target_type = net_worth. The actual purchase price for need/major_want/minor_want — target_amount = item_cost / (allocation_percent/100).';
 comment on column public.user_milestones.allocation_percent is
   'NULL for target_type = net_worth. The % of net worth the category is capped at for need/major_want/minor_want (e.g. 20 for a Major Want) — the reciprocal (100/allocation_percent) is the "buffer" multiplier shown in the UI.';
+comment on column public.user_milestones.is_financed is
+  'Down Payment financing mode (need/major_want/minor_want only). When true, item_cost mirrors downpayment_amount — the safety multiplier evaluates against the actual out-of-pocket cash, not the full asset price.';
+comment on column public.user_milestones.total_asset_cost is
+  'NULL unless is_financed. The full asset price (e.g. a house''s price) — display context only ("Asset: ₹25L"), never itself used in the target_amount math.';
+comment on column public.user_milestones.downpayment_amount is
+  'NULL unless is_financed. The actual out-of-pocket cash; item_cost mirrors this value exactly (enforced in src/lib/store.tsx, not just the UI).';
 
 create index if not exists user_milestones_user_id_target_amount_idx
   on public.user_milestones (user_id, target_amount);
