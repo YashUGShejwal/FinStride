@@ -30,7 +30,8 @@ const TOUR_STEPS: TourStep[] = [
     problem: "What is my true financial net position across all institutions?",
     insight:
       "Consolidates liquid cash, stocks, mutual funds, and fixed deposits across all your brokers and bank accounts, minus obligations.",
-    action: "Check your Liquid Cash runway to see how many months of expenses your reserves cover.",
+    action:
+      "Check your Fixed Operational Runway to see how many months of expenses your reserves cover.",
   },
   {
     id: "cashflow-summary",
@@ -40,7 +41,7 @@ const TOUR_STEPS: TourStep[] = [
     problem: "How much can I spend this month without feeling anxious?",
     insight:
       "When fixed needs and SIP investments are funded upfront, your remaining wants allocation is safe to spend with zero guilt.",
-    action: "Review your Monthly Inflow vs. Fixed Obligations split.",
+    action: "Review your Income, Expenses, and Net Flow breakdown.",
   },
   {
     id: "pnl-heatmap",
@@ -59,7 +60,7 @@ const TOUR_STEPS: TourStep[] = [
     title: "The Inflation Reality Check: Real vs. Nominal",
     problem: "Will my ₹1 Crore corpus in 15 years actually buy what I expect?",
     insight:
-      "At 6% inflation, purchasing power halves every 12 years. 12% CAGR beats inflation, but ₹5 Cr nominal is ~₹2.2 Cr in today's purchasing power.",
+      "At 6% inflation, purchasing power halves every 12 years. 12% CAGR beats inflation, but ₹5 Cr nominal is ~₹2.1 Cr in today's purchasing power at year 15.",
     action: "Toggle the 'Headline in real terms' switch to see the purchasing power curve.",
   },
   {
